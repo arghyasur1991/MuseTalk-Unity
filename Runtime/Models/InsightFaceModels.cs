@@ -219,7 +219,6 @@ namespace MuseTalk.Models
                 int width = _inputSize.x;
                 int height = _inputSize.y;
                 
-                // OPTIMIZED: Maximum parallelism across all pixels (640×640 = 409,600-way parallelism)
                 // Process in CHW format (channels first) with stride-based coordinate calculation
                 System.Threading.Tasks.Parallel.For(0, imageSize, pixelIndex =>
                 {
