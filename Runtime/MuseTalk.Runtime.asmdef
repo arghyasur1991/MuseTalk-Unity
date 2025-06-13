@@ -1,0 +1,17 @@
+{
+    "name": "MuseTalk.Runtime",
+    "rootNamespace": "MuseTalk",
+    "references": [
+        "com.github.asus4.onnxruntime",
+        "com.github.asus4.onnxruntime-extensions"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": true,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+} 
