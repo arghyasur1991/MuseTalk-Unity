@@ -22,14 +22,14 @@ namespace MuseTalk.Utils
         /// <summary>
         /// Initialize InsightFace models
         /// </summary>
-        public InsightFaceHelper()
+        public InsightFaceHelper(MuseTalkConfig config)
         {
             try
             {
                 Logger.Log("[InsightFaceHelper] Initializing SCRFD and 1k3d68 models...");
                 
-                _scrfdModel = new ScrfdModel();
-                _landmarkModel = new Landmark68Model();
+                _scrfdModel = new ScrfdModel(config);
+                _landmarkModel = new Landmark68Model(config);
                 
                 IsInitialized = _scrfdModel.IsInitialized && _landmarkModel.IsInitialized;
                 

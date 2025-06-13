@@ -19,8 +19,7 @@ namespace MuseTalk.Models
     {
         private static readonly DebugLogger Logger = new();
         
-        private InferenceSession _session;
-        private string _modelPath;
+        private readonly InferenceSession _session;
         private bool _disposed = false;
         
         // Model configuration
@@ -48,40 +47,15 @@ namespace MuseTalk.Models
         /// <summary>
         /// Initialize SCRFD model
         /// </summary>
-        public ScrfdModel(string modelPath = null)
+        public ScrfdModel(MuseTalkConfig config)
         {
-            _modelPath = modelPath ?? Path.Combine(Application.streamingAssetsPath, "MuseTalk", "det_10g.onnx");
-            
-            try
-            {
-                Logger.Log($"[ScrfdModel] Attempting to load model from: {_modelPath}");
-                Logger.Log($"[ScrfdModel] File exists: {File.Exists(_modelPath)}");
-                InitializeModel();
-                IsInitialized = true;
-                Logger.Log($"[ScrfdModel] Successfully initialized from {_modelPath}");
-            }
-            catch (Exception e)
-            {
-                Logger.LogError($"[ScrfdModel] Failed to initialize: {e.Message}");
-                Logger.LogError($"[ScrfdModel] Stack trace: {e.StackTrace}");
-                IsInitialized = false;
-            }
+            _session = TextureUtils.LoadModel(config, "det_10g");
+            InitializeModel();
+            IsInitialized = true;
         }
         
         private void InitializeModel()
-        {
-            if (!File.Exists(_modelPath))
-                throw new FileNotFoundException($"SCRFD model not found: {_modelPath}");
-
-            var sessionOptions = new SessionOptions
-            {
-                GraphOptimizationLevel = GraphOptimizationLevel.ORT_ENABLE_ALL,
-                ExecutionMode = ExecutionMode.ORT_PARALLEL
-            };
-
-            sessionOptions.AppendExecutionProvider_CoreML();
-            _session = new InferenceSession(_modelPath, sessionOptions);
-            
+        { 
             var inputMetadata = _session.InputMetadata;
             var outputMetadata = _session.OutputMetadata;
             
@@ -599,10 +573,9 @@ namespace MuseTalk.Models
     /// </summary>
     public class Landmark68Model : IDisposable
     {
-        private static DebugLogger Logger = new DebugLogger();
+        private static readonly DebugLogger Logger = new();
         
-        private InferenceSession _session;
-        private string _modelPath;
+        private readonly InferenceSession _session;
         private bool _disposed = false;
         
         // Model configuration
@@ -618,41 +591,15 @@ namespace MuseTalk.Models
         public int LandmarkCount { get; private set; } = 68;
         public int LandmarkDimension { get; private set; } = 2; // 2D landmarks
         
-        public Landmark68Model(string modelPath = null)
+        public Landmark68Model(MuseTalkConfig config)
         {
-            _modelPath = modelPath ?? Path.Combine(Application.streamingAssetsPath, "MuseTalk", "1k3d68.onnx");
-            
-            try
-            {
-                Logger.Log($"[Landmark68Model] Attempting to load model from: {_modelPath}");
-                Logger.Log($"[Landmark68Model] File exists: {File.Exists(_modelPath)}");
-                InitializeModel();
-                IsInitialized = true;
-                Logger.Log($"[Landmark68Model] Successfully initialized from {_modelPath}");
-            }
-            catch (Exception e)
-            {
-                Logger.LogError($"[Landmark68Model] Failed to initialize: {e.Message}");
-                Logger.LogError($"[Landmark68Model] Stack trace: {e.StackTrace}");
-                IsInitialized = false;
-            }
+            _session = TextureUtils.LoadModel(config, "1k3d68");
+            InitializeModel();
+            IsInitialized = true;
         }
         
         private void InitializeModel()
-        {
-            if (!File.Exists(_modelPath))
-                throw new FileNotFoundException($"1k3d68 model not found: {_modelPath}");
-
-            var sessionOptions = new SessionOptions
-            {
-                GraphOptimizationLevel = GraphOptimizationLevel.ORT_ENABLE_ALL,
-                ExecutionMode = ExecutionMode.ORT_PARALLEL
-            };
-
-            sessionOptions.AppendExecutionProvider_CoreML();
-
-            _session = new InferenceSession(_modelPath, sessionOptions);
-            
+        {            
             var inputMetadata = _session.InputMetadata;
             var outputMetadata = _session.OutputMetadata;
             

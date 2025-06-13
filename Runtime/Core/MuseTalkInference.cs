@@ -12,6 +12,8 @@ namespace MuseTalk.Core
 {
     using Utils;
     using Models;
+    using System.Diagnostics;
+
     /// <summary>
     /// Precomputed segmentation data for efficient frame blending
     /// </summary>
@@ -85,7 +87,6 @@ namespace MuseTalk.Core
         private InferenceSession _vaeEncoderSession;
         private InferenceSession _vaeDecoderSession;
         private InferenceSession _positionalEncodingSession;
-        private InferenceSession _whisperSession;
         
         // Whisper model for audio feature extraction
         private WhisperModel _whisperModel;
@@ -155,10 +156,10 @@ namespace MuseTalk.Core
             try
             {
                 InitializeModels();
-                _insightFaceHelper = new InsightFaceHelper();
+                _insightFaceHelper = new InsightFaceHelper(_config);
                 
                 // Initialize Whisper model for audio processing
-                _whisperModel = new WhisperModel();
+                _whisperModel = new WhisperModel(_config);
                 
                 _initialized = true;
                 Logger.Log("[MuseTalkInference] Successfully initialized");
@@ -169,100 +170,18 @@ namespace MuseTalk.Core
                 _initialized = false;
             }
         }
-
-        private InferenceSession LoadModel(string modelName)
-        {
-            string modelPath = GetModelPath(modelName);
-            if (!File.Exists(modelPath))
-                throw new FileNotFoundException($"{modelName} model not found: {modelPath}");
-            var sessionOptions = CreateSessionOptions();
-            var model = new InferenceSession(modelPath, sessionOptions);
-            Logger.Log($"[MuseTalkInference] Loaded {modelName} from {modelPath}");
-            return model;
-        }
         
         /// <summary>
         /// Initialize all ONNX models
         /// </summary>
         private void InitializeModels()
         {
-            _unetSession = LoadModel("unet");
-            _vaeEncoderSession = LoadModel("vae_encoder");
-            _vaeDecoderSession = LoadModel("vae_decoder");
-            _positionalEncodingSession = LoadModel("positional_encoding");
-            _whisperSession = LoadModel("whisper_encoder");
+            _unetSession = TextureUtils.LoadModel(_config, "unet");
+            _vaeEncoderSession = TextureUtils.LoadModel(_config, "vae_encoder");
+            _vaeDecoderSession = TextureUtils.LoadModel(_config, "vae_decoder");
+            _positionalEncodingSession = TextureUtils.LoadModel(_config, "positional_encoding");
         }
-        
-        /// <summary>
-        /// Create optimized session options for ONNX Runtime
-        /// OPTIMIZED: Enable all performance optimizations
-        /// </summary>
-        private SessionOptions CreateSessionOptions()
-        {
-            var options = new SessionOptions
-            {
-                // OPTIMIZATION 1: Enable all ONNX optimizations for production
-                GraphOptimizationLevel = GraphOptimizationLevel.ORT_ENABLE_ALL,
-                ExecutionMode = ExecutionMode.ORT_PARALLEL,
 
-                // OPTIMIZATION 2: Memory optimizations
-                EnableMemoryPattern = true,
-                EnableCpuMemArena = true,
-
-                // OPTIMIZATION 3: Set inter/intra thread counts for better parallelism
-                InterOpNumThreads = Environment.ProcessorCount,
-                IntraOpNumThreads = Environment.ProcessorCount
-            };
-
-            // INT8 QUANTIZATION OPTIMIZATIONS
-            if (_useINT8)
-            {
-                Logger.Log("[MuseTalkInference] Enabling INT8 quantization optimizations");
-                // INT8 models work best with all optimizations enabled
-                options.AddSessionConfigEntry("session.enable_memory_arena_shrinkage", "cpu:0;");
-            }
-            
-            // OPTIMIZATION 5: VAE-specific performance tuning
-            options.AddSessionConfigEntry("session.disable_prepacking", "0"); // Enable weight prepacking
-            options.AddSessionConfigEntry("session.use_env_allocators", "1"); // Use environment allocators
-            
-            // OPTIMIZATION 6: Optimize for batch processing
-            options.AddSessionConfigEntry("session.intra_op_param", ""); // Let ORT auto-tune
-            options.AddSessionConfigEntry("session.inter_op_param", ""); // Let ORT auto-tune
-            
-            // OPTIMIZATION 4: Try to add GPU providers (will fallback to CPU if not available)
-            try
-            {
-                // Try CUDA first (NVIDIA GPUs) with optimized settings
-                var cudaOptions = new Dictionary<string, string>
-                {
-                    ["device_id"] = "0",
-                    ["arena_extend_strategy"] = "kSameAsRequested", // Optimize memory allocation
-                    ["gpu_mem_limit"] = "0", // Use all available GPU memory
-                    ["cudnn_conv_algo_search"] = "EXHAUSTIVE", // Find best conv algorithms
-                    ["do_copy_in_default_stream"] = "1", // Optimize memory transfers
-                };
-                
-                options.AppendExecutionProvider("CUDAExecutionProvider", cudaOptions);
-                Logger.Log("[MuseTalkInference] CUDA GPU provider enabled with optimizations");
-            }
-            catch (Exception)
-            {
-                try
-                {
-                    // Try DirectML (Windows GPU acceleration)
-                    options.AppendExecutionProvider_DML(0);
-                    Logger.Log("[MuseTalkInference] DirectML GPU provider enabled");
-                }
-                catch (Exception)
-                {
-                    Logger.Log("[MuseTalkInference] Using CPU execution provider (GPU not available)");
-                }
-            }
-            
-            return options;
-        }
-        
         /// <summary>
         /// Generate talking head video frames from avatar images and audio
         /// </summary>
@@ -727,7 +646,11 @@ namespace MuseTalk.Core
                 };
                 
                 // Run VAE encoder
+                var start = Stopwatch.StartNew();
                 using var results = _vaeEncoderSession.Run(inputs);
+                var elapsed = start.ElapsedMilliseconds;
+                Logger.Log($"[MuseTalkInference] VAE encoder time: {elapsed}ms");
+
                 var latents = results.First(r => r.Name == "latents").AsTensor<float>();
                 var result = latents.ToArray();
                 
@@ -1212,7 +1135,6 @@ namespace MuseTalk.Core
                 _vaeEncoderSession?.Dispose();
                 _vaeDecoderSession?.Dispose();
                 _positionalEncodingSession?.Dispose();
-                _whisperSession?.Dispose();
                 _whisperModel?.Dispose();
                 _insightFaceHelper?.Dispose();
                 _reusableUNetResult?.Dispose();
@@ -1227,53 +1149,6 @@ namespace MuseTalk.Core
         ~MuseTalkInference()
         {
             Dispose();
-        }
-
-        /// <summary>
-        /// Get model file path with optimal quality/performance balance
-        /// QUALITY OPTIMIZATION: Automatically use FP32 for VAE models to preserve image quality
-        /// </summary>
-        private string GetModelPath(string baseName)
-        {
-            // SPECIAL CASE: Whisper and Face Parsing models don't use version suffix
-            bool isVersionIndependent = baseName.Contains("whisper_encoder") || baseName.Contains("face_parsing");
-            
-            string baseModelPath;
-            if (isVersionIndependent)
-            {
-                baseModelPath = Path.Combine(_config.ModelPath, $"{baseName}.onnx");
-            }
-            else
-            {
-                baseModelPath = Path.Combine(_config.ModelPath, $"{baseName}_{_config.Version}.onnx");
-            }
-            
-            bool forceFP32 = false; // baseName.Contains("vae_decoder"); // VAE decoder quality is sensitive to FP32
-            
-            // For other models: Priority INT8 for CPU optimization > FP32 fallback
-            if (_useINT8 && !forceFP32)
-            {
-                // Try INT8 model first (optimal for CPU performance)
-                string int8ModelPath;
-                if (isVersionIndependent)
-                {
-                    int8ModelPath = Path.Combine(_config.ModelPath, $"{baseName}_int8.onnx");
-                }
-                else
-                {
-                    int8ModelPath = Path.Combine(_config.ModelPath, $"{baseName}_{_config.Version}_int8.onnx");
-                }
-                
-                if (File.Exists(int8ModelPath))
-                {
-                    Logger.Log($"[MuseTalkInference] Using INT8 model (performance optimization): {int8ModelPath}");
-                    return int8ModelPath;
-                }
-                Logger.LogWarning($"[MuseTalkInference] INT8 model not found: {int8ModelPath}, falling back to FP32");
-            }
-            
-            Logger.Log($"[MuseTalkInference] Using FP32 model: {baseModelPath}");
-            return baseModelPath;
         }
     }
 } 

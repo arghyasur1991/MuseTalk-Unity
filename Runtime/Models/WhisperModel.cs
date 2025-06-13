@@ -65,38 +65,11 @@ namespace MuseTalk.Models
         /// <summary>
         /// Initialize Whisper model from StreamingAssets
         /// </summary>
-        public WhisperModel(string modelPath = null)
+        public WhisperModel(MuseTalkConfig config)
         {
-            string fullPath = modelPath ?? Path.Combine(Application.streamingAssetsPath, "MuseTalk", "whisper_encoder.onnx");
-            LoadModel(fullPath);
-        }
-        
-        private void LoadModel(string modelPath)
-        {
-            try
-            {
-                if (!File.Exists(modelPath))
-                {
-                    Debug.LogError($"[WhisperModel] Model file not found: {modelPath}");
-                    return;
-                }
-                
-                var sessionOptions = new SessionOptions();
-                sessionOptions.GraphOptimizationLevel = GraphOptimizationLevel.ORT_ENABLE_ALL;
-                
-                _session = new InferenceSession(modelPath, sessionOptions);
-                _isInitialized = true;
-                
-                Debug.Log($"[WhisperModel] Successfully loaded from: {modelPath}");
-                
-                // Verify model inputs/outputs
-                VerifyModelSignature();
-            }
-            catch (Exception e)
-            {
-                Debug.LogError($"[WhisperModel] Failed to load model: {e.Message}");
-                _isInitialized = false;
-            }
+            _session = TextureUtils.LoadModel(config, "whisper_encoder");
+            _isInitialized = true;
+            VerifyModelSignature();
         }
         
         private void VerifyModelSignature()
