@@ -169,63 +169,28 @@ namespace MuseTalk.Core
                 _initialized = false;
             }
         }
+
+        private InferenceSession LoadModel(string modelName)
+        {
+            string modelPath = GetModelPath(modelName);
+            if (!File.Exists(modelPath))
+                throw new FileNotFoundException($"{modelName} model not found: {modelPath}");
+            var sessionOptions = CreateSessionOptions();
+            var model = new InferenceSession(modelPath, sessionOptions);
+            Logger.Log($"[MuseTalkInference] Loaded {modelName} from {modelPath}");
+            return model;
+        }
         
         /// <summary>
         /// Initialize all ONNX models
         /// </summary>
         private void InitializeModels()
         {
-            var sessionOptions = CreateSessionOptions();
-            
-            // Load UNet model
-            string unetPath = GetModelPath("unet");
-            if (!File.Exists(unetPath))
-                throw new FileNotFoundException($"UNet model not found: {unetPath}");
-            _unetSession = new InferenceSession(unetPath, sessionOptions);
-            Logger.Log($"[MuseTalkInference] Loaded UNet from {unetPath}");
-            
-            // Load VAE Encoder
-            string vaeEncoderPath = GetModelPath("vae_encoder");
-            if (!File.Exists(vaeEncoderPath))
-                throw new FileNotFoundException($"VAE Encoder model not found: {vaeEncoderPath}");
-            _vaeEncoderSession = new InferenceSession(vaeEncoderPath, sessionOptions);
-            Logger.Log($"[MuseTalkInference] Loaded VAE Encoder from {vaeEncoderPath}");
-            
-            // Load VAE Decoder
-            string vaeDecoderPath = GetModelPath("vae_decoder");
-            if (!File.Exists(vaeDecoderPath))
-                throw new FileNotFoundException($"VAE Decoder model not found: {vaeDecoderPath}");
-            _vaeDecoderSession = new InferenceSession(vaeDecoderPath, sessionOptions);
-            Logger.Log($"[MuseTalkInference] Loaded VAE Decoder from {vaeDecoderPath}");
-            
-            // Load Positional Encoding
-            string pePath = GetModelPath("positional_encoding");
-            if (!File.Exists(pePath))
-                throw new FileNotFoundException($"Positional Encoding model not found: {pePath}");
-            _positionalEncodingSession = new InferenceSession(pePath, sessionOptions);
-            Logger.Log($"[MuseTalkInference] Loaded Positional Encoding from {pePath}");
-            
-            // Load Whisper (optional - for audio feature extraction)
-            string whisperPath = GetModelPath("whisper_encoder");
-            if (File.Exists(whisperPath))
-            {
-                _whisperSession = new InferenceSession(whisperPath, sessionOptions);
-                Logger.Log($"[MuseTalkInference] Loaded Whisper from {whisperPath}");
-            }
-            else
-            {
-                // Try standard whisper path without version suffix
-                whisperPath = Path.Combine(_config.ModelPath, "whisper_encoder.onnx");
-                if (File.Exists(whisperPath))
-                {
-                    _whisperSession = new InferenceSession(whisperPath, sessionOptions);
-                    Logger.Log($"[MuseTalkInference] Loaded Whisper from {whisperPath}");
-                }
-                else
-                {
-                    Logger.LogWarning("[MuseTalkInference] Whisper model not found, will use external audio features");
-                }
-            }
+            _unetSession = LoadModel("unet");
+            _vaeEncoderSession = LoadModel("vae_encoder");
+            _vaeDecoderSession = LoadModel("vae_decoder");
+            _positionalEncodingSession = LoadModel("positional_encoding");
+            _whisperSession = LoadModel("whisper_encoder");
         }
         
         /// <summary>
