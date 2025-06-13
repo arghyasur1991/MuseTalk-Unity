@@ -49,7 +49,7 @@ namespace MuseTalk.Models
         /// </summary>
         public ScrfdModel(MuseTalkConfig config)
         {
-            _session = TextureUtils.LoadModel(config, "det_10g");
+            _session = ModelUtils.LoadModel(config, "det_10g");
             InitializeModel();
             IsInitialized = true;
         }
@@ -593,7 +593,7 @@ namespace MuseTalk.Models
         
         public Landmark68Model(MuseTalkConfig config)
         {
-            _session = TextureUtils.LoadModel(config, "1k3d68");
+            _session = ModelUtils.LoadModel(config, "1k3d68");
             InitializeModel();
             IsInitialized = true;
         }

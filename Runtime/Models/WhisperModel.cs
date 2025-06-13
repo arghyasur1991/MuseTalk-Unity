@@ -67,7 +67,7 @@ namespace MuseTalk.Models
         /// </summary>
         public WhisperModel(MuseTalkConfig config)
         {
-            _session = TextureUtils.LoadModel(config, "whisper_encoder");
+            _session = ModelUtils.LoadModel(config, "whisper_encoder");
             _isInitialized = true;
             VerifyModelSignature();
         }

@@ -176,10 +176,10 @@ namespace MuseTalk.Core
         /// </summary>
         private void InitializeModels()
         {
-            _unetSession = TextureUtils.LoadModel(_config, "unet");
-            _vaeEncoderSession = TextureUtils.LoadModel(_config, "vae_encoder");
-            _vaeDecoderSession = TextureUtils.LoadModel(_config, "vae_decoder");
-            _positionalEncodingSession = TextureUtils.LoadModel(_config, "positional_encoding");
+            _unetSession = ModelUtils.LoadModel(_config, "unet");
+            _vaeEncoderSession = ModelUtils.LoadModel(_config, "vae_encoder");
+            _vaeDecoderSession = ModelUtils.LoadModel(_config, "vae_decoder");
+            _positionalEncodingSession = ModelUtils.LoadModel(_config, "positional_encoding");
         }
 
         /// <summary>
