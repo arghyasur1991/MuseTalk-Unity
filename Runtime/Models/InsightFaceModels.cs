@@ -5,6 +5,7 @@ using System.Linq;
 using UnityEngine;
 using Microsoft.ML.OnnxRuntime;
 using Microsoft.ML.OnnxRuntime.Tensors;
+using Unity.Collections.LowLevel.Unsafe;
 
 namespace MuseTalk.Models
 {
@@ -27,7 +28,7 @@ namespace MuseTalk.Models
         private readonly float _detThresh = 0.5f; // Exactly matching Python implementation
         private readonly float _nmsThresh = 0.4f;
         private readonly float _inputMean = 127.5f;
-        private readonly float _inputStd = 128.0f;
+        private readonly float _invStd = 1.0f / 128.0f;
         
         // Model architecture parameters
         private int _fmc = 3; // Feature map count
@@ -172,41 +173,80 @@ namespace MuseTalk.Models
             // Calculate detection scale (like Python: det_scale = float(new_height) / img.shape[0])
             float detScale = (float)newHeight / texture.height;
             
-            // Resize image
-            var resized = TextureUtils.ResizeTexture(texture, newWidth, newHeight);
+            // Resize image using optimized TextureUtils
+            var resized = TextureUtils.ResizeTextureToExactSize(texture, newWidth, newHeight);
             
-            // Create letterbox image
+            // Create letterbox image with RGB24 format for efficiency
             var letterbox = new Texture2D(_inputSize.x, _inputSize.y, TextureFormat.RGB24, false);
-            var blackPixels = new Color[_inputSize.x * _inputSize.y];
-            for (int i = 0; i < blackPixels.Length; i++)
-                blackPixels[i] = Color.black;
-            letterbox.SetPixels(blackPixels);
             
-            // Paste resized image onto letterbox (TOP-LEFT like Python: det_img[:new_height, :new_width, :] = resized_img)
-            var resizedPixels = resized.GetPixels();
-            int offsetX = 0;  // Python places at (0, 0)
-            int offsetY = 0;  // Python places at (0, 0) 
-            letterbox.SetPixels(offsetX, offsetY, newWidth, newHeight, resizedPixels);
+            var letterboxPixelData = letterbox.GetPixelData<byte>(0);
+            var resizedPixelData = resized.GetPixelData<byte>(0);
+            
+            unsafe
+            {
+                byte* letterboxPtr = (byte*)letterboxPixelData.GetUnsafePtr();
+                byte* resizedPtr = (byte*)resizedPixelData.GetUnsafeReadOnlyPtr();
+                
+                int letterboxWidth = _inputSize.x;
+                int letterboxHeight = _inputSize.y;
+                int totalPixels = letterboxWidth * letterboxHeight;
+                
+                System.Threading.Tasks.Parallel.For(0, letterboxHeight, y =>
+                {
+                    byte* rowPtr = letterboxPtr + y * letterboxWidth * 3;
+                    UnsafeUtility.MemClear(rowPtr, letterboxWidth * 3);
+                });
+                
+                System.Threading.Tasks.Parallel.For(0, newHeight, y =>
+                {
+                    byte* letterboxRowPtr = letterboxPtr + y * letterboxWidth * 3;
+                    byte* resizedRowPtr = resizedPtr + y * newWidth * 3;
+                    
+                    // Use memcpy for entire row copy (fastest possible)
+                    UnsafeUtility.MemCpy(letterboxRowPtr, resizedRowPtr, newWidth * 3);
+                });
+            }
+            
             letterbox.Apply();
-            
-            // Convert to tensor with normalization (matching Python cv2.dnn.blobFromImage exactly)
-            var pixels = letterbox.GetPixels();
             var tensorData = new float[1 * 3 * _inputSize.y * _inputSize.x];
             
-            for (int y = 0; y < _inputSize.y; y++)
+            unsafe
             {
-                for (int x = 0; x < _inputSize.x; x++)
+                byte* letterboxPtr = (byte*)letterboxPixelData.GetUnsafeReadOnlyPtr();
+                
+                // Pre-calculate constants for performance
+                int imageSize = _inputSize.y * _inputSize.x;
+                int width = _inputSize.x;
+                int height = _inputSize.y;
+                
+                // OPTIMIZED: Maximum parallelism across all pixels (640×640 = 409,600-way parallelism)
+                // Process in CHW format (channels first) with stride-based coordinate calculation
+                System.Threading.Tasks.Parallel.For(0, imageSize, pixelIndex =>
                 {
-                    int unityY = _inputSize.y - 1 - y;  // Flip Y axis for Unity
-                    int pixelIdx = unityY * _inputSize.x + x;
-                    var pixel = pixels[pixelIdx];
+                    // Calculate x, y coordinates from linear pixel index using bit operations
+                    int y = pixelIndex / width;  // Row index
+                    int x = pixelIndex % width;  // Column index
                     
-                    int baseIdx = y * _inputSize.x + x;
-                    float scale = 1.0f / _inputStd; // scale = 1.0/128.0 = 0.0078125
-                    tensorData[0 * _inputSize.y * _inputSize.x + baseIdx] = (pixel.r * 255.0f - _inputMean) * scale; // R 
-                    tensorData[1 * _inputSize.y * _inputSize.x + baseIdx] = (pixel.g * 255.0f - _inputMean) * scale; // G
-                    tensorData[2 * _inputSize.y * _inputSize.x + baseIdx] = (pixel.b * 255.0f - _inputMean) * scale; // B
-                }
+                    int unityY = height - 1 - y; // Flip Y coordinate for ONNX coordinate system
+                    
+                    byte* pixelPtr = letterboxPtr + (unityY * width + x) * 3; // RGB24: 3 bytes per pixel
+                    
+                    // Process all 3 channels for this pixel with unrolled loop for maximum performance
+                    // Apply normalization: (pixel * 255.0f - mean) * invStd
+                    {
+                        // R channel (channel 0)
+                        float normalizedR = (pixelPtr[0] - _inputMean) * _invStd;
+                        tensorData[y * width + x] = normalizedR; // Channel 0 offset: 0 * imageSize
+                        
+                        // G channel (channel 1)  
+                        float normalizedG = (pixelPtr[1] - _inputMean) * _invStd;
+                        tensorData[imageSize + y * width + x] = normalizedG; // Channel 1 offset: 1 * imageSize
+                        
+                        // B channel (channel 2)
+                        float normalizedB = (pixelPtr[2] - _inputMean) * _invStd;
+                        tensorData[2 * imageSize + y * width + x] = normalizedB; // Channel 2 offset: 2 * imageSize
+                    }
+                });
             }
             
             UnityEngine.Object.DestroyImmediate(resized);
@@ -574,7 +614,7 @@ namespace MuseTalk.Models
         // Model configuration
         private readonly Vector2Int _inputSize = new Vector2Int(192, 192);
         private readonly float _inputMean = 127.5f;
-        private readonly float _inputStd = 128.0f;
+        private readonly float _invStd = 1.0f / 128.0f;
         
         // Model I/O names (dynamically retrieved from model metadata)
         private string _inputName;
@@ -849,7 +889,6 @@ namespace MuseTalk.Models
                     float y = outputArray[i * 2 + 1];
                     rawLandmarks[i] = new Vector2(x, y);
                 }
-                
                 LandmarkDimension = 2; // Update dimension info
             }
             
@@ -868,35 +907,53 @@ namespace MuseTalk.Models
         
         /// <summary>
         /// Create input tensor for landmark model
+        /// OPTIMIZED: Uses unsafe pointers and parallelization for maximum performance
         /// </summary>
-        private DenseTensor<float> CreateLandmarkInputTensor(Texture2D texture)
+        private unsafe DenseTensor<float> CreateLandmarkInputTensor(Texture2D texture)
         {
-            // Ensure texture is the right size
+            // Ensure texture is the right size using optimized resize
             if (texture.width != _inputSize.x || texture.height != _inputSize.y)
             {
-                texture = TextureUtils.ResizeTexture(texture, _inputSize.x, _inputSize.y);
+                texture = TextureUtils.ResizeTextureToExactSize(texture, _inputSize.x, _inputSize.y);
             }
             
-            // Convert to tensor with normalization
-            var pixels = texture.GetPixels();
+            // OPTIMIZED: Convert to tensor with unsafe pointers and parallelization
             var tensorData = new float[1 * 3 * _inputSize.y * _inputSize.x];
+            var pixelData = texture.GetPixelData<byte>(0);
             
-            // Apply the same preprocessing as SCRFD but for landmark model
-            for (int y = 0; y < _inputSize.y; y++)
+            byte* pixelPtr = (byte*)pixelData.GetUnsafeReadOnlyPtr();
+            
+            int imageSize = _inputSize.y * _inputSize.x;
+            int width = _inputSize.x;
+            int height = _inputSize.y;
+            
+            // Process in CHW format (channels first) with stride-based coordinate calculation
+            System.Threading.Tasks.Parallel.For(0, imageSize, pixelIndex =>
             {
-                for (int x = 0; x < _inputSize.x; x++)
+                // Calculate x, y coordinates from linear pixel index
+                int y = pixelIndex / width;  // Row index
+                int x = pixelIndex % width;  // Column index
+                
+                int unityY = height - 1 - y; // Flip Y coordinate for ONNX coordinate system
+                
+                byte* pixelBytePtr = pixelPtr + (unityY * width + x) * 3; // RGB24: 3 bytes per pixel
+                
+                // Process all 3 channels for this pixel with unrolled loop for maximum performance
+                // Apply normalization: (pixel - mean) * invStd
                 {
-                    int unityY = _inputSize.y - 1 - y; // Flip Y axis for Unity
-                    int pixelIdx = unityY * _inputSize.x + x;
-                    var pixel = pixels[pixelIdx];
+                    // R channel (channel 0)
+                    float normalizedR = (pixelBytePtr[0] - _inputMean) * _invStd;
+                    tensorData[y * width + x] = normalizedR; // Channel 0 offset: 0 * imageSize
                     
-                    int baseIdx = y * _inputSize.x + x;
-                    float scale = 1.0f / _inputStd; // scale = 1.0/128.0
-                    tensorData[0 * _inputSize.y * _inputSize.x + baseIdx] = (pixel.r * 255.0f - _inputMean) * scale; // R 
-                    tensorData[1 * _inputSize.y * _inputSize.x + baseIdx] = (pixel.g * 255.0f - _inputMean) * scale; // G
-                    tensorData[2 * _inputSize.y * _inputSize.x + baseIdx] = (pixel.b * 255.0f - _inputMean) * scale; // B
+                    // G channel (channel 1)  
+                    float normalizedG = (pixelBytePtr[1] - _inputMean) * _invStd;
+                    tensorData[imageSize + y * width + x] = normalizedG; // Channel 1 offset: 1 * imageSize
+                    
+                    // B channel (channel 2)
+                    float normalizedB = (pixelBytePtr[2] - _inputMean) * _invStd;
+                    tensorData[2 * imageSize + y * width + x] = normalizedB; // Channel 2 offset: 2 * imageSize
                 }
-            }
+            });
             
             return new DenseTensor<float>(tensorData, new[] { 1, 3, _inputSize.y, _inputSize.x });
         }
