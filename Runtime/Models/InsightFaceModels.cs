@@ -131,7 +131,8 @@ namespace MuseTalk.Models
             try
             {                
                 // Prepare input tensor
-                var (inputTensor, detScale) = PrepareInputTensor(texture);                
+                var (inputTensor, detScale) = PrepareInputTensor(texture);
+                
                 // Run inference with dynamically retrieved input name
                 var inputs = new List<NamedOnnxValue>
                 {
@@ -142,6 +143,7 @@ namespace MuseTalk.Models
                 
                 // Process outputs
                 var (detections, keypoints) = ProcessOutputs(results, texture.width, texture.height, maxFaces, detScale);
+                
                 return (detections, keypoints);
             }
             catch (Exception e)
@@ -172,87 +174,79 @@ namespace MuseTalk.Models
             
             // Calculate detection scale (like Python: det_scale = float(new_height) / img.shape[0])
             float detScale = (float)newHeight / texture.height;
+            var resized = TextureUtils.ResizeTextureToExactSize(texture, newWidth, newHeight, TextureUtils.SamplingMode.Point);
             
-            // Resize image using optimized TextureUtils
-            var resized = TextureUtils.ResizeTextureToExactSize(texture, newWidth, newHeight);
+            int letterboxWidth = _inputSize.x;
+            int letterboxHeight = _inputSize.y;
+            int letterboxSize = letterboxWidth * letterboxHeight * 3; // RGB24: 3 bytes per pixel
             
-            // Create letterbox image with RGB24 format for efficiency
-            var letterbox = new Texture2D(_inputSize.x, _inputSize.y, TextureFormat.RGB24, false);
-            
-            var letterboxPixelData = letterbox.GetPixelData<byte>(0);
             var resizedPixelData = resized.GetPixelData<byte>(0);
             
             unsafe
             {
-                byte* letterboxPtr = (byte*)letterboxPixelData.GetUnsafePtr();
-                byte* resizedPtr = (byte*)resizedPixelData.GetUnsafeReadOnlyPtr();
+                byte* letterboxPtr = (byte*)UnsafeUtility.Malloc(letterboxSize, 4, Unity.Collections.Allocator.Temp);
                 
-                int letterboxWidth = _inputSize.x;
-                int letterboxHeight = _inputSize.y;
-                int totalPixels = letterboxWidth * letterboxHeight;
-                
-                System.Threading.Tasks.Parallel.For(0, letterboxHeight, y =>
+                try
                 {
-                    byte* rowPtr = letterboxPtr + y * letterboxWidth * 3;
-                    UnsafeUtility.MemClear(rowPtr, letterboxWidth * 3);
-                });
-                
-                System.Threading.Tasks.Parallel.For(0, newHeight, y =>
-                {
-                    byte* letterboxRowPtr = letterboxPtr + y * letterboxWidth * 3;
-                    byte* resizedRowPtr = resizedPtr + y * newWidth * 3;
+                    byte* resizedPtr = (byte*)resizedPixelData.GetUnsafeReadOnlyPtr();
+
+                    UnsafeUtility.MemClear(letterboxPtr, letterboxSize);
                     
-                    // Use memcpy for entire row copy (fastest possible)
-                    UnsafeUtility.MemCpy(letterboxRowPtr, resizedRowPtr, newWidth * 3);
-                });
-            }
-            
-            letterbox.Apply();
-            var tensorData = new float[1 * 3 * _inputSize.y * _inputSize.x];
-            
-            unsafe
-            {
-                byte* letterboxPtr = (byte*)letterboxPixelData.GetUnsafeReadOnlyPtr();
-                
-                // Pre-calculate constants for performance
-                int imageSize = _inputSize.y * _inputSize.x;
-                int width = _inputSize.x;
-                int height = _inputSize.y;
-                
-                // Process in CHW format (channels first) with stride-based coordinate calculation
-                System.Threading.Tasks.Parallel.For(0, imageSize, pixelIndex =>
-                {
-                    // Calculate x, y coordinates from linear pixel index using bit operations
-                    int y = pixelIndex / width;  // Row index
-                    int x = pixelIndex % width;  // Column index
-                    
-                    int unityY = height - 1 - y; // Flip Y coordinate for ONNX coordinate system
-                    
-                    byte* pixelPtr = letterboxPtr + (unityY * width + x) * 3; // RGB24: 3 bytes per pixel
-                    
-                    // Process all 3 channels for this pixel with unrolled loop for maximum performance
-                    // Apply normalization: (pixel * 255.0f - mean) * invStd
+                    System.Threading.Tasks.Parallel.For(0, newHeight, y =>
                     {
-                        // R channel (channel 0)
-                        float normalizedR = (pixelPtr[0] - _inputMean) * _invStd;
-                        tensorData[y * width + x] = normalizedR; // Channel 0 offset: 0 * imageSize
+                        byte* letterboxRowPtr = letterboxPtr + y * letterboxWidth * 3;
+                        byte* resizedRowPtr = resizedPtr + y * newWidth * 3;
                         
-                        // G channel (channel 1)  
-                        float normalizedG = (pixelPtr[1] - _inputMean) * _invStd;
-                        tensorData[imageSize + y * width + x] = normalizedG; // Channel 1 offset: 1 * imageSize
+                        // Use memcpy for entire row copy (fastest possible)
+                        UnsafeUtility.MemCpy(letterboxRowPtr, resizedRowPtr, newWidth * 3);
+                    });
+                    
+                    var tensorData = new float[1 * 3 * _inputSize.y * _inputSize.x];
+                    
+                    // Pre-calculate constants for performance
+                    int imageSize = _inputSize.y * _inputSize.x;
+                    int width = _inputSize.x;
+                    int height = _inputSize.y;
+                    
+                    // Process in CHW format (channels first) with stride-based coordinate calculation
+                    System.Threading.Tasks.Parallel.For(0, imageSize, pixelIndex =>
+                    {
+                        // Calculate x, y coordinates from linear pixel index using optimized arithmetic
+                        int y = pixelIndex / width;  // Row index
+                        int x = pixelIndex % width;  // Column index
                         
-                        // B channel (channel 2)
-                        float normalizedB = (pixelPtr[2] - _inputMean) * _invStd;
-                        tensorData[2 * imageSize + y * width + x] = normalizedB; // Channel 2 offset: 2 * imageSize
-                    }
-                });
+                        int unityY = height - 1 - y; // Flip Y coordinate for ONNX coordinate system
+                        
+                        byte* pixelPtr = letterboxPtr + (unityY * width + x) * 3; // RGB24: 3 bytes per pixel
+                        
+                        // Process all 3 channels for this pixel with unrolled loop for maximum performance
+                        // Apply normalization: (pixel * 255.0f - mean) * invStd
+                        {
+                            // R channel (channel 0)
+                            float normalizedR = (pixelPtr[0] - _inputMean) * _invStd;
+                            tensorData[y * width + x] = normalizedR; // Channel 0 offset: 0 * imageSize
+                            
+                            // G channel (channel 1)  
+                            float normalizedG = (pixelPtr[1] - _inputMean) * _invStd;
+                            tensorData[imageSize + y * width + x] = normalizedG; // Channel 1 offset: 1 * imageSize
+                            
+                            // B channel (channel 2)
+                            float normalizedB = (pixelPtr[2] - _inputMean) * _invStd;
+                            tensorData[2 * imageSize + y * width + x] = normalizedB; // Channel 2 offset: 2 * imageSize
+                        }
+                    });
+                    
+                    UnityEngine.Object.DestroyImmediate(resized);
+                    
+                    var tensor = new DenseTensor<float>(tensorData, new[] { 1, 3, _inputSize.y, _inputSize.x });
+                    return (tensor, detScale);
+                }
+                finally
+                {
+                    // Clean up allocated memory
+                    UnsafeUtility.Free(letterboxPtr, Unity.Collections.Allocator.Temp);
+                }
             }
-            
-            UnityEngine.Object.DestroyImmediate(resized);
-            UnityEngine.Object.DestroyImmediate(letterbox);
-            
-            var tensor = new DenseTensor<float>(tensorData, new[] { 1, 3, _inputSize.y, _inputSize.x });
-            return (tensor, detScale);
         }
         
         private (FaceDetection[], Vector2[][]) ProcessOutputs(IDisposableReadOnlyCollection<DisposableNamedOnnxValue> results, int originalWidth, int originalHeight, int maxFaces, float detScale)
@@ -736,62 +730,111 @@ namespace MuseTalk.Models
             M.m12 = -cx * sin_rot - cy * cos_rot + outputSize / 2f;
             
             var transformedTexture = ApplyAffineTransform(img, M, outputSize);
-            
             return (transformedTexture, M);
         }
         
         /// <summary>
         /// Apply affine transformation to texture (matching cv2.warpAffine)
+        /// OPTIMIZED: Uses unsafe pointers, parallelization, and direct memory operations for maximum performance
         /// </summary>
-        private Texture2D ApplyAffineTransform(Texture2D source, Matrix4x4 M, int outputSize)
+        private unsafe Texture2D ApplyAffineTransform(Texture2D source, Matrix4x4 M, int outputSize)
         {
+            // Create result texture with RGB24 format for efficiency
             var result = new Texture2D(outputSize, outputSize, TextureFormat.RGB24, false);
-            var sourcePixels = source.GetPixels();
-            var resultPixels = new Color[outputSize * outputSize];
             
-            for (int y = 0; y < outputSize; y++)
+            // Get pixel data as byte arrays for direct memory access
+            var sourcePixelData = source.GetPixelData<byte>(0);
+            var resultPixelData = result.GetPixelData<byte>(0);
+            
+            // Get unsafe pointers for direct memory operations
+            byte* sourcePtr = (byte*)sourcePixelData.GetUnsafeReadOnlyPtr();
+            byte* resultPtr = (byte*)resultPixelData.GetUnsafePtr();
+            
+            int sourceWidth = source.width;
+            int sourceHeight = source.height;
+            int totalPixels = outputSize * outputSize;
+            
+            // Pre-calculate transformation matrix elements for performance
+            float m00 = M.m00, m01 = M.m01, m02 = M.m02;
+            float m10 = M.m10, m11 = M.m11, m12 = M.m12;
+            
+            // OPTIMIZED: Maximum parallelism across all output pixels
+            System.Threading.Tasks.Parallel.For(0, totalPixels, pixelIndex =>
             {
-                for (int x = 0; x < outputSize; x++)
-                {
-                    // Apply inverse transformation
-                    float srcX = M.m00 * x + M.m01 * y + M.m02;
-                    float srcY = M.m10 * x + M.m11 * y + M.m12;
-                    
-                    // Bilinear interpolation
-                    Color pixel = BilinearSample(sourcePixels, source.width, source.height, srcX, srcY);
-                    resultPixels[y * outputSize + x] = pixel;
-                }
-            }
+                // Calculate x, y coordinates from linear pixel index using optimized arithmetic
+                int y = pixelIndex / outputSize;  // Row index
+                int x = pixelIndex % outputSize;  // Column index
+                
+                // Apply inverse transformation using pre-calculated matrix elements
+                float srcX = m00 * x + m01 * y + m02;
+                float srcY = m10 * x + m11 * y + m12;
+                
+                // OPTIMIZED: Direct unsafe bilinear sampling
+                byte r, g, b;
+                BilinearSampleUnsafe(sourcePtr, sourceWidth, sourceHeight, srcX, srcY, out r, out g, out b);
+                
+                // Calculate target pixel pointer using stride arithmetic
+                byte* targetPixel = resultPtr + (y * outputSize + x) * 3;
+                
+                // Direct memory write (RGB24: 3 bytes per pixel)
+                targetPixel[0] = r; // R
+                targetPixel[1] = g; // G
+                targetPixel[2] = b; // B
+            });
             
-            result.SetPixels(resultPixels);
+            // Apply changes to texture (no need for SetPixels since we wrote directly to pixel data)
             result.Apply();
             return result;
         }
         
         /// <summary>
-        /// Bilinear sampling for texture transformation
+        /// Unsafe optimized bilinear sampling using direct byte pointer access
+        /// OPTIMIZED: Direct pointer arithmetic for maximum performance, no Color allocations
         /// </summary>
-        private Color BilinearSample(Color[] pixels, int width, int height, float x, float y)
+        private static unsafe void BilinearSampleUnsafe(byte* sourcePtr, int width, int height, float x, float y, out byte r, out byte g, out byte b)
         {
+            // Bounds check - return black if outside valid sampling area
             if (x < 0 || x >= width - 1 || y < 0 || y >= height - 1)
-                return Color.black;
-                
-            int x0 = Mathf.FloorToInt(x);
-            int y0 = Mathf.FloorToInt(y);
+            {
+                r = g = b = 0;
+                return;
+            }
+            
+            // Get integer and fractional parts for bilinear interpolation
+            int x0 = (int)x;  // Faster than Mathf.FloorToInt for positive values
+            int y0 = (int)y;
             int x1 = x0 + 1;
             int y1 = y0 + 1;
             
             float fx = x - x0;
             float fy = y - y0;
+            float invFx = 1.0f - fx;
+            float invFy = 1.0f - fy;
             
-            Color p00 = pixels[y0 * width + x0];
-            Color p10 = pixels[y0 * width + x1];
-            Color p01 = pixels[y1 * width + x0];
-            Color p11 = pixels[y1 * width + x1];
+            // Pre-calculate bilinear interpolation weights
+            float w00 = invFx * invFy; // Top-left weight
+            float w10 = fx * invFy;    // Top-right weight
+            float w01 = invFx * fy;    // Bottom-left weight
+            float w11 = fx * fy;       // Bottom-right weight
             
-            Color top = Color.Lerp(p00, p10, fx);
-            Color bottom = Color.Lerp(p01, p11, fx);
-            return Color.Lerp(top, bottom, fy);
+            // Calculate source pixel pointers using stride arithmetic (RGB24: 3 bytes per pixel)
+            byte* p00 = sourcePtr + (y0 * width + x0) * 3; // Top-left
+            byte* p10 = sourcePtr + (y0 * width + x1) * 3; // Top-right
+            byte* p01 = sourcePtr + (y1 * width + x0) * 3; // Bottom-left
+            byte* p11 = sourcePtr + (y1 * width + x1) * 3; // Bottom-right
+            
+            // OPTIMIZED: Direct byte interpolation with unrolled RGB channels
+            // R channel
+            float rFloat = p00[0] * w00 + p10[0] * w10 + p01[0] * w01 + p11[0] * w11;
+            r = (byte)Mathf.Clamp(rFloat, 0f, 255f);
+            
+            // G channel
+            float gFloat = p00[1] * w00 + p10[1] * w10 + p01[1] * w01 + p11[1] * w11;
+            g = (byte)Mathf.Clamp(gFloat, 0f, 255f);
+            
+            // B channel
+            float bFloat = p00[2] * w00 + p10[2] * w10 + p01[2] * w01 + p11[2] * w11;
+            b = (byte)Mathf.Clamp(bFloat, 0f, 255f);
         }
         
         /// <summary>
@@ -850,7 +893,6 @@ namespace MuseTalk.Models
         private Vector2[] ExtractLandmarks(Texture2D alignedCrop)
         {
             var inputTensor = CreateLandmarkInputTensor(alignedCrop);
-            
             var inputs = new List<NamedOnnxValue>
             {
                 NamedOnnxValue.CreateFromTensor(_inputName, inputTensor)
@@ -913,10 +955,9 @@ namespace MuseTalk.Models
             // Ensure texture is the right size using optimized resize
             if (texture.width != _inputSize.x || texture.height != _inputSize.y)
             {
-                texture = TextureUtils.ResizeTextureToExactSize(texture, _inputSize.x, _inputSize.y);
+                texture = TextureUtils.ResizeTextureToExactSize(texture, _inputSize.x, _inputSize.y, TextureUtils.SamplingMode.Point);
             }
             
-            // OPTIMIZED: Convert to tensor with unsafe pointers and parallelization
             var tensorData = new float[1 * 3 * _inputSize.y * _inputSize.x];
             var pixelData = texture.GetPixelData<byte>(0);
             

@@ -123,10 +123,25 @@ namespace MuseTalk.Utils
         }
 
         /// <summary>
-        /// Resize texture to exact target dimensions (matching Python cv2.resize with LANCZOS4)
-        /// OPTIMIZED: Uses unsafe pointers, parallelization, and optimized bilinear interpolation for maximum performance
+        /// Sampling mode for texture resizing
         /// </summary>
-        public static unsafe Texture2D ResizeTextureToExactSize(Texture2D source, int targetWidth, int targetHeight)
+        public enum SamplingMode
+        {
+            /// <summary>
+            /// Bilinear interpolation - higher quality, slower (default for ML preprocessing)
+            /// </summary>
+            Bilinear,
+            /// <summary>
+            /// Point/Nearest neighbor sampling - faster, lower quality (good for face detection)
+            /// </summary>
+            Point
+        }
+
+        /// <summary>
+        /// Resize texture to exact target dimensions (matching Python cv2.resize with LANCZOS4)
+        /// OPTIMIZED: Uses unsafe pointers, parallelization, and optimized interpolation for maximum performance
+        /// </summary>
+        public static unsafe Texture2D ResizeTextureToExactSize(Texture2D source, int targetWidth, int targetHeight, SamplingMode samplingMode = SamplingMode.Bilinear)
         {
             if (source == null)
                 throw new ArgumentNullException(nameof(source));
@@ -170,58 +185,90 @@ namespace MuseTalk.Utils
             int sourceHeight = source.height;
             
             // OPTIMIZED: Maximum parallelism across all target pixels (targetWidth × targetHeight)
-            // Bilinear interpolation (approximation of LANCZOS4) with stride-based coordinate calculation
             int totalPixels = targetWidth * targetHeight;
-            System.Threading.Tasks.Parallel.For(0, totalPixels, pixelIndex =>
+            
+            if (samplingMode == SamplingMode.Point)
             {
-                // Calculate x, y coordinates from linear pixel index using optimized arithmetic
-                int y = pixelIndex / targetWidth;  // Row index
-                int x = pixelIndex % targetWidth;  // Column index
-                
-                // Map target pixel to source coordinates
-                float srcX = x * xRatio;
-                float srcY = y * yRatio;
-                
-                // Get integer and fractional parts for bilinear interpolation
-                int x1 = Mathf.FloorToInt(srcX);
-                int y1 = Mathf.FloorToInt(srcY);
-                int x2 = Mathf.Min(x1 + 1, sourceWidth - 1);
-                int y2 = Mathf.Min(y1 + 1, sourceHeight - 1);
-                
-                float fx = srcX - x1;
-                float fy = srcY - y1;
-                float invFx = 1.0f - fx;
-                float invFy = 1.0f - fy;
-                
-                // Calculate source pixel pointers for bilinear interpolation using stride arithmetic
-                byte* c1Ptr = sourcePtr + (y1 * sourceWidth + x1) * 3; // Top-left
-                byte* c2Ptr = sourcePtr + (y1 * sourceWidth + x2) * 3; // Top-right
-                byte* c3Ptr = sourcePtr + (y2 * sourceWidth + x1) * 3; // Bottom-left
-                byte* c4Ptr = sourcePtr + (y2 * sourceWidth + x2) * 3; // Bottom-right
-                
-                // Pre-calculate bilinear interpolation weights
-                // Bilinear interpolation: result = c1*(1-fx)*(1-fy) + c2*fx*(1-fy) + c3*(1-fx)*fy + c4*fx*fy
-                float w1 = invFx * invFy; // Top-left weight
-                float w2 = fx * invFy;    // Top-right weight
-                float w3 = invFx * fy;    // Bottom-left weight
-                float w4 = fx * fy;       // Bottom-right weight
-                
-                // Calculate target pixel pointer using stride arithmetic
-                byte* targetPixelPtr = targetPtr + (y * targetWidth + x) * 3;
-                
-                // OPTIMIZED: Direct byte interpolation with unrolled RGB channels
-                // R channel
-                float r = c1Ptr[0] * w1 + c2Ptr[0] * w2 + c3Ptr[0] * w3 + c4Ptr[0] * w4;
-                targetPixelPtr[0] = (byte)Mathf.Clamp(r, 0f, 255f);
-                
-                // G channel
-                float g = c1Ptr[1] * w1 + c2Ptr[1] * w2 + c3Ptr[1] * w3 + c4Ptr[1] * w4;
-                targetPixelPtr[1] = (byte)Mathf.Clamp(g, 0f, 255f);
-                
-                // B channel
-                float b = c1Ptr[2] * w1 + c2Ptr[2] * w2 + c3Ptr[2] * w3 + c4Ptr[2] * w4;
-                targetPixelPtr[2] = (byte)Mathf.Clamp(b, 0f, 255f);
-            });
+                // FASTEST: Point/Nearest neighbor sampling - ~3-5x faster than bilinear
+                // Perfect for face detection where speed > precision
+                System.Threading.Tasks.Parallel.For(0, totalPixels, pixelIndex =>
+                {
+                    // Calculate x, y coordinates from linear pixel index using optimized arithmetic
+                    int y = pixelIndex / targetWidth;  // Row index
+                    int x = pixelIndex % targetWidth;  // Column index
+                    
+                    // Map target pixel to source coordinates and round to nearest
+                    int srcX = Mathf.RoundToInt(x * xRatio);
+                    int srcY = Mathf.RoundToInt(y * yRatio);
+                    
+                    // Clamp to source bounds
+                    srcX = Mathf.Clamp(srcX, 0, sourceWidth - 1);
+                    srcY = Mathf.Clamp(srcY, 0, sourceHeight - 1);
+                    
+                    // Calculate source and target pixel pointers using stride arithmetic
+                    byte* sourcePixelPtr = sourcePtr + (srcY * sourceWidth + srcX) * 3;
+                    byte* targetPixelPtr = targetPtr + (y * targetWidth + x) * 3;
+                    
+                    // ULTRA-FAST: Direct 3-byte copy (RGB24)
+                    targetPixelPtr[0] = sourcePixelPtr[0]; // R
+                    targetPixelPtr[1] = sourcePixelPtr[1]; // G
+                    targetPixelPtr[2] = sourcePixelPtr[2]; // B
+                });
+            }
+            else
+            {
+                // HIGH-QUALITY: Bilinear interpolation (approximation of LANCZOS4) with stride-based coordinate calculation
+                System.Threading.Tasks.Parallel.For(0, totalPixels, pixelIndex =>
+                {
+                    // Calculate x, y coordinates from linear pixel index using optimized arithmetic
+                    int y = pixelIndex / targetWidth;  // Row index
+                    int x = pixelIndex % targetWidth;  // Column index
+                    
+                    // Map target pixel to source coordinates
+                    float srcX = x * xRatio;
+                    float srcY = y * yRatio;
+                    
+                    // Get integer and fractional parts for bilinear interpolation
+                    int x1 = Mathf.FloorToInt(srcX);
+                    int y1 = Mathf.FloorToInt(srcY);
+                    int x2 = Mathf.Min(x1 + 1, sourceWidth - 1);
+                    int y2 = Mathf.Min(y1 + 1, sourceHeight - 1);
+                    
+                    float fx = srcX - x1;
+                    float fy = srcY - y1;
+                    float invFx = 1.0f - fx;
+                    float invFy = 1.0f - fy;
+                    
+                    // Calculate source pixel pointers for bilinear interpolation using stride arithmetic
+                    byte* c1Ptr = sourcePtr + (y1 * sourceWidth + x1) * 3; // Top-left
+                    byte* c2Ptr = sourcePtr + (y1 * sourceWidth + x2) * 3; // Top-right
+                    byte* c3Ptr = sourcePtr + (y2 * sourceWidth + x1) * 3; // Bottom-left
+                    byte* c4Ptr = sourcePtr + (y2 * sourceWidth + x2) * 3; // Bottom-right
+                    
+                    // Pre-calculate bilinear interpolation weights
+                    // Bilinear interpolation: result = c1*(1-fx)*(1-fy) + c2*fx*(1-fy) + c3*(1-fx)*fy + c4*fx*fy
+                    float w1 = invFx * invFy; // Top-left weight
+                    float w2 = fx * invFy;    // Top-right weight
+                    float w3 = invFx * fy;    // Bottom-left weight
+                    float w4 = fx * fy;       // Bottom-right weight
+                    
+                    // Calculate target pixel pointer using stride arithmetic
+                    byte* targetPixelPtr = targetPtr + (y * targetWidth + x) * 3;
+                    
+                    // OPTIMIZED: Direct byte interpolation with unrolled RGB channels
+                    // R channel
+                    float r = c1Ptr[0] * w1 + c2Ptr[0] * w2 + c3Ptr[0] * w3 + c4Ptr[0] * w4;
+                    targetPixelPtr[0] = (byte)Mathf.Clamp(r, 0f, 255f);
+                    
+                    // G channel
+                    float g = c1Ptr[1] * w1 + c2Ptr[1] * w2 + c3Ptr[1] * w3 + c4Ptr[1] * w4;
+                    targetPixelPtr[1] = (byte)Mathf.Clamp(g, 0f, 255f);
+                    
+                    // B channel
+                    float b = c1Ptr[2] * w1 + c2Ptr[2] * w2 + c3Ptr[2] * w3 + c4Ptr[2] * w4;
+                    targetPixelPtr[2] = (byte)Mathf.Clamp(b, 0f, 255f);
+                });
+            }
             
             // Apply changes to texture (no need for SetPixels since we wrote directly to pixel data)
             resized.Apply();

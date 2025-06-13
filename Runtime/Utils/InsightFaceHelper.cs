@@ -81,7 +81,7 @@ namespace MuseTalk.Utils
                 var texture = textures[idx];
                 // Step 1: Detect faces using SCRFD
                 var (detections, keypoints) = _scrfdModel.DetectFaces(texture, maxFaces: 1);
-                
+
                 if (detections.Length == 0)
                 {
                     Logger.LogWarning($"[InsightFaceHelper] No face detected in image {idx} ({texture.width}x{texture.height})");
@@ -102,7 +102,6 @@ namespace MuseTalk.Utils
                 {
                     // Use SCRFD keypoints for better face alignment
                     landmarks68 = _landmarkModel.GetLandmarks(texture, bbox, scrfdKps);
-                    
                     if (landmarks68 != null && landmarks68.Length >= 68)
                     {
                         // Calculate final bbox using hybrid approach
