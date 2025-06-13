@@ -1282,7 +1282,7 @@ namespace MuseTalk.Core
                 baseModelPath = Path.Combine(_config.ModelPath, $"{baseName}_{_config.Version}.onnx");
             }
             
-            bool forceFP32 = false; // baseName.Contains(<model_name>);
+            bool forceFP32 = false; // baseName.Contains("vae_decoder"); // VAE decoder quality is sensitive to FP32
             
             // For other models: Priority INT8 for CPU optimization > FP32 fallback
             if (_useINT8 && !forceFP32)
