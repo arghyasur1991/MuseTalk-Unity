@@ -822,7 +822,6 @@ namespace MuseTalk.Core
             
             var combinedLatents = new float[batch * totalChannels * height * width];
             
-            // OPTIMIZATION 4: Use unsafe pointers for fast latent concatenation
             unsafe
             {
                 fixed (float* maskedPtr = maskedLatents)
@@ -1152,7 +1151,11 @@ namespace MuseTalk.Core
                 if (_avatarData != null && _avatarData.FaceRegions.Count > 0)
                 {
                     // Get corresponding face bbox for sizing
-                    int avatarIndex = i % _avatarData.FaceRegions.Count;
+                    int avatarIndex = globalFrameIdx % (2 *_avatarData.FaceRegions.Count); // cycled latents
+                    if (avatarIndex >= _avatarData.FaceRegions.Count)
+                    {
+                        avatarIndex = (2 * _avatarData.FaceRegions.Count) - 1 - avatarIndex;
+                    }
                     var faceData = _avatarData.FaceRegions[avatarIndex];
                     var bbox = faceData.BoundingBox;
                     
