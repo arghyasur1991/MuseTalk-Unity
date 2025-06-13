@@ -170,7 +170,7 @@ namespace MuseTalk.Utils
             float y_s = cropBox.y;
             
             // Calculate crop region in BiSeNet mask space
-            Rect cropRect = new Rect(
+            Rect cropRect = new(
                 x - x_s,
                 y - y_s,
                 x1 - x,  // width = x1 - x
@@ -543,30 +543,17 @@ namespace MuseTalk.Utils
                 // Python: face_large = body.crop(crop_box); face_large.paste(face, (x-x_s, y-y_s))
                 // Note: faceLarge is already precomputed, no need to crop again
                 
-                var startTime = Time.realtimeSinceStartup;
                 // Resize face texture to match face bbox dimensions (use exact integer calculation like Python)
                 int faceWidth = (int)(faceBbox.z - faceBbox.x);
                 int faceHeight = (int)(faceBbox.w - faceBbox.y);
                 var resizedFace = TextureUtils.ResizeTexture(faceTexture, faceWidth, faceHeight);
-                var endTime = Time.realtimeSinceStartup;
-                var duration = (endTime - startTime) * 1000;
-                Logger.Log($"[ImageBlendingHelper] ResizeTexture took {duration} milliseconds");
 
-                startTime = Time.realtimeSinceStartup;
                 // Paste the resized face into precomputed face_large at relative position (matching Python)
                 // Python: face_large.paste(face, (x-x_s, y-y_s))
                 var faceLargeWithFace = PasteFaceIntoLarge(precomputedFaceLarge, resizedFace, faceBbox, new Rect(cropBox.x, cropBox.y, cropBox.z - cropBox.x, cropBox.w - cropBox.y));
-                endTime = Time.realtimeSinceStartup;
-                duration = (endTime - startTime) * 1000;
-                Logger.Log($"[ImageBlendingHelper] PasteFaceIntoLarge took {duration} milliseconds");
-
-                startTime = Time.realtimeSinceStartup;
                 // Step 2: Composite images using the precomputed blurred mask (matching Python alpha blending)
                 // Python: body.paste(face_large, crop_box[:2], mask_image)
                 var result = CompositeWithMask(originalImage, faceLargeWithFace, faceBbox, precomputedBlurredMask, cropBox);
-                endTime = Time.realtimeSinceStartup;
-                duration = (endTime - startTime) * 1000;
-                Logger.Log($"[ImageBlendingHelper] CompositeWithMask took {duration} milliseconds");
 
                 // Cleanup intermediate textures (don't destroy precomputed faceLarge as it's cached)
                 UnityEngine.Object.Destroy(resizedFace);
