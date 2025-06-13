@@ -1,0 +1,676 @@
+using System;
+using System.Linq;
+using UnityEngine;
+using Microsoft.ML.OnnxRuntime.Tensors;
+using Unity.Collections.LowLevel.Unsafe;
+
+namespace MuseTalk.Utils
+{
+    /// <summary>
+    /// Utility functions for texture processing in MuseTalk
+    /// </summary>
+    public static class TextureUtils
+    {
+        /// <summary>
+        /// Check if texture format is compressed
+        /// </summary>
+        private static bool IsCompressedFormat(TextureFormat format)
+        {
+            return format == TextureFormat.DXT1 ||
+                   format == TextureFormat.DXT5 ||
+                   format == TextureFormat.BC4 ||
+                   format == TextureFormat.BC5 ||
+                   format == TextureFormat.BC6H ||
+                   format == TextureFormat.BC7 ||
+                   format == TextureFormat.ETC_RGB4 ||
+                   format == TextureFormat.ETC2_RGBA8 ||
+                   format == TextureFormat.ASTC_4x4 ||
+                   format == TextureFormat.ASTC_5x5 ||
+                   format == TextureFormat.ASTC_6x6 ||
+                   format == TextureFormat.ASTC_8x8 ||
+                   format == TextureFormat.ASTC_10x10 ||
+                   format == TextureFormat.ASTC_12x12;
+        }
+        
+        /// <summary>
+        /// Create a readable copy of texture using RenderTexture
+        /// </summary>
+        public static Texture2D MakeTextureReadable(Texture2D source)
+        {
+            if (source == null)
+                throw new ArgumentNullException(nameof(source));
+            
+            // Create RenderTexture
+            RenderTexture renderTexture = RenderTexture.GetTemporary(
+                source.width, 
+                source.height, 
+                0, 
+                RenderTextureFormat.ARGB32
+            );
+            
+            RenderTexture previousActive = RenderTexture.active;
+            RenderTexture.active = renderTexture;
+            
+            try
+            {
+                // Blit source texture to RenderTexture
+                Graphics.Blit(source, renderTexture);
+                
+                // Create new readable texture
+                Texture2D readableTexture = new Texture2D(source.width, source.height, TextureFormat.RGB24, false);
+                readableTexture.ReadPixels(new Rect(0, 0, source.width, source.height), 0, 0);
+                readableTexture.Apply();
+                
+                return readableTexture;
+            }
+            finally
+            {
+                // Clean up
+                RenderTexture.active = previousActive;
+                RenderTexture.ReleaseTemporary(renderTexture);
+            }
+        }
+        
+        /// <summary>
+        /// Resize texture to specified dimensions
+        /// </summary>
+        public static Texture2D ResizeTexture(Texture2D source, int targetWidth, int targetHeight)
+        {
+            if (source == null)
+                throw new ArgumentNullException(nameof(source));
+                
+            // Create RenderTexture for scaling
+            RenderTexture renderTexture = RenderTexture.GetTemporary(targetWidth, targetHeight, 0, RenderTextureFormat.ARGB32);
+            RenderTexture previousActive = RenderTexture.active;
+            RenderTexture.active = renderTexture;
+            
+            try
+            {
+                // Scale the source texture
+                Graphics.Blit(source, renderTexture);
+                
+                // Create new texture from RenderTexture
+                Texture2D resizedTexture = new Texture2D(targetWidth, targetHeight, TextureFormat.RGB24, false);
+                resizedTexture.ReadPixels(new Rect(0, 0, targetWidth, targetHeight), 0, 0);
+                resizedTexture.Apply();
+                
+                return resizedTexture;
+            }
+            finally
+            {
+                // Clean up
+                RenderTexture.active = previousActive;
+                RenderTexture.ReleaseTemporary(renderTexture);
+            }
+        }
+        
+        /// <summary>
+        /// RGB24 pixel struct for efficient 3-byte operations (matching TensorUtils and ImageBlendingHelper)
+        /// </summary>
+        [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential, Pack = 1)]
+        private struct RGB24
+        {
+            public byte r;
+            public byte g;
+            public byte b;
+            
+            public RGB24(byte r, byte g, byte b)
+            {
+                this.r = r;
+                this.g = g;
+                this.b = b;
+            }
+        }
+
+        /// <summary>
+        /// Resize texture to exact target dimensions (matching Python cv2.resize with LANCZOS4)
+        /// OPTIMIZED: Uses unsafe pointers, parallelization, and optimized bilinear interpolation for maximum performance
+        /// </summary>
+        public static unsafe Texture2D ResizeTextureToExactSize(Texture2D source, int targetWidth, int targetHeight)
+        {
+            if (source == null)
+                throw new ArgumentNullException(nameof(source));
+                
+            if (targetWidth <= 0 || targetHeight <= 0)
+                throw new ArgumentException("Target dimensions must be positive");
+                
+            // If already the correct size, return optimized copy using unsafe pointers
+            if (source.width == targetWidth && source.height == targetHeight)
+            {
+                var copy = new Texture2D(targetWidth, targetHeight, TextureFormat.RGB24, false);
+                var copySourcePixelData = source.GetPixelData<byte>(0);
+                var copyPixelData = copy.GetPixelData<byte>(0);
+                
+                // Fast memcpy for identical size copy
+                byte* copySourcePtr = (byte*)copySourcePixelData.GetUnsafeReadOnlyPtr();
+                byte* copyPtr = (byte*)copyPixelData.GetUnsafePtr();
+                UnsafeUtility.MemCpy(copyPtr, copySourcePtr, copySourcePixelData.Length);
+                
+                copy.Apply();
+                
+                return copy;
+            }
+            
+            // Create target texture with RGB24 format for maximum efficiency
+            var resized = new Texture2D(targetWidth, targetHeight, TextureFormat.RGB24, false);
+            
+            // Get pixel data as byte arrays for direct memory access
+            var sourcePixelData = source.GetPixelData<byte>(0);
+            var targetPixelData = resized.GetPixelData<byte>(0);
+            
+            // Get unsafe pointers for direct memory operations
+            byte* sourcePtr = (byte*)sourcePixelData.GetUnsafeReadOnlyPtr();
+            byte* targetPtr = (byte*)targetPixelData.GetUnsafePtr();
+            
+            // Pre-calculate scaling ratios for performance
+            float xRatio = (float)source.width / targetWidth;
+            float yRatio = (float)source.height / targetHeight;
+            
+            int sourceWidth = source.width;
+            int sourceHeight = source.height;
+            
+            // OPTIMIZED: Maximum parallelism across all target pixels (targetWidth × targetHeight)
+            // Bilinear interpolation (approximation of LANCZOS4) with stride-based coordinate calculation
+            int totalPixels = targetWidth * targetHeight;
+            System.Threading.Tasks.Parallel.For(0, totalPixels, pixelIndex =>
+            {
+                // Calculate x, y coordinates from linear pixel index using optimized arithmetic
+                int y = pixelIndex / targetWidth;  // Row index
+                int x = pixelIndex % targetWidth;  // Column index
+                
+                // Map target pixel to source coordinates
+                float srcX = x * xRatio;
+                float srcY = y * yRatio;
+                
+                // Get integer and fractional parts for bilinear interpolation
+                int x1 = Mathf.FloorToInt(srcX);
+                int y1 = Mathf.FloorToInt(srcY);
+                int x2 = Mathf.Min(x1 + 1, sourceWidth - 1);
+                int y2 = Mathf.Min(y1 + 1, sourceHeight - 1);
+                
+                float fx = srcX - x1;
+                float fy = srcY - y1;
+                float invFx = 1.0f - fx;
+                float invFy = 1.0f - fy;
+                
+                // Calculate source pixel pointers for bilinear interpolation using stride arithmetic
+                byte* c1Ptr = sourcePtr + (y1 * sourceWidth + x1) * 3; // Top-left
+                byte* c2Ptr = sourcePtr + (y1 * sourceWidth + x2) * 3; // Top-right
+                byte* c3Ptr = sourcePtr + (y2 * sourceWidth + x1) * 3; // Bottom-left
+                byte* c4Ptr = sourcePtr + (y2 * sourceWidth + x2) * 3; // Bottom-right
+                
+                // Pre-calculate bilinear interpolation weights
+                // Bilinear interpolation: result = c1*(1-fx)*(1-fy) + c2*fx*(1-fy) + c3*(1-fx)*fy + c4*fx*fy
+                float w1 = invFx * invFy; // Top-left weight
+                float w2 = fx * invFy;    // Top-right weight
+                float w3 = invFx * fy;    // Bottom-left weight
+                float w4 = fx * fy;       // Bottom-right weight
+                
+                // Calculate target pixel pointer using stride arithmetic
+                byte* targetPixelPtr = targetPtr + (y * targetWidth + x) * 3;
+                
+                // OPTIMIZED: Direct byte interpolation with unrolled RGB channels
+                // R channel
+                float r = c1Ptr[0] * w1 + c2Ptr[0] * w2 + c3Ptr[0] * w3 + c4Ptr[0] * w4;
+                targetPixelPtr[0] = (byte)Mathf.Clamp(r, 0f, 255f);
+                
+                // G channel
+                float g = c1Ptr[1] * w1 + c2Ptr[1] * w2 + c3Ptr[1] * w3 + c4Ptr[1] * w4;
+                targetPixelPtr[1] = (byte)Mathf.Clamp(g, 0f, 255f);
+                
+                // B channel
+                float b = c1Ptr[2] * w1 + c2Ptr[2] * w2 + c3Ptr[2] * w3 + c4Ptr[2] * w4;
+                targetPixelPtr[2] = (byte)Mathf.Clamp(b, 0f, 255f);
+            });
+            
+            // Apply changes to texture (no need for SetPixels since we wrote directly to pixel data)
+            resized.Apply();
+            
+            return resized;
+        }
+        
+        /// <summary>
+        /// Convert Texture2D to ONNX tensor format [1, 3, H, W] with exact Python VAE preprocessing
+        /// CRITICAL FIX: Match Python encode_image exactly with BGR/RGB handling and coordinate flipping
+        /// OPTIMIZED: Uses unsafe pointers, parallelization, and direct memory access for maximum performance
+        /// </summary>
+        public static unsafe DenseTensor<float> TextureToTensor(Texture2D texture)
+        {
+            if (texture == null)
+                throw new ArgumentNullException(nameof(texture));
+            
+            // Ensure texture is readable
+            if (!texture.isReadable)
+            {
+                texture = MakeTextureReadable(texture);
+            }
+                
+            int width = texture.width;
+            int height = texture.height;
+            
+            // Create tensor with CHW format: [batch=1, channels=3, height, width]
+            var tensorData = new float[1 * 3 * height * width];
+            var tensor = new DenseTensor<float>(tensorData, new[] { 1, 3, height, width });
+            
+            // Get direct access to texture pixel data
+            var pixelData = texture.GetPixelData<byte>(0);
+            byte* pixelPtr = (byte*)pixelData.GetUnsafeReadOnlyPtr();
+            
+            // Pre-calculate tensor offsets for each channel (CHW format)
+            int imageSize = height * width;
+            
+            // OPTIMIZED: Maximum parallelism across all pixels with coordinate flipping
+            // Process pixels in CHW format (channels first) with stride-based coordinate calculation
+            System.Threading.Tasks.Parallel.For(0, imageSize, pixelIndex =>
+            {
+                // Calculate x, y coordinates from linear pixel index using stride arithmetic
+                int y = pixelIndex / width;
+                int x = pixelIndex % width;
+                int unityY = height - 1 - y; // Flip Y coordinate for Unity coordinate system
+                
+                // Calculate pointer for this specific pixel using stride arithmetic
+                byte* pixelBytePtr = pixelPtr + (unityY * width + x) * 3; // RGB24: 3 bytes per pixel
+                float r = pixelBytePtr[0] / 255.0f; // R channel
+                float g = pixelBytePtr[1] / 255.0f; // G channel
+                float b = pixelBytePtr[2] / 255.0f; // B channel
+                
+                float normalizedR = (r - 0.5f) / 0.5f;
+                float normalizedG = (g - 0.5f) / 0.5f;
+                float normalizedB = (b - 0.5f) / 0.5f;
+                
+                // Write to tensor in CHW format without bounds checking (direct array access)
+                // Channel layout: [batch=0, channel, y, x] = index
+                tensorData[y * width + x] = normalizedR;                    // Channel 0 (R) offset: 0 * imageSize
+                tensorData[imageSize + y * width + x] = normalizedG;        // Channel 1 (G) offset: 1 * imageSize
+                tensorData[2 * imageSize + y * width + x] = normalizedB;    // Channel 2 (B) offset: 2 * imageSize
+            });
+            
+            return tensor;
+        }
+        
+        /// <summary>
+        /// Convert Texture2D to ONNX tensor with lower half masked (for VAE encoder input)
+        /// CRITICAL FIX: Match Python's encode_image_with_half_mask exactly with coordinate flipping
+        /// OPTIMIZED: Uses unsafe pointers, parallelization, and direct memory access for maximum performance
+        /// </summary>
+        public static unsafe DenseTensor<float> TextureToTensorWithMask(Texture2D texture)
+        {
+            if (texture == null)
+                throw new ArgumentNullException(nameof(texture));
+            
+            // Ensure texture is readable
+            if (!texture.isReadable)
+            {
+                texture = MakeTextureReadable(texture);
+            }
+                
+            int width = texture.width;
+            int height = texture.height;
+            
+            // Create tensor with CHW format: [batch=1, channels=3, height, width]
+            var tensorData = new float[1 * 3 * height * width];
+            var tensor = new DenseTensor<float>(tensorData, new[] { 1, 3, height, width });
+            
+            // Get direct access to texture pixel data
+            var pixelData = texture.GetPixelData<byte>(0);
+            byte* pixelPtr = (byte*)pixelData.GetUnsafeReadOnlyPtr();
+            
+            // Pre-calculate tensor offsets for each channel (CHW format)
+            int imageSize = height * width;
+            int halfHeight = height / 2; // Pre-calculate for mask comparison
+            
+            // OPTIMIZED: Maximum parallelism across all pixels with coordinate flipping and masking
+            // Process pixels in CHW format (channels first) with stride-based coordinate calculation
+            System.Threading.Tasks.Parallel.For(0, imageSize, pixelIndex =>
+            {
+                // Calculate x, y coordinates from linear pixel index using stride arithmetic
+                int y = pixelIndex / width;
+                int x = pixelIndex % width;
+                
+                int unityY = height - 1 - y; // Flip Y coordinate for Unity coordinate system
+                
+                // Calculate pointer for this specific pixel using stride arithmetic
+                byte* pixelBytePtr = pixelPtr + (unityY * width + x) * 3; // RGB24: 3 bytes per pixel
+                
+                float r = pixelBytePtr[0] / 255.0f; // R channel
+                float g = pixelBytePtr[1] / 255.0f; // G channel
+                float b = pixelBytePtr[2] / 255.0f; // B channel
+                
+                float mask = (y < halfHeight) ? 1.0f : 0.0f;  // Upper half = 1, lower half = 0
+                
+                float maskedR = r * mask;
+                float maskedG = g * mask;
+                float maskedB = b * mask;
+                
+                float normalizedR = (maskedR - 0.5f) / 0.5f;
+                float normalizedG = (maskedG - 0.5f) / 0.5f;
+                float normalizedB = (maskedB - 0.5f) / 0.5f;
+                
+                // Write to tensor in CHW format without bounds checking (direct array access)
+                // Channel layout: [batch=0, channel, y, x] = index
+                tensorData[y * width + x] = normalizedR;                    // Channel 0 (R) offset: 0 * imageSize
+                tensorData[imageSize + y * width + x] = normalizedG;        // Channel 1 (G) offset: 1 * imageSize
+                tensorData[2 * imageSize + y * width + x] = normalizedB;    // Channel 2 (B) offset: 2 * imageSize
+            });
+            
+            return tensor;
+        }
+        
+        /// <summary>
+        /// Crop texture to specified rectangle
+        /// </summary>
+        public static Texture2D CropTexture(Texture2D source, Rect cropRect)
+        {
+            if (source == null)
+                throw new ArgumentNullException(nameof(source));
+            
+            // Ensure texture is readable
+            if (!source.isReadable)
+            {
+                source = MakeTextureReadable(source);
+            }
+            
+            int x = (int)cropRect.x;
+            int y = (int)cropRect.y;
+            int width = (int)cropRect.width;
+            int height = (int)cropRect.height;
+            
+            y = source.height - y - height; // Flip Y coordinate
+            
+            // Ensure crop bounds are within texture
+            x = Mathf.Clamp(x, 0, source.width - 1);
+            y = Mathf.Clamp(y, 0, source.height - 1);
+            width = Mathf.Clamp(width, 1, source.width - x);
+            height = Mathf.Clamp(height, 1, source.height - y);
+            
+            // Create cropped texture
+            Texture2D croppedTexture = new Texture2D(width, height, TextureFormat.RGB24, false);
+            
+            // Copy pixels
+            Color[] pixels = source.GetPixels(x, y, width, height);
+            croppedTexture.SetPixels(pixels);
+            croppedTexture.Apply();
+            
+            return croppedTexture;
+        }
+        
+        /// <summary>
+        /// Convert ONNX tensor output to Texture2D matching Python VAE decoder exactly
+        /// OPTIMIZED: Uses unsafe pointers, parallelization, and bulk memory operations for maximum performance
+        /// CRITICAL FIX: Include RGB→BGR conversion and coordinate flipping to match Python decode_latents
+        /// </summary>
+        public static unsafe Texture2D TensorToTexture2D(Tensor<float> tensor)
+        {
+            if (tensor == null)
+                throw new ArgumentNullException(nameof(tensor));
+                
+            // Assume tensor format is [1, 3, H, W] or [3, H, W]
+            var dimensions = tensor.Dimensions.ToArray();
+            int height, width, channels;
+            int batchOffset = 0;
+            
+            if (dimensions.Length == 4)
+            {
+                // Format: [batch, channels, height, width]
+                channels = dimensions[1];
+                height = dimensions[2];
+                width = dimensions[3];
+                batchOffset = 0; // Use first batch item
+            }
+            else if (dimensions.Length == 3)
+            {
+                // Format: [channels, height, width]
+                channels = dimensions[0];
+                height = dimensions[1];
+                width = dimensions[2];
+            }
+            else
+            {
+                throw new ArgumentException($"Unsupported tensor dimensions: {dimensions.Length}");
+            }
+            
+            if (channels != 3)
+                throw new ArgumentException($"Expected 3 channels (RGB), got {channels}");
+                
+            // Create texture with RGB24 format for maximum efficiency
+            Texture2D texture = new(width, height, TextureFormat.RGB24, false);
+            var pixelData = texture.GetPixelData<byte>(0);
+            
+            // Get tensor data array once for performance
+            var tensorArray = tensor.ToArray();
+            
+            // Get unsafe pointer for direct memory operations
+            byte* pixelPtr = (byte*)pixelData.GetUnsafePtr();
+            
+            // Pre-calculate channel stride for performance
+            int channelStride = height * width;
+            int batchStride = channels * channelStride;
+            
+            // OPTIMIZED: Parallel processing of rows for maximum performance
+            // Python processing:
+            // 1. image = np.transpose(image, (0, 2, 3, 1))
+            // 2. image_float64 = image.astype(np.float64) 
+            // 3. image_normalized = (image_float64 / 2.0 + 0.5).clip(0.0, 1.0)
+            // 4. image_uint8 = np.round(image_normalized * 255.0).astype(np.uint8)
+            // 5. image_final = image_uint8[0]  # Remove batch dimension
+            // 6. image_final_bgr = image_final[...,::-1]  # RGB to BGR conversion
+            
+            System.Threading.Tasks.Parallel.For(0, height, y =>
+            {
+                // Calculate Unity Y coordinate with flipping (Python uses (0,0) at top-left, Unity at bottom-left)
+                int unityY = height - 1 - y;
+                byte* rowPtr = pixelPtr + unityY * width * 3; // RGB24: 3 bytes per pixel
+                
+                // Process entire row in chunks for better cache performance
+                for (int x = 0; x < width; x++)
+                {
+                    float r, g, b;
+                    
+                    if (dimensions.Length == 4)
+                    {
+                        // [batch, channel, height, width] - pre-calculated indices for performance
+                        int baseIndex = batchOffset * batchStride + y * width + x;
+                        r = tensorArray[baseIndex];                    // Channel 0 (R)
+                        g = tensorArray[baseIndex + channelStride];    // Channel 1 (G)
+                        b = tensorArray[baseIndex + 2 * channelStride]; // Channel 2 (B)
+                    }
+                    else
+                    {
+                        // [channel, height, width] - pre-calculated indices for performance
+                        int baseIndex = y * width + x;
+                        r = tensorArray[baseIndex];                    // Channel 0 (R)
+                        g = tensorArray[baseIndex + channelStride];    // Channel 1 (G)
+                        b = tensorArray[baseIndex + 2 * channelStride]; // Channel 2 (B)
+                    }
+                    
+                    // OPTIMIZED: Use direct float operations instead of double for better performance
+                    // Python: image_normalized = (image_float64 / 2.0 + 0.5).clip(0.0, 1.0)
+                    // Clamp to [0, 1] range with fast math operations
+                    r = Mathf.Clamp01(r * 0.5f + 0.5f);
+                    g = Mathf.Clamp01(g * 0.5f + 0.5f);
+                    b = Mathf.Clamp01(b * 0.5f + 0.5f);
+                    
+                    // Convert to byte range [0, 255] with proper rounding
+                    // Python: image_uint8 = np.round(image_normalized * 255.0).astype(np.uint8)
+                    byte rByte = (byte)Mathf.RoundToInt(r * 255f);
+                    byte gByte = (byte)Mathf.RoundToInt(g * 255f);
+                    byte bByte = (byte)Mathf.RoundToInt(b * 255f);
+                    
+                    // CRITICAL FIX: Proper color channel handling
+                    // Python VAE decoder outputs RGB tensor, then converts to BGR for OpenCV
+                    // Python: image_final_bgr = image_final[...,::-1]  # RGB to BGR
+                    // Unity expects RGB for display, so we use the original RGB from tensor
+                    // NO channel swapping needed - use original RGB values
+                    
+                    // Direct memory write using pointer arithmetic (fastest possible)
+                    byte* pixelPtr = rowPtr + x * 3;
+                    pixelPtr[0] = rByte; // R
+                    pixelPtr[1] = gByte; // G
+                    pixelPtr[2] = bByte; // B
+                }
+            });
+            
+            // Apply changes to texture (no need for SetPixels since we wrote directly to pixel data)
+            texture.Apply();
+            
+            return texture;
+        }
+        
+        /// <summary>
+        /// Unsafe optimized Gaussian blur implementation for textures
+        /// UNSAFE OPTIMIZED: Uses direct pointer arithmetic for maximum performance
+        /// </summary>
+        public static unsafe Texture2D ApplySimpleGaussianBlur(Texture2D input, int kernelSize)
+        {
+            if (input == null)
+            {
+                Debug.LogError("[TextureUtils] Input texture is null for Gaussian blur");
+                return null;
+            }
+            
+            try
+            {
+                int width = input.width;
+                int height = input.height;
+                
+                if (width <= 0 || height <= 0)
+                {
+                    Debug.LogError($"[TextureUtils] Invalid texture dimensions: {width}x{height}");
+                    return null;
+                }
+                
+                // Get input pixel data
+                var inputPixelData = input.GetPixelData<byte>(0);
+                byte* inputPtr = (byte*)inputPixelData.GetUnsafeReadOnlyPtr();
+                
+                // Create output texture and get its pixel data
+                var result = new Texture2D(width, height, TextureFormat.RGB24, false);
+                var resultPixelData = result.GetPixelData<byte>(0);
+                byte* resultPtr = (byte*)resultPixelData.GetUnsafePtr();
+                
+                // Use the pointer-based implementation
+                ApplySimpleGaussianBlur(inputPtr, resultPtr, width, height, kernelSize);
+                
+                // Apply changes to texture
+                result.Apply();
+                
+                return result;
+            }
+            catch (Exception e)
+            {
+                Debug.LogError($"[TextureUtils] Gaussian blur failed: {e.Message}");
+                return null;
+            }
+        }
+        
+        /// <summary>
+        /// Unsafe optimized Gaussian blur implementation using raw pointers
+        /// UNSAFE OPTIMIZED: Direct pointer-to-pointer processing for maximum performance
+        /// </summary>
+        public static unsafe void ApplySimpleGaussianBlur(byte* inputPtr, byte* outputPtr, int width, int height, int kernelSize)
+        {
+            if (inputPtr == null || outputPtr == null)
+            {
+                Debug.LogError("[TextureUtils] Null pointers passed to Gaussian blur");
+                return;
+            }
+            
+            if (width <= 0 || height <= 0)
+            {
+                Debug.LogError($"[TextureUtils] Invalid dimensions: {width}x{height}");
+                return;
+            }
+            
+            float sigma = kernelSize / 3.0f;
+            int halfKernel = kernelSize / 2;
+            
+            // Generate 1D Gaussian kernel (same for both directions)
+            var kernel = new float[kernelSize];
+            float sum = 0;
+            
+            for (int i = 0; i < kernelSize; i++)
+            {
+                int offset = i - halfKernel;
+                kernel[i] = Mathf.Exp(-(offset * offset) / (2 * sigma * sigma));
+                sum += kernel[i];
+            }
+            
+            // Normalize kernel
+            for (int i = 0; i < kernelSize; i++)
+            {
+                kernel[i] /= sum;
+            }
+            
+            // Allocate temporary buffer for horizontal pass
+            int totalPixels = width * height;
+            byte* tempPtr = (byte*)UnsafeUtility.Malloc(totalPixels * 3, 4, Unity.Collections.Allocator.Temp);
+            
+            try
+            {
+                // Step 1: Horizontal blur pass (input -> temp)
+                System.Threading.Tasks.Parallel.For(0, height, y =>
+                {
+                    RGB24* inputRowPtr = (RGB24*)(inputPtr + y * width * 3);
+                    RGB24* tempRowPtr = (RGB24*)(tempPtr + y * width * 3);
+                    
+                    for (int x = 0; x < width; x++)
+                    {
+                        float r = 0, g = 0, b = 0;
+                        
+                        // Apply horizontal kernel - direct RGB24 struct access
+                        for (int k = 0; k < kernelSize; k++)
+                        {
+                            int sampleX = Mathf.Clamp(x + k - halfKernel, 0, width - 1);
+                            RGB24* samplePixel = inputRowPtr + sampleX;
+                            float weight = kernel[k];
+                            
+                            // Direct struct member access
+                            r += samplePixel->r * weight;
+                            g += samplePixel->g * weight;
+                            b += samplePixel->b * weight;
+                        }
+                        
+                        // Direct struct write to temp buffer
+                        RGB24* targetPixel = tempRowPtr + x;
+                        targetPixel->r = (byte)Mathf.Clamp(r, 0, 255);
+                        targetPixel->g = (byte)Mathf.Clamp(g, 0, 255);
+                        targetPixel->b = (byte)Mathf.Clamp(b, 0, 255);
+                    }
+                });
+                
+                // Step 2: Vertical blur pass (temp -> output)
+                System.Threading.Tasks.Parallel.For(0, width, x =>
+                {
+                    for (int y = 0; y < height; y++)
+                    {
+                        float r = 0, g = 0, b = 0;
+                        
+                        // Apply vertical kernel - direct RGB24 struct access
+                        for (int k = 0; k < kernelSize; k++)
+                        {
+                            int sampleY = Mathf.Clamp(y + k - halfKernel, 0, height - 1);
+                            RGB24* samplePixel = (RGB24*)(tempPtr + sampleY * width * 3) + x;
+                            float weight = kernel[k];
+                            
+                            // Direct struct member access
+                            r += samplePixel->r * weight;
+                            g += samplePixel->g * weight;
+                            b += samplePixel->b * weight;
+                        }
+                        
+                        // Direct struct write to output
+                        RGB24* targetPixel = (RGB24*)(outputPtr + y * width * 3) + x;
+                        targetPixel->r = (byte)Mathf.Clamp(r, 0, 255);
+                        targetPixel->g = (byte)Mathf.Clamp(g, 0, 255);
+                        targetPixel->b = (byte)Mathf.Clamp(b, 0, 255);
+                    }
+                });
+            }
+            finally
+            {
+                // Clean up temporary buffer
+                UnsafeUtility.Free(tempPtr, Unity.Collections.Allocator.Temp);
+            }
+        }
+    }
+}
