@@ -234,20 +234,21 @@ namespace MuseTalk.Core
         /// </summary>
         private SessionOptions CreateSessionOptions()
         {
-            var options = new SessionOptions();
-            
-            // OPTIMIZATION 1: Enable all ONNX optimizations for production
-            options.GraphOptimizationLevel = GraphOptimizationLevel.ORT_ENABLE_ALL;
-            options.ExecutionMode = ExecutionMode.ORT_PARALLEL;
-            
-            // OPTIMIZATION 2: Memory optimizations
-            options.EnableMemoryPattern = true;
-            options.EnableCpuMemArena = true;
-            
-            // OPTIMIZATION 3: Set inter/intra thread counts for better parallelism
-            options.InterOpNumThreads = Environment.ProcessorCount;
-            options.IntraOpNumThreads = Environment.ProcessorCount;
-            
+            var options = new SessionOptions
+            {
+                // OPTIMIZATION 1: Enable all ONNX optimizations for production
+                GraphOptimizationLevel = GraphOptimizationLevel.ORT_ENABLE_ALL,
+                ExecutionMode = ExecutionMode.ORT_PARALLEL,
+
+                // OPTIMIZATION 2: Memory optimizations
+                EnableMemoryPattern = true,
+                EnableCpuMemArena = true,
+
+                // OPTIMIZATION 3: Set inter/intra thread counts for better parallelism
+                InterOpNumThreads = Environment.ProcessorCount,
+                IntraOpNumThreads = Environment.ProcessorCount
+            };
+
             // INT8 QUANTIZATION OPTIMIZATIONS
             if (_useINT8)
             {

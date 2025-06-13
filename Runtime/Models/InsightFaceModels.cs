@@ -75,10 +75,11 @@ namespace MuseTalk.Models
 
             var sessionOptions = new SessionOptions
             {
-                GraphOptimizationLevel = GraphOptimizationLevel.ORT_DISABLE_ALL,
-                ExecutionMode = ExecutionMode.ORT_SEQUENTIAL
+                GraphOptimizationLevel = GraphOptimizationLevel.ORT_ENABLE_ALL,
+                ExecutionMode = ExecutionMode.ORT_PARALLEL
             };
 
+            sessionOptions.AppendExecutionProvider_CoreML();
             _session = new InferenceSession(_modelPath, sessionOptions);
             
             var inputMetadata = _session.InputMetadata;
@@ -644,9 +645,11 @@ namespace MuseTalk.Models
 
             var sessionOptions = new SessionOptions
             {
-                GraphOptimizationLevel = GraphOptimizationLevel.ORT_DISABLE_ALL,
-                ExecutionMode = ExecutionMode.ORT_SEQUENTIAL
+                GraphOptimizationLevel = GraphOptimizationLevel.ORT_ENABLE_ALL,
+                ExecutionMode = ExecutionMode.ORT_PARALLEL
             };
+
+            sessionOptions.AppendExecutionProvider_CoreML();
 
             _session = new InferenceSession(_modelPath, sessionOptions);
             
@@ -900,6 +903,7 @@ namespace MuseTalk.Models
             
             // Run inference
             using var results = _session.Run(inputs);
+            
             var output = results.First().AsTensor<float>();
             var outputArray = output.ToArray();
             
