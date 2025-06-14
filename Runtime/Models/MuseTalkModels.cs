@@ -47,8 +47,8 @@ namespace MuseTalk.Models
             return new MuseTalkConfig(modelPath)
             {
                 EnableDiskCache = true,
-                CacheLatentsOnly = true, // Faster caching for production use
-                MaxCacheSizeMB = 2048, // 2GB cache for better performance
+                CacheLatentsOnly = false,
+                MaxCacheSizeMB = 2048,
                 UseINT8 = true
             };
         }
