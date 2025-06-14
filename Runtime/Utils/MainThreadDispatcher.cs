@@ -126,7 +126,7 @@ namespace MuseTalk.Utils
         /// </summary>
         public static Task<Texture2D> LoadImageAsync(string pngData, int width = 2, int height = 2)
         {
-            if (pngData == null || pngData.Length == 0)
+            if (string.IsNullOrEmpty(pngData))
                 return Task.FromResult<Texture2D>(null);
                 
             // If we're already on the main thread, execute directly

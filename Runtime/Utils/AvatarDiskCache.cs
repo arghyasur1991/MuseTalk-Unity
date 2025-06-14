@@ -562,59 +562,27 @@ namespace MuseTalk.Utils
             
             if (!_config.CacheLatentsOnly && serializableData.FaceRegions != null)
             {
-                                    // Deserialize face regions with texture data
-                    foreach (var serializableFace in serializableData.FaceRegions)
+                // Deserialize face regions with texture data
+                foreach (var serializableFace in serializableData.FaceRegions)
+                {
+                    var faceData = new FaceData
                     {
-                        var faceData = new FaceData
-                        {
-                            HasFace = serializableFace.HasFace,
-                            BoundingBox = serializableFace.BoundingBox?.ToRect() ?? default(Rect),
-                            Landmarks = serializableFace.Landmarks?.Select(v => v.ToVector2()).ToArray(),
-                            AdjustedFaceBbox = serializableFace.AdjustedFaceBbox?.ToVector4() ?? default(Vector4),
-                            CropBox = serializableFace.CropBox?.ToVector4() ?? default(Vector4)
-                        };
-                    
-                    // Convert PNG byte data back to textures using MainThreadDispatcher
-                    if (!string.IsNullOrEmpty(serializableFace.CroppedFaceTextureData))
-                    {
-                        faceData.CroppedFaceTexture = await MainThreadDispatcher.LoadImageAsync(serializableFace.CroppedFaceTextureData, serializableFace.CroppedFaceWidth, serializableFace.CroppedFaceHeight);
-                    }
-                    
-                    if (!string.IsNullOrEmpty(serializableFace.OriginalTextureData))
-                    {
-                        faceData.OriginalTexture = await MainThreadDispatcher.LoadImageAsync(serializableFace.OriginalTextureData, serializableFace.OriginalWidth, serializableFace.OriginalHeight);
-                    }
-                    
-                    if (!string.IsNullOrEmpty(serializableFace.FaceLargeData))
-                    {
-                        faceData.FaceLarge = await MainThreadDispatcher.LoadImageAsync(serializableFace.FaceLargeData, serializableFace.FaceLargeWidth, serializableFace.FaceLargeHeight);
-                    }
-                    
-                    if (!string.IsNullOrEmpty(serializableFace.SegmentationMaskData))
-                    {
-                        faceData.SegmentationMask = await MainThreadDispatcher.LoadImageAsync(serializableFace.SegmentationMaskData); // Will be resized by LoadImage
-                    }
-                    
-                    if (!string.IsNullOrEmpty(serializableFace.MaskSmallData))
-                    {
-                        faceData.MaskSmall = await MainThreadDispatcher.LoadImageAsync(serializableFace.MaskSmallData);
-                    }
-                    
-                    if (!string.IsNullOrEmpty(serializableFace.FullMaskData))
-                    {
-                        faceData.FullMask = await MainThreadDispatcher.LoadImageAsync(serializableFace.FullMaskData);
-                    }
-                    
-                    if (!string.IsNullOrEmpty(serializableFace.BoundaryMaskData))
-                    {
-                        faceData.BoundaryMask = await MainThreadDispatcher.LoadImageAsync(serializableFace.BoundaryMaskData);
-                    }
-                    
-                    if (!string.IsNullOrEmpty(serializableFace.BlurredMaskData))
-                    {
-                        faceData.BlurredMask = await MainThreadDispatcher.LoadImageAsync(serializableFace.BlurredMaskData);
-                    }
-                    
+                        HasFace = serializableFace.HasFace,
+                        BoundingBox = serializableFace.BoundingBox?.ToRect() ?? default(Rect),
+                        Landmarks = serializableFace.Landmarks?.Select(v => v.ToVector2()).ToArray(),
+                        AdjustedFaceBbox = serializableFace.AdjustedFaceBbox?.ToVector4() ?? default(Vector4),
+                        CropBox = serializableFace.CropBox?.ToVector4() ?? default(Vector4),
+                        // Convert PNG byte data back to textures using MainThreadDispatcher
+                        CroppedFaceTexture = await MainThreadDispatcher.LoadImageAsync(serializableFace.CroppedFaceTextureData, serializableFace.CroppedFaceWidth, serializableFace.CroppedFaceHeight),
+                        OriginalTexture = await MainThreadDispatcher.LoadImageAsync(serializableFace.OriginalTextureData, serializableFace.OriginalWidth, serializableFace.OriginalHeight),
+                        FaceLarge = await MainThreadDispatcher.LoadImageAsync(serializableFace.FaceLargeData, serializableFace.FaceLargeWidth, serializableFace.FaceLargeHeight),
+                        SegmentationMask = await MainThreadDispatcher.LoadImageAsync(serializableFace.SegmentationMaskData), // Will be resized by LoadImage
+                        MaskSmall = await MainThreadDispatcher.LoadImageAsync(serializableFace.MaskSmallData),
+                        FullMask = await MainThreadDispatcher.LoadImageAsync(serializableFace.FullMaskData),
+                        BoundaryMask = await MainThreadDispatcher.LoadImageAsync(serializableFace.BoundaryMaskData),
+                        BlurredMask = await MainThreadDispatcher.LoadImageAsync(serializableFace.BlurredMaskData)
+                    };
+
                     avatarData.FaceRegions.Add(faceData);
                 }
             }
