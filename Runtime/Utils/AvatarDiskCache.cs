@@ -8,6 +8,7 @@ using Newtonsoft.Json;
 
 namespace MuseTalk.Utils
 {
+    using System.Diagnostics;
     using Models;
 
     /// <summary>
@@ -358,7 +359,11 @@ namespace MuseTalk.Utils
                 var serializableData = JsonConvert.DeserializeObject<SerializableAvatarData>(jsonData);
                 
                 // Convert back to AvatarData
+                var start = Stopwatch.StartNew();
                 var avatarData = await DeserializeAvatarDataAsync(serializableData);
+
+                var elapsed = start.Elapsed;
+                Logger.Log($"[AvatarDiskCache] Loaded avatar data from cache: in {elapsed.TotalMilliseconds}ms");
                 
                 // Update access statistics
                 entry.LastAccessedAt = DateTime.Now;
@@ -572,54 +577,42 @@ namespace MuseTalk.Utils
                     // Convert PNG byte data back to textures using MainThreadDispatcher
                     if (!string.IsNullOrEmpty(serializableFace.CroppedFaceTextureData))
                     {
-                        var pngData = Convert.FromBase64String(serializableFace.CroppedFaceTextureData);
-                        faceData.CroppedFaceTexture = await MainThreadDispatcher.LoadImageAsync(pngData, serializableFace.CroppedFaceWidth, serializableFace.CroppedFaceHeight);
+                        faceData.CroppedFaceTexture = await MainThreadDispatcher.LoadImageAsync(serializableFace.CroppedFaceTextureData, serializableFace.CroppedFaceWidth, serializableFace.CroppedFaceHeight);
                     }
                     
                     if (!string.IsNullOrEmpty(serializableFace.OriginalTextureData))
                     {
-                        var pngData = Convert.FromBase64String(serializableFace.OriginalTextureData);
-                        faceData.OriginalTexture = await MainThreadDispatcher.LoadImageAsync(pngData, serializableFace.OriginalWidth, serializableFace.OriginalHeight);
-                        if (faceData.OriginalTexture != null)
-                        {
-                            Logger.Log($"[AvatarDiskCache] OriginalTexture loaded {faceData.OriginalTexture.width}x{faceData.OriginalTexture.height}");
-                        }
+                        faceData.OriginalTexture = await MainThreadDispatcher.LoadImageAsync(serializableFace.OriginalTextureData, serializableFace.OriginalWidth, serializableFace.OriginalHeight);
                     }
                     
                     if (!string.IsNullOrEmpty(serializableFace.FaceLargeData))
                     {
-                        var pngData = Convert.FromBase64String(serializableFace.FaceLargeData);
-                        faceData.FaceLarge = await MainThreadDispatcher.LoadImageAsync(pngData, serializableFace.FaceLargeWidth, serializableFace.FaceLargeHeight);
+                        faceData.FaceLarge = await MainThreadDispatcher.LoadImageAsync(serializableFace.FaceLargeData, serializableFace.FaceLargeWidth, serializableFace.FaceLargeHeight);
                     }
                     
                     if (!string.IsNullOrEmpty(serializableFace.SegmentationMaskData))
                     {
-                        var pngData = Convert.FromBase64String(serializableFace.SegmentationMaskData);
-                        faceData.SegmentationMask = await MainThreadDispatcher.LoadImageAsync(pngData, 2, 2); // Will be resized by LoadImage
+                        faceData.SegmentationMask = await MainThreadDispatcher.LoadImageAsync(serializableFace.SegmentationMaskData); // Will be resized by LoadImage
                     }
                     
                     if (!string.IsNullOrEmpty(serializableFace.MaskSmallData))
                     {
-                        var pngData = Convert.FromBase64String(serializableFace.MaskSmallData);
-                        faceData.MaskSmall = await MainThreadDispatcher.LoadImageAsync(pngData, 2, 2);
+                        faceData.MaskSmall = await MainThreadDispatcher.LoadImageAsync(serializableFace.MaskSmallData);
                     }
                     
                     if (!string.IsNullOrEmpty(serializableFace.FullMaskData))
                     {
-                        var pngData = Convert.FromBase64String(serializableFace.FullMaskData);
-                        faceData.FullMask = await MainThreadDispatcher.LoadImageAsync(pngData, 2, 2);
+                        faceData.FullMask = await MainThreadDispatcher.LoadImageAsync(serializableFace.FullMaskData);
                     }
                     
                     if (!string.IsNullOrEmpty(serializableFace.BoundaryMaskData))
                     {
-                        var pngData = Convert.FromBase64String(serializableFace.BoundaryMaskData);
-                        faceData.BoundaryMask = await MainThreadDispatcher.LoadImageAsync(pngData, 2, 2);
+                        faceData.BoundaryMask = await MainThreadDispatcher.LoadImageAsync(serializableFace.BoundaryMaskData);
                     }
                     
                     if (!string.IsNullOrEmpty(serializableFace.BlurredMaskData))
                     {
-                        var pngData = Convert.FromBase64String(serializableFace.BlurredMaskData);
-                        faceData.BlurredMask = await MainThreadDispatcher.LoadImageAsync(pngData, 2, 2);
+                        faceData.BlurredMask = await MainThreadDispatcher.LoadImageAsync(serializableFace.BlurredMaskData);
                     }
                     
                     avatarData.FaceRegions.Add(faceData);

@@ -1,5 +1,4 @@
 using System;
-using System.Collections;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using UnityEngine;
@@ -100,10 +99,12 @@ namespace MuseTalk.Utils
             return EnqueueAsync(() => texture.EncodeToPNG());
         }
 
-        private static Texture2D LoadImage(byte[] pngData, int width, int height)
+        private static Texture2D LoadImage(string pngData, int width, int height)
         {
+            Span<byte> pngDataSpan = new byte[pngData.Length];
+            Convert.TryFromBase64String(pngData, pngDataSpan, out _);
             var texture = new Texture2D(width, height);
-            texture.LoadImage(pngData);
+            ImageConversion.LoadImage(texture, pngDataSpan);
             if (texture.format != TextureFormat.RGB24)
             {
                 var convertedTexture = new Texture2D(texture.width, texture.height, TextureFormat.RGB24, false)
@@ -123,7 +124,7 @@ namespace MuseTalk.Utils
         /// <summary>
         /// Load PNG data into texture on main thread using RGB24 format
         /// </summary>
-        public static Task<Texture2D> LoadImageAsync(byte[] pngData, int width, int height)
+        public static Task<Texture2D> LoadImageAsync(string pngData, int width = 2, int height = 2)
         {
             if (pngData == null || pngData.Length == 0)
                 return Task.FromResult<Texture2D>(null);
