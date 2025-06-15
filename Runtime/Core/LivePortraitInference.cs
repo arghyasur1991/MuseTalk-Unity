@@ -430,7 +430,7 @@ namespace MuseTalk.Core
             
             // Python: crop_info = crop_image(img, lmk, dsize=512, scale=2.3, vy_ratio=-0.125)
             var cropInfo = CropImage(img, lmk, 512, 2.3f, -0.125f);
-            // _debugImage = cropInfo.ImageCrop;
+            _debugImage = cropInfo.ImageCrop;
             
             Debug.Log($"[DEBUG_CROP_SRC] Crop info keys: ['M_o2c', 'M_c2o', 'img_crop', 'pt_crop']");
             
@@ -624,7 +624,9 @@ namespace MuseTalk.Core
             var inputTensor = PreprocessLandmarkImage(alignedImg);
             var tensorData = inputTensor.ToArray();
             Debug.Log($"[DEBUG_GET_LANDMARK] Input size tuple: ({inputSize}, {inputSize})");
-            Debug.Log($"[DEBUG_GET_LANDMARK] Preprocessed tensor shape: (1, 3, {inputSize}, {inputSize}), range: [{tensorData.Min():F3}, {tensorData.Max():F3}]");
+            Debug.Log($"[DEBUG_GET_LANDMARK] Preprocessed tensor shape: (1, 3, {inputSize}, {inputSize}), range: [{tensorData.Min():F3}, {tensorData.Max():F3}], Mean: {tensorData.Average():F3}");
+            // Print the first 10 values of the tensor
+            Debug.Log($"[DEBUG_GET_LANDMARK] First 10 values of the tensor: {tensorData[0]}, {tensorData[1]}, {tensorData[2]}, {tensorData[3]}, {tensorData[4]}, {tensorData[5]}, {tensorData[6]}, {tensorData[7]}, {tensorData[8]}, {tensorData[9]}");
             
             // Python: output = landmark.run(None, {"data": aimg})
             var inputs = new List<NamedOnnxValue>
@@ -655,7 +657,7 @@ namespace MuseTalk.Core
             
             // Python: IM = cv2.invertAffineTransform(M)
             // Python: pred = trans_points2d(pred, IM)
-            var IM = InvertAffineTransformToMatrix(transformMatrix);
+            var IM = transformMatrix.inverse;// InvertAffineTransformToMatrix(transformMatrix);
             Debug.Log($"[DEBUG_GET_LANDMARK] Inverse transform matrix IM:\n[[{IM[0,0]:F7}   {IM[0,1]:F7} {IM[0,2]:F6}]\n [{IM[1,0]:F7}          {IM[1,1]:F7} {IM[1,2]:F6}]]");
             
             landmarks = TransPoints2D(landmarks, IM);
@@ -2402,7 +2404,7 @@ namespace MuseTalk.Core
         
         private DenseTensor<float> PreprocessLandmarkImage(Texture2D img, int inputSize = 192)
         {
-            var pixels = img.GetPixels();
+            var pixels = img.GetPixels32();
             var tensorData = new float[1 * 3 * inputSize * inputSize];
             
             int idx = 0;
@@ -2422,7 +2424,7 @@ namespace MuseTalk.Core
                                                    pixels[pixelIdx].b;
                         // CRITICAL FIX: Python does NOT normalize to [0,1] for landmark detection!
                         // Keep pixel values in [0,255] range to match Python exactly
-                        tensorData[idx++] = pixelValue * 255f; // Convert from [0,1] to [0,255]
+                        tensorData[idx++] = pixelValue; // Convert from [0,1] to [0,255]
                     }
                 }
             }
