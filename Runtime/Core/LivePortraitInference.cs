@@ -317,6 +317,9 @@ namespace MuseTalk.Core
         /// </summary>
         private CropInfo CropSrcImage(Texture2D img)
         {
+            Debug.Log($"[DEBUG_CROP_SRC] Input image shape: {img.width}x{img.height}");
+            Debug.Log($"[DEBUG_CROP_SRC] Python equivalent: height={img.height}, width={img.width}");
+            
             // Python: face_analysis = models["face_analysis"]
             // Python: src_face = face_analysis(img)
             var srcFaces = FaceAnalysis(img);
@@ -330,20 +333,28 @@ namespace MuseTalk.Core
             // Python: elif len(src_face) > 1: print(f"More than one face detected in the image, only pick one face.")
             if (srcFaces.Count > 1)
             {
-                // Debug.LogWarning("More than one face detected in the image, only pick one face.");
+                Debug.LogWarning("More than one face detected in the image, only pick one face.");
             }
             
             // Python: src_face = src_face[0]
             var srcFace = srcFaces[0];
+            Debug.Log($"[DEBUG_CROP_SRC] Selected face bbox: ({srcFace.BoundingBox.x:F3}, {srcFace.BoundingBox.y:F3}, {srcFace.BoundingBox.width:F3}, {srcFace.BoundingBox.height:F3})");
+            Debug.Log($"[DEBUG_CROP_SRC] Face detection score: {srcFace.DetectionScore:F3}");
             
             // Python: lmk = src_face["landmark_2d_106"]  # this is the 106 landmarks from insightface
             var lmk = srcFace.Landmarks106;
+            Debug.Log($"[DEBUG_CROP_SRC] Initial landmarks shape: {lmk.Length}");
+            Debug.Log($"[DEBUG_CROP_SRC] Initial landmarks range: [{lmk.Min(p => Mathf.Min(p.x, p.y)):F3}, {lmk.Max(p => Mathf.Max(p.x, p.y)):F3}]");
+            Debug.Log($"[DEBUG_CROP_SRC] First 5 landmarks: [{lmk[0]}, {lmk[1]}, {lmk[2]}, {lmk[3]}, {lmk[4]}]");
             
             // Python: crop_info = crop_image(img, lmk, dsize=512, scale=2.3, vy_ratio=-0.125)
             var cropInfo = CropImage(img, lmk, 512, 2.3f, -0.125f);
             
             // Python: lmk = landmark_runner(models, img, lmk)
             lmk = LandmarkRunner(img, lmk);
+            Debug.Log($"[DEBUG_CROP_SRC] Refined landmarks shape: {lmk.Length}");
+            Debug.Log($"[DEBUG_CROP_SRC] Refined landmarks range: [{lmk.Min(p => Mathf.Min(p.x, p.y)):F3}, {lmk.Max(p => Mathf.Max(p.x, p.y)):F3}]");
+            Debug.Log($"[DEBUG_CROP_SRC] First 5 refined landmarks: [{lmk[0]}, {lmk[1]}, {lmk[2]}, {lmk[3]}, {lmk[4]}]");
             
             // Python: crop_info["lmk_crop"] = lmk
             cropInfo.LandmarksCrop = lmk;
@@ -353,6 +364,7 @@ namespace MuseTalk.Core
             
             // Python: crop_info["lmk_crop_256x256"] = crop_info["lmk_crop"] * 256 / 512
             cropInfo.LandmarksCrop256x256 = ScaleLandmarks(cropInfo.LandmarksCrop, 256f / 512f);
+            Debug.Log($"[DEBUG_CROP_SRC] Final crop landmarks 256x256 range: [{cropInfo.LandmarksCrop256x256.Min(p => Mathf.Min(p.x, p.y)):F3}, {cropInfo.LandmarksCrop256x256.Max(p => Mathf.Max(p.x, p.y)):F3}]");
             
             return cropInfo;
         }
@@ -363,13 +375,23 @@ namespace MuseTalk.Core
         /// </summary>
         private List<FaceDetectionResult> FaceAnalysis(Texture2D img)
         {
-            // Debug.Log($"[FaceAnalysis] Starting face detection on image {img.width}x{img.height}");
+            Debug.Log($"[FaceAnalysis] Starting face detection on image {img.width}x{img.height}");
             
             // Python: input_size = 512
             const int inputSize = 512;
             
+            // CRITICAL FIX: Match Python's dimension interpretation
+            // Python treats image as (height, width, channels) = (img.shape[0], img.shape[1], img.shape[2])
+            // Unity texture2D.width/height corresponds to OpenCV width/height
+            // So: Python img.shape[0] = height = Unity img.height
+            //     Python img.shape[1] = width = Unity img.width
+            int pythonHeight = img.height;  // This matches Python's img.shape[0]
+            int pythonWidth = img.width;    // This matches Python's img.shape[1]
+            
+            Debug.Log($"[FaceAnalysis] Python equivalent dimensions: height={pythonHeight}, width={pythonWidth}");
+            
             // Python: im_ratio = float(img.shape[0]) / img.shape[1]
-            float imRatio = (float)img.height / img.width;
+            float imRatio = (float)pythonHeight / pythonWidth;
             
             int newHeight, newWidth;
             // Python: if im_ratio > 1: new_height = input_size; new_width = int(new_height / im_ratio)
@@ -386,7 +408,7 @@ namespace MuseTalk.Core
             }
             
             // Python: det_scale = float(new_height) / img.shape[0]
-            float detScale = (float)newHeight / img.height;
+            float detScale = (float)newHeight / pythonHeight;
             
             // Python: resized_img = cv2.resize(img, (new_width, new_height))
             var resizedImg = ResizeTexture(img, newWidth, newHeight);
@@ -480,27 +502,35 @@ namespace MuseTalk.Core
             
             // Python: bbox = face["bbox"]
             var bbox = face.BoundingBox;
+            Debug.Log($"[DEBUG_GET_LANDMARK] Face bbox: ({bbox.x:F3}, {bbox.y:F3}, {bbox.width:F3}, {bbox.height:F3})");
             
+            // Bbox is already in OpenCV coordinates (top-left origin), use directly
             // Python: w, h = (bbox[2] - bbox[0]), (bbox[3] - bbox[1])
             float w = bbox.width;
             float h = bbox.height;
             
             // Python: center = (bbox[2] + bbox[0]) / 2, (bbox[3] + bbox[1]) / 2
             Vector2 center = new Vector2(bbox.x + w * 0.5f, bbox.y + h * 0.5f);
+            Debug.Log($"[DEBUG_GET_LANDMARK] Center: ({center.x:F3}, {center.y:F3}), w={w:F3}, h={h:F3}");
             
             // Python: rotate = 0
             float rotate = 0f;
             
             // Python: _scale = input_size / (max(w, h) * 1.5)
             float scale = inputSize / (Mathf.Max(w, h) * 1.5f);
+            Debug.Log($"[DEBUG_GET_LANDMARK] Scale: {scale:F6}");
             
             // Python: aimg, M = face_align(img, center, input_size, _scale, rotate)
             var (alignedImg, transformMatrix) = FaceAlign(img, center, inputSize, scale, rotate);
+            Debug.Log($"[DEBUG_GET_LANDMARK] Aligned image shape: {alignedImg.width}x{alignedImg.height}");
+            Debug.Log($"[DEBUG_GET_LANDMARK] Transform matrix M:\n{transformMatrix}");
             
             // Python: aimg = aimg.transpose(2, 0, 1)  # HWC -> CHW
             // Python: aimg = np.expand_dims(aimg, axis=0)
             // Python: aimg = aimg.astype(np.float32)
             var inputTensor = PreprocessLandmarkImage(alignedImg);
+            var tensorData = inputTensor.ToArray();
+            Debug.Log($"[DEBUG_GET_LANDMARK] Preprocessed tensor shape: 1x3x{inputSize}x{inputSize}, range: [{tensorData.Min():F3}, {tensorData.Max():F3}]");
             
             // Python: output = landmark.run(None, {"data": aimg})
             var inputs = new List<NamedOnnxValue>
@@ -510,10 +540,12 @@ namespace MuseTalk.Core
             
             using var results = _landmark2d106.Run(inputs);
             var output = results.First().AsTensor<float>().ToArray();
+            Debug.Log($"[DEBUG_GET_LANDMARK] Raw ONNX output shape: {output.Length/2}x2, range: [{output.Min():F3}, {output.Max():F3}]");
             
             // Python: pred = output[0][0]
             // Python: pred = pred.reshape((-1, 2))
             var landmarks = new Vector2[output.Length / 2];
+            Debug.Log($"[DEBUG_GET_LANDMARK] Reshaped pred: {landmarks.Length}x2, first 3: [({output[0]:F3},{output[1]:F3}), ({output[2]:F3},{output[3]:F3}), ({output[4]:F3},{output[5]:F3})]");
             
             // Python: pred[:, 0:2] += 1
             // Python: pred[:, 0:2] *= input_size[0] // 2
@@ -525,11 +557,15 @@ namespace MuseTalk.Core
                 y *= inputSize / 2f;
                 landmarks[i] = new Vector2(x, y);
             }
+            Debug.Log($"[DEBUG_GET_LANDMARK] After scaling: first 3: [{landmarks[0]}, {landmarks[1]}, {landmarks[2]}]");
             
             // Python: IM = cv2.invertAffineTransform(M)
             // Python: pred = trans_points2d(pred, IM)
             var inverseMatrix = InvertAffineTransform(transformMatrix);
+            Debug.Log($"[DEBUG_GET_LANDMARK] Inverse transform matrix IM:\n{inverseMatrix}");
             landmarks = TransPoints2D(landmarks, inverseMatrix);
+            Debug.Log($"[DEBUG_GET_LANDMARK] Final landmarks: shape={landmarks.Length}x2, range=[{landmarks.Min(p => Mathf.Min(p.x, p.y)):F3}, {landmarks.Max(p => Mathf.Max(p.x, p.y)):F3}]");
+            Debug.Log($"[DEBUG_GET_LANDMARK] Final first 3 landmarks: [{landmarks[0]}, {landmarks[1]}, {landmarks[2]}]");
             
             UnityEngine.Object.DestroyImmediate(alignedImg);
             
@@ -2049,6 +2085,10 @@ namespace MuseTalk.Core
             foreach (int keepIdx in keep)
             {
                 var bbox = preDet[keepIdx];
+                
+                // Note: bbox coordinates are already in original image coordinates after detScale division
+                // Python bbox format: [x1, y1, x2, y2] in OpenCV coordinates (top-left origin)
+                // We need to store them as-is for now since GetLandmark will handle coordinate conversion
                 var face = new FaceDetectionResult
                 {
                     BoundingBox = new Rect(bbox[0], bbox[1], bbox[2] - bbox[0], bbox[3] - bbox[1]),
@@ -2057,7 +2097,7 @@ namespace MuseTalk.Core
                     Landmarks106 = new Vector2[106] // Will be filled later
                 };
                 
-                // Extract keypoints
+                // Store keypoints as-is (OpenCV coordinates)
                 for (int k = 0; k < 5; k++)
                 {
                     face.Keypoints5[k] = new Vector2(
