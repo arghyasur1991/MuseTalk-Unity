@@ -974,12 +974,26 @@ namespace MuseTalk.Core
             // Python: pred_info['lmk'] = lmk
             predInfo.Landmarks = lmk;
             
-            // CRITICAL: The calc_driving_ratio section is computed but NEVER USED in ONNX inference
-            // Python: lmk = lmk[None]
+            // Python: calc_driving_ratio - CRITICAL FIX: Now implementing the missing calculation
+            // Python: lmk = lmk[None]  # Add batch dimension
             // Python: c_d_eyes = np.concatenate([calculate_distance_ratio(lmk, 6, 18, 0, 12), calculate_distance_ratio(lmk, 30, 42, 24, 36)], axis=1)
             // Python: c_d_lip = calculate_distance_ratio(lmk, 90, 102, 48, 66)
-            // These are calculated but never used in the rest of the function!
+            // Python: c_d_eyes = c_d_eyes.astype(np.float32)
+            // Python: c_d_lip = c_d_lip.astype(np.float32)
             
+            var cDEyes1 = CalculateDistanceRatio(lmk, 6, 18, 0, 12);
+            var cDEyes2 = CalculateDistanceRatio(lmk, 30, 42, 24, 36);
+            // Python concatenates these along axis=1
+            var cDEyes = new float[cDEyes1.Length + cDEyes2.Length];
+            Array.Copy(cDEyes1, 0, cDEyes, 0, cDEyes1.Length);
+            Array.Copy(cDEyes2, 0, cDEyes, cDEyes1.Length, cDEyes2.Length);
+            
+            var cDLip = CalculateDistanceRatio(lmk, 90, 102, 48, 66);
+            
+            // Convert to float32 (already float in C#)
+            // Note: These values are computed but never used in ONNX inference, matching Python behavior exactly
+            
+            // Python: prepare_driving_videos
             // Python: img = cv2.resize(img, (256, 256))
             var img256 = ResizeTexture(img, 256, 256);
             
@@ -2537,7 +2551,6 @@ namespace MuseTalk.Core
                 // Clean up mask template if it was loaded during initialization
                 if (_maskTemplate != null)
                 {
-                    UnityEngine.Object.DestroyImmediate(_maskTemplate);
                     _maskTemplate = null;
                 }
                 
@@ -2812,6 +2825,30 @@ namespace MuseTalk.Core
             result.SetPixels32(resultPixels);
             result.Apply();
             return result;
+        }
+        
+        /// <summary>
+        /// Python: calculate_distance_ratio(lmk, idx1, idx2, idx3, idx4, eps=1e-6) - EXACT MATCH
+        /// Calculate the ratio between two distances
+        /// </summary>
+        private float[] CalculateDistanceRatio(Vector2[] lmk, int idx1, int idx2, int idx3, int idx4, float eps = 1e-6f)
+        {
+            // Python: d1 = np.linalg.norm(lmk[:, idx1] - lmk[:, idx2], axis=1, keepdims=True)
+            // Python: d2 = np.linalg.norm(lmk[:, idx3] - lmk[:, idx4], axis=1, keepdims=True)
+            // Python: ratio = d1 / (d2 + eps)
+            
+            Vector2 p1 = lmk[idx1];
+            Vector2 p2 = lmk[idx2];
+            Vector2 p3 = lmk[idx3];
+            Vector2 p4 = lmk[idx4];
+            
+            float d1 = Vector2.Distance(p1, p2);
+            float d2 = Vector2.Distance(p3, p4);
+            
+            float ratio = d1 / (d2 + eps);
+            
+            // Return as array to match Python's keepdims=True behavior
+            return new float[] { ratio };
         }
     }
 }
