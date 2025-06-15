@@ -517,7 +517,7 @@ namespace MuseTalk.Core
             // Python: IM = cv2.invertAffineTransform(M)
             // Python: pred = trans_points2d(pred, IM)
             var inverseMatrix = InvertAffineTransform(transformMatrix);
-            landmarks = TransformPoints2D(landmarks, inverseMatrix);
+            landmarks = TransPoints2D(landmarks, inverseMatrix);
             
             UnityEngine.Object.DestroyImmediate(alignedImg);
             
@@ -1338,6 +1338,126 @@ namespace MuseTalk.Core
         }
         
         /// <summary>
+        /// Python: distance2bbox() - EXACT MATCH
+        /// </summary>
+        private float[] Distance2Bbox(float[,] points, float[] distance)
+        {
+            int numPoints = points.GetLength(0);
+            var result = new float[numPoints * 4];
+            
+            for (int i = 0; i < numPoints; i++)
+            {
+                float x = points[i, 0];
+                float y = points[i, 1];
+                
+                // Python: x1 = points[:, 0] - distance[:, 0]
+                // Python: y1 = points[:, 1] - distance[:, 1]
+                // Python: x2 = points[:, 0] + distance[:, 2]
+                // Python: y2 = points[:, 1] + distance[:, 3]
+                result[i * 4 + 0] = x - distance[i * 4 + 0];  // x1
+                result[i * 4 + 1] = y - distance[i * 4 + 1];  // y1
+                result[i * 4 + 2] = x + distance[i * 4 + 2];  // x2
+                result[i * 4 + 3] = y + distance[i * 4 + 3];  // y2
+            }
+            
+            return result;
+        }
+        
+        /// <summary>
+        /// Python: distance2kps() - EXACT MATCH
+        /// </summary>
+        private float[] Distance2Kps(float[,] points, float[] distance)
+        {
+            int numPoints = points.GetLength(0);
+            var result = new float[numPoints * 10]; // 5 keypoints * 2 coords
+            
+            for (int i = 0; i < numPoints; i++)
+            {
+                float x = points[i, 0];
+                float y = points[i, 1];
+                
+                // Python: for i in range(0, distance.shape[1], 2):
+                //             px = points[:, i % 2] + distance[:, i]
+                //             py = points[:, i % 2 + 1] + distance[:, i + 1]
+                for (int kp = 0; kp < 5; kp++) // 5 keypoints
+                {
+                    int distIdx = kp * 2;
+                    result[i * 10 + kp * 2 + 0] = x + distance[i * 10 + distIdx + 0];     // px
+                    result[i * 10 + kp * 2 + 1] = y + distance[i * 10 + distIdx + 1];     // py
+                }
+            }
+            
+            return result;
+        }
+        
+        /// <summary>
+        /// Python: nms_boxes() - EXACT MATCH
+        /// </summary>
+        private List<int> NmsBoxes(List<float[]> boxes, float iouThreshold)
+        {
+            var keep = new List<int>();
+            
+            for (int i = 0; i < boxes.Count; i++)
+            {
+                bool isKeep = true;
+                
+                for (int j = 0; j < i; j++)
+                {
+                    if (!keep.Contains(j)) continue;
+                    
+                    float iou = BbIntersectionOverUnion(boxes[i], boxes[j]);
+                    if (iou >= iouThreshold)
+                    {
+                        if (boxes[i][4] > boxes[j][4]) // Compare scores (index 4)
+                        {
+                            keep.Remove(j);
+                        }
+                        else
+                        {
+                            isKeep = false;
+                            break;
+                        }
+                    }
+                }
+                
+                if (isKeep)
+                {
+                    keep.Add(i);
+                }
+            }
+            
+            return keep;
+        }
+        
+        /// <summary>
+        /// Python: bb_intersection_over_union() - EXACT MATCH
+        /// </summary>
+        private float BbIntersectionOverUnion(float[] boxA, float[] boxB)
+        {
+            // Python: xA = max(boxA[0], boxB[0])
+            // Python: yA = max(boxA[1], boxB[1])
+            // Python: xB = min(boxA[2], boxB[2])
+            // Python: yB = min(boxA[3], boxB[3])
+            float xA = Mathf.Max(boxA[0], boxB[0]);
+            float yA = Mathf.Max(boxA[1], boxB[1]);
+            float xB = Mathf.Min(boxA[2], boxB[2]);
+            float yB = Mathf.Min(boxA[3], boxB[3]);
+            
+            // Python: interArea = max(0, xB - xA + 1) * max(0, yB - yA + 1)
+            float interArea = Mathf.Max(0, xB - xA + 1) * Mathf.Max(0, yB - yA + 1);
+            
+            // Python: boxAArea = (boxA[2] - boxA[0] + 1) * (boxA[3] - boxA[1] + 1)
+            // Python: boxBArea = (boxB[2] - boxB[0] + 1) * (boxB[3] - boxB[1] + 1)
+            float boxAArea = (boxA[2] - boxA[0] + 1) * (boxA[3] - boxA[1] + 1);
+            float boxBArea = (boxB[2] - boxB[0] + 1) * (boxB[3] - boxB[1] + 1);
+            
+            // Python: iou = interArea / float(boxAArea + boxBArea - interArea)
+            float iou = interArea / (boxAArea + boxBArea - interArea);
+            
+            return iou;
+        }
+        
+        /// <summary>
         /// Invert 3x3 matrix - EXACT MATCH with numpy.linalg.inv
         /// </summary>
         private float[,] InvertMatrix3x3(float[,] matrix)
@@ -1535,18 +1655,228 @@ namespace MuseTalk.Core
         
         private List<FaceDetectionResult> ProcessDetectionResults(NamedOnnxValue[] outputs, float detScale)
         {
-            // TEMPORARY: Return a dummy face for now to avoid compilation errors
-            // This needs full Python detection post-processing implementation
-            var faces = new List<FaceDetectionResult>
+            // Python: process detection results exactly as in face_analysis function
+            var scoresList = new List<float[]>();
+            var bboxesList = new List<float[]>();
+            var kpssList = new List<float[]>();
+            
+            const float detThresh = 0.5f;  // Python: det_thresh = 0.5
+            const int fmc = 3;  // Python: fmc = 3
+            int[] featStrideFpn = { 8, 16, 32 };  // Python: feat_stride_fpn = [8, 16, 32]
+            const int inputSize = 512;
+            var centerCache = new Dictionary<string, float[,]>();
+            
+            // Python: for idx, stride in enumerate(feat_stride_fpn):
+            for (int idx = 0; idx < featStrideFpn.Length; idx++)
             {
-                new FaceDetectionResult
+                int stride = featStrideFpn[idx];
+                
+                // Python: scores = output[idx]
+                var scores = outputs[idx].AsTensor<float>().ToArray();
+                
+                // Python: bbox_preds = output[idx + fmc]
+                var bboxPreds = outputs[idx + fmc].AsTensor<float>().ToArray();
+                
+                // Python: bbox_preds = bbox_preds * stride
+                for (int i = 0; i < bboxPreds.Length; i++)
                 {
-                    BoundingBox = new Rect(100, 100, 200, 200),
-                    DetectionScore = 0.9f,
-                    Keypoints5 = new Vector2[5],
-                    Landmarks106 = new Vector2[106]
+                    bboxPreds[i] *= stride;
                 }
-            };
+                
+                // Python: kps_preds = output[idx + fmc * 2] * stride
+                var kpsPreds = outputs[idx + fmc * 2].AsTensor<float>().ToArray();
+                for (int i = 0; i < kpsPreds.Length; i++)
+                {
+                    kpsPreds[i] *= stride;
+                }
+                
+                // Python: height = input_size // stride
+                // Python: width = input_size // stride
+                int height = inputSize / stride;
+                int width = inputSize / stride;
+                
+                // Python: anchor_centers generation
+                string key = $"{height}_{width}_{stride}";
+                float[,] anchorCenters;
+                
+                if (centerCache.ContainsKey(key))
+                {
+                    anchorCenters = centerCache[key];
+                }
+                else
+                {
+                    // Python: anchor_centers = np.stack(np.mgrid[:height, :width][::-1], axis=-1).astype(np.float32)
+                    var centers = new List<Vector2>();
+                    for (int h = 0; h < height; h++)
+                    {
+                        for (int w = 0; w < width; w++)
+                        {
+                            centers.Add(new Vector2(w, h));  // [::-1] means reverse order
+                        }
+                    }
+                    
+                    // Python: anchor_centers = (anchor_centers * stride).reshape((-1, 2))
+                    // Python: anchor_centers = np.stack([anchor_centers] * num_anchors, axis=1).reshape((-1, 2))
+                    const int numAnchors = 2;
+                    anchorCenters = new float[centers.Count * numAnchors, 2];
+                    
+                    for (int i = 0; i < centers.Count; i++)
+                    {
+                        for (int a = 0; a < numAnchors; a++)
+                        {
+                            int idx2 = i * numAnchors + a;
+                            anchorCenters[idx2, 0] = centers[i].x * stride;
+                            anchorCenters[idx2, 1] = centers[i].y * stride;
+                        }
+                    }
+                    
+                    if (centerCache.Count < 100)
+                    {
+                        centerCache[key] = anchorCenters;
+                    }
+                }
+                
+                // Python: pos_inds = np.where(scores >= det_thresh)[0]
+                var posInds = new List<int>();
+                for (int i = 0; i < scores.Length; i++)
+                {
+                    if (scores[i] >= detThresh)
+                    {
+                        posInds.Add(i);
+                    }
+                }
+                
+                if (posInds.Count > 0)
+                {
+                    // Python: bboxes = distance2bbox(anchor_centers, bbox_preds)
+                    var bboxes = Distance2Bbox(anchorCenters, bboxPreds);
+                    
+                    // Python: pos_scores = scores[pos_inds]
+                    var posScores = new float[posInds.Count];
+                    for (int i = 0; i < posInds.Count; i++)
+                    {
+                        posScores[i] = scores[posInds[i]];
+                    }
+                    
+                    // Python: pos_bboxes = bboxes[pos_inds]
+                    var posBboxes = new float[posInds.Count * 4];
+                    for (int i = 0; i < posInds.Count; i++)
+                    {
+                        int srcIdx = posInds[i];
+                        posBboxes[i * 4 + 0] = bboxes[srcIdx * 4 + 0];
+                        posBboxes[i * 4 + 1] = bboxes[srcIdx * 4 + 1];
+                        posBboxes[i * 4 + 2] = bboxes[srcIdx * 4 + 2];
+                        posBboxes[i * 4 + 3] = bboxes[srcIdx * 4 + 3];
+                    }
+                    
+                    scoresList.Add(posScores);
+                    bboxesList.Add(posBboxes);
+                    
+                    // Python: kpss = distance2kps(anchor_centers, kps_preds)
+                    var kpss = Distance2Kps(anchorCenters, kpsPreds);
+                    
+                    // Python: pos_kpss = kpss[pos_inds]
+                    var posKpss = new float[posInds.Count * 10]; // 5 keypoints * 2 coords
+                    for (int i = 0; i < posInds.Count; i++)
+                    {
+                        int srcIdx = posInds[i];
+                        for (int k = 0; k < 10; k++)
+                        {
+                            posKpss[i * 10 + k] = kpss[srcIdx * 10 + k];
+                        }
+                    }
+                    
+                    kpssList.Add(posKpss);
+                }
+            }
+            
+            if (scoresList.Count == 0)
+            {
+                return new List<FaceDetectionResult>();
+            }
+            
+            // Python: scores = np.vstack(scores_list)
+            var allScores = new List<float>();
+            var allBboxes = new List<float>();
+            var allKpss = new List<float>();
+            
+            foreach (var scores in scoresList)
+            {
+                allScores.AddRange(scores);
+            }
+            
+            foreach (var bboxes in bboxesList)
+            {
+                allBboxes.AddRange(bboxes);
+            }
+            
+            foreach (var kpss in kpssList)
+            {
+                allKpss.AddRange(kpss);
+            }
+            
+            // Python: scores_ravel = scores.ravel()
+            // Python: order = scores_ravel.argsort()[::-1]
+            var scoreIndices = new List<(float score, int index)>();
+            for (int i = 0; i < allScores.Count; i++)
+            {
+                scoreIndices.Add((allScores[i], i));
+            }
+            scoreIndices.Sort((a, b) => b.score.CompareTo(a.score)); // Descending order
+            
+            // Scale bboxes by detScale
+            for (int i = 0; i < allBboxes.Count; i++)
+            {
+                allBboxes[i] /= detScale;
+            }
+            
+            for (int i = 0; i < allKpss.Count; i++)
+            {
+                allKpss[i] /= detScale;
+            }
+            
+            // Python: pre_det = np.hstack((bboxes, scores)).astype(np.float32, copy=False)
+            var preDet = new List<float[]>();
+            for (int i = 0; i < allScores.Count; i++)
+            {
+                var det = new float[5];
+                det[0] = allBboxes[i * 4 + 0];
+                det[1] = allBboxes[i * 4 + 1];
+                det[2] = allBboxes[i * 4 + 2];
+                det[3] = allBboxes[i * 4 + 3];
+                det[4] = allScores[i];
+                preDet.Add(det);
+            }
+            
+            // Python: keep = nms_boxes(pre_det, [1 for s in pre_det], nms_thresh)
+            const float nmsThresh = 0.4f;
+            var keep = NmsBoxes(preDet, nmsThresh);
+            
+            // Build final face detection results
+            var faces = new List<FaceDetectionResult>();
+            
+            foreach (int keepIdx in keep)
+            {
+                var bbox = preDet[keepIdx];
+                var face = new FaceDetectionResult
+                {
+                    BoundingBox = new Rect(bbox[0], bbox[1], bbox[2] - bbox[0], bbox[3] - bbox[1]),
+                    DetectionScore = bbox[4],
+                    Keypoints5 = new Vector2[5],
+                    Landmarks106 = new Vector2[106] // Will be filled later
+                };
+                
+                // Extract keypoints
+                for (int k = 0; k < 5; k++)
+                {
+                    face.Keypoints5[k] = new Vector2(
+                        allKpss[keepIdx * 10 + k * 2],
+                        allKpss[keepIdx * 10 + k * 2 + 1]
+                    );
+                }
+                
+                faces.Add(face);
+            }
             
             return faces;
         }
@@ -1616,6 +1946,37 @@ namespace MuseTalk.Core
             return matrix.inverse;
         }
         
+        /// <summary>
+        /// Python: cv2.invertAffineTransform(M) - EXACT MATCH
+        /// Invert a 2x3 affine transformation matrix
+        /// </summary>
+        private float[,] InvertAffineTransform(float[,] M)
+        {
+            // For 2x3 matrix [[a, b, c], [d, e, f]], the inverse is:
+            // det = a*e - b*d
+            // inv = [[e/det, -b/det, (b*f-c*e)/det], [-d/det, a/det, (c*d-a*f)/det]]
+            
+            float a = M[0, 0], b = M[0, 1], c = M[0, 2];
+            float d = M[1, 0], e = M[1, 1], f = M[1, 2];
+            
+            float det = a * e - b * d;
+            
+            if (Mathf.Abs(det) < 1e-6f)
+            {
+                throw new InvalidOperationException("Affine matrix is singular and cannot be inverted");
+            }
+            
+            float[,] inv = new float[2, 3];
+            inv[0, 0] = e / det;
+            inv[0, 1] = -b / det;
+            inv[0, 2] = (b * f - c * e) / det;
+            inv[1, 0] = -d / det;
+            inv[1, 1] = a / det;
+            inv[1, 2] = (c * d - a * f) / det;
+            
+            return inv;
+        }
+        
         private Vector2[] TransformPoints2D(Vector2[] points, Matrix4x4 transform)
         {
             var result = new Vector2[points.Length];
@@ -1662,6 +2023,48 @@ namespace MuseTalk.Core
                 var transformed = transform.MultiplyPoint3x4(new Vector3(landmarks[i].x, landmarks[i].y, 0));
                 result[i] = new Vector2(transformed.x, transformed.y);
             }
+            return result;
+        }
+        
+        /// <summary>
+        /// Python: trans_points2d() - EXACT MATCH
+        /// </summary>
+        private Vector2[] TransPoints2D(Vector2[] pts, Matrix4x4 M)
+        {
+            var result = new Vector2[pts.Length];
+            
+            for (int i = 0; i < pts.Length; i++)
+            {
+                Vector2 pt = pts[i];
+                // Python: new_pt = np.array([pt[0], pt[1], 1.0], dtype=np.float32)
+                // Python: new_pt = np.dot(M, new_pt)
+                // Python: new_pts[i] = new_pt[0:2]
+                Vector3 newPt = new Vector3(pt.x, pt.y, 1.0f);
+                Vector3 transformed = M.MultiplyPoint3x4(newPt);
+                result[i] = new Vector2(transformed.x, transformed.y);
+            }
+            
+            return result;
+        }
+        
+        /// <summary>
+        /// Python: trans_points2d() with 2x3 matrix - EXACT MATCH
+        /// </summary>
+        private Vector2[] TransPoints2D(Vector2[] pts, float[,] M)
+        {
+            var result = new Vector2[pts.Length];
+            
+            for (int i = 0; i < pts.Length; i++)
+            {
+                Vector2 pt = pts[i];
+                // Python: new_pt = np.array([pt[0], pt[1], 1.0], dtype=np.float32)
+                // Python: new_pt = np.dot(M, new_pt)
+                result[i] = new Vector2(
+                    M[0, 0] * pt.x + M[0, 1] * pt.y + M[0, 2],
+                    M[1, 0] * pt.x + M[1, 1] * pt.y + M[1, 2]
+                );
+            }
+            
             return result;
         }
         
