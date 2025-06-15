@@ -1328,29 +1328,46 @@ namespace MuseTalk.Core
         /// </summary>
         private float[,] GetRotationMatrix(float[] pitch, float[] yaw, float[] roll)
         {
+            // Python: pitch, yaw, roll are Bx1 arrays. Here they are float[] of length 1.
             float p = pitch[0] * Mathf.Deg2Rad;
             float y = yaw[0] * Mathf.Deg2Rad;
             float r = roll[0] * Mathf.Deg2Rad;
             
-            float cosp = Mathf.Cos(p);
-            float sinp = Mathf.Sin(p);
-            float cosy = Mathf.Cos(y);
-            float siny = Mathf.Sin(y);
-            float cosr = Mathf.Cos(r);
-            float sinr = Mathf.Sin(r);
+            // Python: x, y, z = pitch, yaw, roll
+            float cos_p = Mathf.Cos(p);
+            float sin_p = Mathf.Sin(p);
+            float cos_y = Mathf.Cos(y);
+            float sin_y = Mathf.Sin(y);
+            float cos_r = Mathf.Cos(r);
+            float sin_r = Mathf.Sin(r);
             
-            var rotMatrix = new float[3, 3];
-            rotMatrix[0, 0] = cosy * cosr;
-            rotMatrix[0, 1] = -cosy * sinr;
-            rotMatrix[0, 2] = siny;
-            rotMatrix[1, 0] = sinp * siny * cosr + cosp * sinr;
-            rotMatrix[1, 1] = -sinp * siny * sinr + cosp * cosr;
-            rotMatrix[1, 2] = -sinp * cosy;
-            rotMatrix[2, 0] = -cosp * siny * cosr + sinp * sinr;
-            rotMatrix[2, 1] = cosp * siny * sinr + sinp * cosr;
-            rotMatrix[2, 2] = cosp * cosy;
+            // Python: rot_x
+            var rotX = new float[3, 3] {
+                { 1, 0, 0 },
+                { 0, cos_p, -sin_p },
+                { 0, sin_p, cos_p }
+            };
             
-            return rotMatrix;
+            // Python: rot_y
+            var rotY = new float[3, 3] {
+                { cos_y, 0, sin_y },
+                { 0, 1, 0 },
+                { -sin_y, 0, cos_y }
+            };
+
+            // Python: rot_z
+            var rotZ = new float[3, 3] {
+                { cos_r, -sin_r, 0 },
+                { sin_r, cos_r, 0 },
+                { 0, 0, 1 }
+            };
+            
+            // Python: rot = rot_z @ rot_y @ rot_x
+            var rotZY = MatrixMultiply(rotZ, rotY);
+            var rot = MatrixMultiply(rotZY, rotX);
+            
+            // Python: return rot.transpose(0, 2, 1)
+            return TransposeMatrix(rot);
         }
         
         /// <summary>
