@@ -589,7 +589,9 @@ namespace MuseTalk.Core
                 {
                     for (int w = 0; w < width; w++)
                     {
-                        int unityIdx = (height - 1 - h) * width + w; // Unity bottom-to-top
+                        // CRITICAL: Unity GetPixels() is bottom-left origin, flip Y for ONNX (top-left)
+                        int unityY = height - 1 - h; // Flip Y coordinate for ONNX coordinate system
+                        int unityIdx = unityY * width + w;
                         int outputIdx = c * height * width + h * width + w;
                         
                         float value = c == 0 ? pixels[unityIdx].r : c == 1 ? pixels[unityIdx].g : pixels[unityIdx].b;
@@ -903,12 +905,28 @@ namespace MuseTalk.Core
         
         private CropInfo CropImage(Texture2D img, Vector2[] lmk, int dsize, float scale, float vyRatio)
         {
-            // Simplified crop implementation - needs full Python crop_image implementation
+            // Python: crop_image(img, pts: np.ndarray, dsize=224, scale=1.5, vy_ratio=-0.1) - EXACT MATCH
+            var (MInv, M) = EstimateSimilarTransformFromPts(lmk, dsize, scale, 0f, vyRatio, true);
+            
+            var imgCrop = TransformImg(img, MInv, dsize);
+            var ptCrop = TransformPts(lmk, MInv);
+            
+            // Python: M_o2c = np.vstack([M_INV, np.array([0, 0, 1], dtype=np.float32)])
+            var Mo2c = Matrix4x4.identity;
+            Mo2c.m00 = MInv[0, 0]; Mo2c.m01 = MInv[0, 1]; Mo2c.m03 = MInv[0, 2];
+            Mo2c.m10 = MInv[1, 0]; Mo2c.m11 = MInv[1, 1]; Mo2c.m13 = MInv[1, 2];
+            Mo2c.m20 = 0f; Mo2c.m21 = 0f; Mo2c.m22 = 1f; Mo2c.m23 = 0f;
+            Mo2c.m30 = 0f; Mo2c.m31 = 0f; Mo2c.m32 = 0f; Mo2c.m33 = 1f;
+            
+            // Python: M_c2o = np.linalg.inv(M_o2c)
+            var Mc2o = Mo2c.inverse;
+            
             var cropInfo = new CropInfo
             {
-                ImageCrop = ResizeTexture(img, dsize, dsize),
-                Transform = Matrix4x4.identity,
-                LandmarksCrop = lmk
+                ImageCrop = imgCrop,
+                Transform = Mc2o,
+                InverseTransform = Mo2c,
+                LandmarksCrop = ptCrop
             };
             
             return cropInfo;
@@ -984,6 +1002,215 @@ namespace MuseTalk.Core
         }
         
         /// <summary>
+        /// Python: parse_pt2_from_pt106() - EXACT MATCH
+        /// Parsing the 2 points according to the 106 points
+        /// </summary>
+        private Vector2[] ParsePt2FromPt106(Vector2[] pt106, bool useLip)
+        {
+            // Python: pt_left_eye = np.mean(pt106[[33, 35, 40, 39]], axis=0)
+            Vector2 ptLeftEye = (pt106[33] + pt106[35] + pt106[40] + pt106[39]) / 4f;
+            
+            // Python: pt_right_eye = np.mean(pt106[[87, 89, 94, 93]], axis=0)
+            Vector2 ptRightEye = (pt106[87] + pt106[89] + pt106[94] + pt106[93]) / 4f;
+            
+            Vector2[] pt2;
+            
+            if (useLip)
+            {
+                // Python: pt_center_eye = (pt_left_eye + pt_right_eye) / 2
+                Vector2 ptCenterEye = (ptLeftEye + ptRightEye) / 2f;
+                
+                // Python: pt_center_lip = (pt106[52] + pt106[61]) / 2
+                Vector2 ptCenterLip = (pt106[52] + pt106[61]) / 2f;
+                
+                // Python: pt2 = np.stack([pt_center_eye, pt_center_lip], axis=0)
+                pt2 = new Vector2[] { ptCenterEye, ptCenterLip };
+            }
+            else
+            {
+                // Python: pt2 = np.stack([pt_left_eye, pt_right_eye], axis=0)
+                pt2 = new Vector2[] { ptLeftEye, ptRightEye };
+            }
+            
+            return pt2;
+        }
+        
+        /// <summary>
+        /// Python: parse_pt2_from_pt_x() - EXACT MATCH
+        /// </summary>
+        private Vector2[] ParsePt2FromPtX(Vector2[] pts, bool useLip)
+        {
+            var pt2 = ParsePt2FromPt106(pts, useLip);
+            
+            if (!useLip)
+            {
+                // Python: v = pt2[1] - pt2[0]
+                // Python: pt2[1, 0] = pt2[0, 0] - v[1]
+                // Python: pt2[1, 1] = pt2[0, 1] + v[0]
+                Vector2 v = pt2[1] - pt2[0];
+                pt2[1] = new Vector2(pt2[0].x - v.y, pt2[0].y + v.x);
+            }
+            
+            return pt2;
+        }
+        
+        /// <summary>
+        /// Python: parse_rect_from_landmark() - EXACT MATCH
+        /// Parsing center, size, angle from landmarks
+        /// </summary>
+        private (Vector2, Vector2, float) ParseRectFromLandmark(Vector2[] pts, float scale, bool needSquare, float vxRatio, float vyRatio, bool useDegFlag)
+        {
+            var pt2 = ParsePt2FromPtX(pts, true);  // use_lip=True
+            
+            // Python: uy = pt2[1] - pt2[0]
+            Vector2 uy = pt2[1] - pt2[0];
+            float l = uy.magnitude;
+            
+            // Python: if l <= 1e-3: uy = np.array([0, 1], dtype=np.float32)
+            if (l <= 1e-3f)
+            {
+                uy = new Vector2(0f, 1f);
+            }
+            else
+            {
+                uy /= l;  // Python: uy /= l
+            }
+            
+            // Python: ux = np.array((uy[1], -uy[0]), dtype=np.float32)
+            Vector2 ux = new Vector2(uy.y, -uy.x);
+            
+            // Python: angle = acos(ux[0])
+            // Python: if ux[1] < 0: angle = -angle
+            float angle = Mathf.Acos(Mathf.Clamp(ux.x, -1f, 1f));
+            if (ux.y < 0)
+            {
+                angle = -angle;
+            }
+            
+            // Python: M = np.array([ux, uy])
+            float[,] M = new float[,] { { ux.x, ux.y }, { uy.x, uy.y } };
+            
+            // Python: center0 = np.mean(pts, axis=0)
+            Vector2 center0 = Vector2.zero;
+            for (int i = 0; i < pts.Length; i++)
+            {
+                center0 += pts[i];
+            }
+            center0 /= pts.Length;
+            
+            // Python: rpts = (pts - center0) @ M.T
+            Vector2[] rpts = new Vector2[pts.Length];
+            for (int i = 0; i < pts.Length; i++)
+            {
+                Vector2 centered = pts[i] - center0;
+                rpts[i] = new Vector2(
+                    centered.x * M[0, 0] + centered.y * M[1, 0],  // @ M.T means transpose
+                    centered.x * M[0, 1] + centered.y * M[1, 1]
+                );
+            }
+            
+            // Python: lt_pt = np.min(rpts, axis=0)
+            // Python: rb_pt = np.max(rpts, axis=0)
+            Vector2 ltPt = new Vector2(float.MaxValue, float.MaxValue);
+            Vector2 rbPt = new Vector2(float.MinValue, float.MinValue);
+            
+            for (int i = 0; i < rpts.Length; i++)
+            {
+                if (rpts[i].x < ltPt.x) ltPt.x = rpts[i].x;
+                if (rpts[i].y < ltPt.y) ltPt.y = rpts[i].y;
+                if (rpts[i].x > rbPt.x) rbPt.x = rpts[i].x;
+                if (rpts[i].y > rbPt.y) rbPt.y = rpts[i].y;
+            }
+            
+            // Python: center1 = (lt_pt + rb_pt) / 2
+            Vector2 center1 = (ltPt + rbPt) / 2f;
+            
+            // Python: size = rb_pt - lt_pt
+            Vector2 size = rbPt - ltPt;
+            
+            // Python: if need_square: m = max(size[0], size[1]); size[0] = m; size[1] = m
+            if (needSquare)
+            {
+                float m = Mathf.Max(size.x, size.y);
+                size.x = m;
+                size.y = m;
+            }
+            
+            // Python: size *= scale
+            size *= scale;
+            
+            // Python: center = center0 + ux * center1[0] + uy * center1[1]
+            Vector2 center = center0 + ux * center1.x + uy * center1.y;
+            
+            // Python: center = center + ux * (vx_ratio * size) + uy * (vy_ratio * size)
+            center = center + ux * (vxRatio * size.x) + uy * (vyRatio * size.y);
+            
+            // Python: if use_deg_flag: angle = degrees(angle)
+            if (useDegFlag)
+            {
+                angle = angle * Mathf.Rad2Deg;
+            }
+            
+            return (center, size, angle);
+        }
+        
+        /// <summary>
+        /// Python: _estimate_similar_transform_from_pts() - EXACT MATCH
+        /// Calculate the affine matrix of the cropped image from sparse points
+        /// </summary>
+        private (float[,], float[,]) EstimateSimilarTransformFromPts(Vector2[] pts, int dsize, float scale, float vxRatio, float vyRatio, bool flagDoRot)
+        {
+            var (center, size, angle) = ParseRectFromLandmark(pts, scale, true, vxRatio, vyRatio, false);
+            
+            float s = dsize / size.x;  // Python: s = dsize / size[0]
+            Vector2 tgtCenter = new Vector2(dsize / 2f, dsize / 2f);  // Python: tgt_center = np.array([dsize / 2, dsize / 2])
+            
+            float[,] MInv;
+            
+            if (flagDoRot)
+            {
+                // Python: costheta, sintheta = cos(angle), sin(angle)
+                float costheta = Mathf.Cos(angle);
+                float sintheta = Mathf.Sin(angle);
+                float cx = center.x, cy = center.y;  // Python: cx, cy = center[0], center[1]
+                float tcx = tgtCenter.x, tcy = tgtCenter.y;  // Python: tcx, tcy = tgt_center[0], tgt_center[1]
+                
+                // Python: M_INV = np.array([[s * costheta, s * sintheta, tcx - s * (costheta * cx + sintheta * cy)],
+                //                          [-s * sintheta, s * costheta, tcy - s * (-sintheta * cx + costheta * cy)]])
+                MInv = new float[,] {
+                    { s * costheta, s * sintheta, tcx - s * (costheta * cx + sintheta * cy) },
+                    { -s * sintheta, s * costheta, tcy - s * (-sintheta * cx + costheta * cy) }
+                };
+            }
+            else
+            {
+                // Python: M_INV = np.array([[s, 0, tgt_center[0] - s * center[0]],
+                //                          [0, s, tgt_center[1] - s * center[1]]])
+                MInv = new float[,] {
+                    { s, 0, tgtCenter.x - s * center.x },
+                    { 0, s, tgtCenter.y - s * center.y }
+                };
+            }
+            
+            // Python: M_INV_H = np.vstack([M_INV, np.array([0, 0, 1])])
+            // Python: M = np.linalg.inv(M_INV_H)
+            var MInvH = new float[3, 3] {
+                { MInv[0, 0], MInv[0, 1], MInv[0, 2] },
+                { MInv[1, 0], MInv[1, 1], MInv[1, 2] },
+                { 0f, 0f, 1f }
+            };
+            
+            var M = InvertMatrix3x3(MInvH);
+            var M2x3 = new float[,] {
+                { M[0, 0], M[0, 1], M[0, 2] },
+                { M[1, 0], M[1, 1], M[1, 2] }
+            };
+            
+            // Python: return M_INV, M[:2, ...]
+            return (MInv, M2x3);
+        }
+        
+        /// <summary>
         /// Matrix operations matching Python numpy - EXACT MATCH
         /// </summary>
         private float[,] MatrixMultiply(float[,] a, float[,] b)
@@ -1019,6 +1246,127 @@ namespace MuseTalk.Core
                     result[j, i] = matrix[i, j];
                 }
             }
+            return result;
+        }
+        
+        /// <summary>
+        /// Python: _transform_img() - EXACT MATCH
+        /// Conduct similarity or affine transformation to the image
+        /// </summary>
+        private Texture2D TransformImg(Texture2D img, float[,] M, int dsize)
+        {
+            // Create result texture
+            var result = new Texture2D(dsize, dsize, TextureFormat.RGB24, false);
+            var resultPixels = new Color32[dsize * dsize];
+            
+            // Get source pixels
+            var srcPixels = img.GetPixels32();
+            int srcWidth = img.width;
+            int srcHeight = img.height;
+            
+            // Transform each pixel using inverse mapping
+            for (int y = 0; y < dsize; y++)
+            {
+                for (int x = 0; x < dsize; x++)
+                {
+                    // Apply inverse transformation to find source coordinates
+                    float srcX = M[0, 0] * x + M[0, 1] * y + M[0, 2];
+                    float srcY = M[1, 0] * x + M[1, 1] * y + M[1, 2];
+                    
+                    // Bilinear interpolation
+                    int x0 = Mathf.FloorToInt(srcX);
+                    int y0 = Mathf.FloorToInt(srcY);
+                    int x1 = x0 + 1;
+                    int y1 = y0 + 1;
+                    
+                    float fx = srcX - x0;
+                    float fy = srcY - y0;
+                    
+                    Color32 color = new Color32(0, 0, 0, 255); // Default black
+                    
+                    // Check bounds and interpolate
+                    if (x0 >= 0 && x1 < srcWidth && y0 >= 0 && y1 < srcHeight)
+                    {
+                        // Unity texture coordinates: bottom-left origin, but we need top-left for OpenCV compatibility
+                        int srcY0Flipped = srcHeight - 1 - y0;
+                        int srcY1Flipped = srcHeight - 1 - y1;
+                        
+                        var c00 = srcPixels[srcY0Flipped * srcWidth + x0];
+                        var c10 = srcPixels[srcY0Flipped * srcWidth + x1];
+                        var c01 = srcPixels[srcY1Flipped * srcWidth + x0];
+                        var c11 = srcPixels[srcY1Flipped * srcWidth + x1];
+                        
+                        // Bilinear interpolation
+                        float r = (1 - fx) * (1 - fy) * c00.r + fx * (1 - fy) * c10.r + (1 - fx) * fy * c01.r + fx * fy * c11.r;
+                        float g = (1 - fx) * (1 - fy) * c00.g + fx * (1 - fy) * c10.g + (1 - fx) * fy * c01.g + fx * fy * c11.g;
+                        float b = (1 - fx) * (1 - fy) * c00.b + fx * (1 - fy) * c10.b + (1 - fx) * fy * c01.b + fx * fy * c11.b;
+                        
+                        color = new Color32((byte)r, (byte)g, (byte)b, 255);
+                    }
+                    
+                    // Unity SetPixels32 expects bottom-left origin, so flip y
+                    int resultY = dsize - 1 - y;
+                    resultPixels[resultY * dsize + x] = color;
+                }
+            }
+            
+            result.SetPixels32(resultPixels);
+            result.Apply();
+            return result;
+        }
+        
+        /// <summary>
+        /// Python: _transform_pts() - EXACT MATCH
+        /// Conduct similarity or affine transformation to the pts
+        /// </summary>
+        private Vector2[] TransformPts(Vector2[] pts, float[,] M)
+        {
+            // Python: return pts @ M[:2, :2].T + M[:2, 2]
+            var result = new Vector2[pts.Length];
+            
+            for (int i = 0; i < pts.Length; i++)
+            {
+                result[i] = new Vector2(
+                    pts[i].x * M[0, 0] + pts[i].y * M[0, 1] + M[0, 2],
+                    pts[i].x * M[1, 0] + pts[i].y * M[1, 1] + M[1, 2]
+                );
+            }
+            
+            return result;
+        }
+        
+        /// <summary>
+        /// Invert 3x3 matrix - EXACT MATCH with numpy.linalg.inv
+        /// </summary>
+        private float[,] InvertMatrix3x3(float[,] matrix)
+        {
+            float[,] result = new float[3, 3];
+            
+            // Calculate determinant
+            float det = matrix[0, 0] * (matrix[1, 1] * matrix[2, 2] - matrix[1, 2] * matrix[2, 1])
+                      - matrix[0, 1] * (matrix[1, 0] * matrix[2, 2] - matrix[1, 2] * matrix[2, 0])
+                      + matrix[0, 2] * (matrix[1, 0] * matrix[2, 1] - matrix[1, 1] * matrix[2, 0]);
+            
+            if (Mathf.Abs(det) < 1e-6f)
+            {
+                throw new InvalidOperationException("Matrix is singular and cannot be inverted");
+            }
+            
+            float invDet = 1.0f / det;
+            
+            // Calculate adjugate matrix and multiply by 1/det
+            result[0, 0] = (matrix[1, 1] * matrix[2, 2] - matrix[1, 2] * matrix[2, 1]) * invDet;
+            result[0, 1] = (matrix[0, 2] * matrix[2, 1] - matrix[0, 1] * matrix[2, 2]) * invDet;
+            result[0, 2] = (matrix[0, 1] * matrix[1, 2] - matrix[0, 2] * matrix[1, 1]) * invDet;
+            
+            result[1, 0] = (matrix[1, 2] * matrix[2, 0] - matrix[1, 0] * matrix[2, 2]) * invDet;
+            result[1, 1] = (matrix[0, 0] * matrix[2, 2] - matrix[0, 2] * matrix[2, 0]) * invDet;
+            result[1, 2] = (matrix[0, 2] * matrix[1, 0] - matrix[0, 0] * matrix[1, 2]) * invDet;
+            
+            result[2, 0] = (matrix[1, 0] * matrix[2, 1] - matrix[1, 1] * matrix[2, 0]) * invDet;
+            result[2, 1] = (matrix[0, 1] * matrix[2, 0] - matrix[0, 0] * matrix[2, 1]) * invDet;
+            result[2, 2] = (matrix[0, 0] * matrix[1, 1] - matrix[0, 1] * matrix[1, 0]) * invDet;
+            
             return result;
         }
         
@@ -1133,7 +1481,9 @@ namespace MuseTalk.Core
             {
                 for (int w = 0; w < size; w++)
                 {
-                    int pixelIdx = (size - 1 - h) * size + w; // Unity bottom-to-top
+                    // CRITICAL: ONNX output is top-left origin, flip Y for Unity SetPixels (bottom-left)
+                    int unityY = size - 1 - h; // Flip Y coordinate for Unity coordinate system
+                    int pixelIdx = unityY * size + w;
                     
                     // CHW indexing
                     int rIdx = 0 * size * size + h * size + w;
@@ -1167,9 +1517,12 @@ namespace MuseTalk.Core
                 {
                     for (int w = 0; w < 512; w++)
                     {
-                        float pixelValue = c == 0 ? pixels[h * 512 + w].r : 
-                                          c == 1 ? pixels[h * 512 + w].g : 
-                                                   pixels[h * 512 + w].b;
+                        // CRITICAL: Unity GetPixels() is bottom-left origin, flip Y for ONNX (top-left)
+                        int unityY = 512 - 1 - h; // Flip Y coordinate for ONNX coordinate system
+                        int pixelIdx = unityY * 512 + w;
+                        float pixelValue = c == 0 ? pixels[pixelIdx].r : 
+                                          c == 1 ? pixels[pixelIdx].g : 
+                                                   pixels[pixelIdx].b;
                         tensorData[idx++] = (pixelValue * 255f - 127.5f) / 128f;
                     }
                 }
@@ -1216,9 +1569,12 @@ namespace MuseTalk.Core
                 {
                     for (int w = 0; w < 192; w++)
                     {
-                        float pixelValue = c == 0 ? pixels[h * 192 + w].r : 
-                                          c == 1 ? pixels[h * 192 + w].g : 
-                                                   pixels[h * 192 + w].b;
+                        // CRITICAL: Unity GetPixels() is bottom-left origin, flip Y for ONNX (top-left)
+                        int unityY = 192 - 1 - h; // Flip Y coordinate for ONNX coordinate system
+                        int pixelIdx = unityY * 192 + w;
+                        float pixelValue = c == 0 ? pixels[pixelIdx].r : 
+                                          c == 1 ? pixels[pixelIdx].g : 
+                                                   pixels[pixelIdx].b;
                         tensorData[idx++] = pixelValue;
                     }
                 }
@@ -1256,9 +1612,12 @@ namespace MuseTalk.Core
                 {
                     for (int w = 0; w < 224; w++)
                     {
-                        float pixelValue = c == 0 ? pixels[h * 224 + w].r : 
-                                          c == 1 ? pixels[h * 224 + w].g : 
-                                                   pixels[h * 224 + w].b;
+                        // CRITICAL: Unity GetPixels() is bottom-left origin, flip Y for ONNX (top-left)
+                        int unityY = 224 - 1 - h; // Flip Y coordinate for ONNX coordinate system
+                        int pixelIdx = unityY * 224 + w;
+                        float pixelValue = c == 0 ? pixels[pixelIdx].r : 
+                                          c == 1 ? pixels[pixelIdx].g : 
+                                                   pixels[pixelIdx].b;
                         tensorData[idx++] = pixelValue; // Already normalized [0,1]
                     }
                 }
