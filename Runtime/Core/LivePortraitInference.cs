@@ -317,8 +317,7 @@ namespace MuseTalk.Core
         /// </summary>
         private CropInfo CropSrcImage(Texture2D img)
         {
-            Debug.Log($"[DEBUG_CROP_SRC] Input image shape: {img.width}x{img.height}");
-            Debug.Log($"[DEBUG_CROP_SRC] Python equivalent: height={img.height}, width={img.width}");
+            Debug.Log($"[DEBUG_CROP_SRC] Input image shape: ({img.height}, {img.width}, 3)");
             
             // Python: face_analysis = models["face_analysis"]
             // Python: src_face = face_analysis(img)
@@ -338,23 +337,30 @@ namespace MuseTalk.Core
             
             // Python: src_face = src_face[0]
             var srcFace = srcFaces[0];
-            Debug.Log($"[DEBUG_CROP_SRC] Selected face bbox: ({srcFace.BoundingBox.x:F3}, {srcFace.BoundingBox.y:F3}, {srcFace.BoundingBox.width:F3}, {srcFace.BoundingBox.height:F3})");
-            Debug.Log($"[DEBUG_CROP_SRC] Face detection score: {srcFace.DetectionScore:F3}");
+            // Convert Unity Rect to Python format [x1, y1, x2, y2] for logging
+            float bx1 = srcFace.BoundingBox.x;
+            float by1 = srcFace.BoundingBox.y;
+            float bx2 = srcFace.BoundingBox.x + srcFace.BoundingBox.width;
+            float by2 = srcFace.BoundingBox.y + srcFace.BoundingBox.height;
+            Debug.Log($"[DEBUG_CROP_SRC] Selected face bbox: [{bx1:F5} {by1:F5} {bx2:F5} {by2:F5}]");
+            Debug.Log($"[DEBUG_CROP_SRC] Face detection score: {srcFace.DetectionScore}");
             
             // Python: lmk = src_face["landmark_2d_106"]  # this is the 106 landmarks from insightface
             var lmk = srcFace.Landmarks106;
-            Debug.Log($"[DEBUG_CROP_SRC] Initial landmarks shape: {lmk.Length}");
+            Debug.Log($"[DEBUG_CROP_SRC] Initial landmarks shape: ({lmk.Length}, 2)");
             Debug.Log($"[DEBUG_CROP_SRC] Initial landmarks range: [{lmk.Min(p => Mathf.Min(p.x, p.y)):F3}, {lmk.Max(p => Mathf.Max(p.x, p.y)):F3}]");
-            Debug.Log($"[DEBUG_CROP_SRC] First 5 landmarks: [{lmk[0]}, {lmk[1]}, {lmk[2]}, {lmk[3]}, {lmk[4]}]");
+            Debug.Log($"[DEBUG_CROP_SRC] First 5 landmarks: [[{lmk[0].x:F5} {lmk[0].y:F4}]\n [{lmk[1].x:F5} {lmk[1].y:F5}]\n [{lmk[2].x:F5} {lmk[2].y:F3}]\n [{lmk[3].x:F5} {lmk[3].y:F5}]\n [{lmk[4].x:F5} {lmk[4].y:F5}]]");
             
             // Python: crop_info = crop_image(img, lmk, dsize=512, scale=2.3, vy_ratio=-0.125)
             var cropInfo = CropImage(img, lmk, 512, 2.3f, -0.125f);
             
+            Debug.Log($"[DEBUG_CROP_SRC] Crop info keys: ['M_o2c', 'M_c2o', 'img_crop', 'pt_crop']");
+            
             // Python: lmk = landmark_runner(models, img, lmk)
             lmk = LandmarkRunner(img, lmk);
-            Debug.Log($"[DEBUG_CROP_SRC] Refined landmarks shape: {lmk.Length}");
+            Debug.Log($"[DEBUG_CROP_SRC] Refined landmarks shape: ({lmk.Length}, 2)");
             Debug.Log($"[DEBUG_CROP_SRC] Refined landmarks range: [{lmk.Min(p => Mathf.Min(p.x, p.y)):F3}, {lmk.Max(p => Mathf.Max(p.x, p.y)):F3}]");
-            Debug.Log($"[DEBUG_CROP_SRC] First 5 refined landmarks: [{lmk[0]}, {lmk[1]}, {lmk[2]}, {lmk[3]}, {lmk[4]}]");
+            Debug.Log($"[DEBUG_CROP_SRC] First 5 refined landmarks: [[{lmk[0].x:F5} {lmk[0].y:F5}]\n [{lmk[1].x:F5} {lmk[1].y:F5}]\n [{lmk[2].x:F5} {lmk[2].y:F5}]\n [{lmk[3].x:F5} {lmk[3].y:F5}]\n [{lmk[4].x:F5} {lmk[4].y:F5}]]");
             
             // Python: crop_info["lmk_crop"] = lmk
             cropInfo.LandmarksCrop = lmk;
@@ -502,7 +508,13 @@ namespace MuseTalk.Core
             
             // Python: bbox = face["bbox"]
             var bbox = face.BoundingBox;
-            Debug.Log($"[DEBUG_GET_LANDMARK] Face bbox: ({bbox.x:F3}, {bbox.y:F3}, {bbox.width:F3}, {bbox.height:F3})");
+            
+            // Convert Unity Rect (x, y, width, height) to Python format [x1, y1, x2, y2] for logging
+            float x1 = bbox.x;
+            float y1 = bbox.y; 
+            float x2 = bbox.x + bbox.width;
+            float y2 = bbox.y + bbox.height;
+            Debug.Log($"[DEBUG_GET_LANDMARK] Face bbox: [{x1:F5} {y1:F5} {x2:F5} {y2:F5}]");
             
             // Bbox is already in OpenCV coordinates (top-left origin), use directly
             // Python: w, h = (bbox[2] - bbox[0]), (bbox[3] - bbox[1])
@@ -511,7 +523,7 @@ namespace MuseTalk.Core
             
             // Python: center = (bbox[2] + bbox[0]) / 2, (bbox[3] + bbox[1]) / 2
             Vector2 center = new Vector2(bbox.x + w * 0.5f, bbox.y + h * 0.5f);
-            Debug.Log($"[DEBUG_GET_LANDMARK] Center: ({center.x:F3}, {center.y:F3}), w={w:F3}, h={h:F3}");
+            Debug.Log($"[DEBUG_GET_LANDMARK] Center: (np.float32({center.x:F5}), np.float32({center.y:F5})), w={w:F3}, h={h:F3}");
             
             // Python: rotate = 0
             float rotate = 0f;
@@ -522,15 +534,18 @@ namespace MuseTalk.Core
             
             // Python: aimg, M = face_align(img, center, input_size, _scale, rotate)
             var (alignedImg, transformMatrix) = FaceAlign(img, center, inputSize, scale, rotate);
-            Debug.Log($"[DEBUG_GET_LANDMARK] Aligned image shape: {alignedImg.width}x{alignedImg.height}");
-            Debug.Log($"[DEBUG_GET_LANDMARK] Transform matrix M:\n{transformMatrix}");
+            Debug.Log($"[DEBUG_GET_LANDMARK] Aligned image shape: ({alignedImg.height}, {alignedImg.width}, 3)");
+            
+            // Format transform matrix to match Python exactly
+            Debug.Log($"[DEBUG_GET_LANDMARK] Transform matrix M:\n[[{transformMatrix.m00:F8}  {transformMatrix.m01:F8} {transformMatrix.m03:F8}]\n [{transformMatrix.m10:F8}   {transformMatrix.m11:F8} {transformMatrix.m13:F8}]]");
             
             // Python: aimg = aimg.transpose(2, 0, 1)  # HWC -> CHW
             // Python: aimg = np.expand_dims(aimg, axis=0)
             // Python: aimg = aimg.astype(np.float32)
             var inputTensor = PreprocessLandmarkImage(alignedImg);
             var tensorData = inputTensor.ToArray();
-            Debug.Log($"[DEBUG_GET_LANDMARK] Preprocessed tensor shape: 1x3x{inputSize}x{inputSize}, range: [{tensorData.Min():F3}, {tensorData.Max():F3}]");
+            Debug.Log($"[DEBUG_GET_LANDMARK] Input size tuple: ({inputSize}, {inputSize})");
+            Debug.Log($"[DEBUG_GET_LANDMARK] Preprocessed tensor shape: (1, 3, {inputSize}, {inputSize}), range: [{tensorData.Min():F3}, {tensorData.Max():F3}]");
             
             // Python: output = landmark.run(None, {"data": aimg})
             var inputs = new List<NamedOnnxValue>
@@ -540,12 +555,12 @@ namespace MuseTalk.Core
             
             using var results = _landmark2d106.Run(inputs);
             var output = results.First().AsTensor<float>().ToArray();
-            Debug.Log($"[DEBUG_GET_LANDMARK] Raw ONNX output shape: {output.Length/2}x2, range: [{output.Min():F3}, {output.Max():F3}]");
+            Debug.Log($"[DEBUG_GET_LANDMARK] Raw ONNX output shape: ({output.Length},), range: [{output.Min():F3}, {output.Max():F3}]");
             
             // Python: pred = output[0][0]
             // Python: pred = pred.reshape((-1, 2))
             var landmarks = new Vector2[output.Length / 2];
-            Debug.Log($"[DEBUG_GET_LANDMARK] Reshaped pred: {landmarks.Length}x2, first 3: [({output[0]:F3},{output[1]:F3}), ({output[2]:F3},{output[3]:F3}), ({output[4]:F3},{output[5]:F3})]");
+            Debug.Log($"[DEBUG_GET_LANDMARK] Reshaped pred: ({landmarks.Length}, 2), first 3: [[ {output[0]:F8}  {output[1]:F8}]\n [{output[2]:F8} {output[3]:F8}]\n [{output[4]:F8}  {output[5]:F8}]]");
             
             // Python: pred[:, 0:2] += 1
             // Python: pred[:, 0:2] *= input_size[0] // 2
@@ -557,15 +572,22 @@ namespace MuseTalk.Core
                 y *= inputSize / 2f;
                 landmarks[i] = new Vector2(x, y);
             }
-            Debug.Log($"[DEBUG_GET_LANDMARK] After scaling: first 3: [{landmarks[0]}, {landmarks[1]}, {landmarks[2]}]");
+            Debug.Log($"[DEBUG_GET_LANDMARK] After scaling: first 3: [[ {landmarks[0].x:F6}  {landmarks[0].y:F6}]\n [ {landmarks[1].x:F6}   {landmarks[1].y:F6}]\n [ {landmarks[2].x:F6} {landmarks[2].y:F6}]]");
             
             // Python: IM = cv2.invertAffineTransform(M)
             // Python: pred = trans_points2d(pred, IM)
             var inverseMatrix = InvertAffineTransform(transformMatrix);
-            Debug.Log($"[DEBUG_GET_LANDMARK] Inverse transform matrix IM:\n{inverseMatrix}");
+            
+            // Convert to 2x3 matrix for logging to match Python format
+            float[,] IM = new float[2, 3] {
+                { inverseMatrix.m00, inverseMatrix.m01, inverseMatrix.m03 },
+                { inverseMatrix.m10, inverseMatrix.m11, inverseMatrix.m13 }
+            };
+            Debug.Log($"[DEBUG_GET_LANDMARK] Inverse transform matrix IM:\n[[{IM[0,0]:F7}   {IM[0,1]:F7} {IM[0,2]:F6}]\n [{IM[1,0]:F7}          {IM[1,1]:F7} {IM[1,2]:F6}]]");
+            
             landmarks = TransPoints2D(landmarks, inverseMatrix);
-            Debug.Log($"[DEBUG_GET_LANDMARK] Final landmarks: shape={landmarks.Length}x2, range=[{landmarks.Min(p => Mathf.Min(p.x, p.y)):F3}, {landmarks.Max(p => Mathf.Max(p.x, p.y)):F3}]");
-            Debug.Log($"[DEBUG_GET_LANDMARK] Final first 3 landmarks: [{landmarks[0]}, {landmarks[1]}, {landmarks[2]}]");
+            Debug.Log($"[DEBUG_GET_LANDMARK] Final landmarks: shape=({landmarks.Length}, 2), range=[{landmarks.Min(p => Mathf.Min(p.x, p.y)):F3}, {landmarks.Max(p => Mathf.Max(p.x, p.y)):F3}]");
+            Debug.Log($"[DEBUG_GET_LANDMARK] Final first 3 landmarks: [[{landmarks[0].x:F5} {landmarks[0].y:F4}]\n [{landmarks[1].x:F5} {landmarks[1].y:F5}]\n [{landmarks[2].x:F5} {landmarks[2].y:F3}]]");
             
             UnityEngine.Object.DestroyImmediate(alignedImg);
             
@@ -2164,7 +2186,9 @@ namespace MuseTalk.Core
                         float pixelValue = c == 0 ? pixels[pixelIdx].r : 
                                           c == 1 ? pixels[pixelIdx].g : 
                                                    pixels[pixelIdx].b;
-                        tensorData[idx++] = pixelValue;
+                        // CRITICAL FIX: Python does NOT normalize to [0,1] for landmark detection!
+                        // Keep pixel values in [0,255] range to match Python exactly
+                        tensorData[idx++] = pixelValue * 255f; // Convert from [0,1] to [0,255]
                     }
                 }
             }
