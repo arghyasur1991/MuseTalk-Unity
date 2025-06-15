@@ -282,7 +282,26 @@ namespace MuseTalk.Models
             {
                 _session = ModelUtils.LoadModel(config, "warping_spade");
                 IsInitialized = true;
-                Logger.Log("[WarpingSPADEModel] Initialized successfully");
+                
+                // Log ONNX Runtime version and model info
+                Logger.Log($"[WarpingSPADEModel] Initialized successfully");
+                Logger.Log($"[WarpingSPADEModel] ONNX Runtime version: {Microsoft.ML.OnnxRuntime.OrtEnv.Instance().GetVersionString()}");
+                
+                // Log model input/output metadata
+                var inputMetadata = _session.InputMetadata;
+                var outputMetadata = _session.OutputMetadata;
+                
+                Logger.Log($"[WarpingSPADEModel] Model inputs:");
+                foreach (var input in inputMetadata)
+                {
+                    Logger.Log($"[WarpingSPADEModel]   {input.Key}: {string.Join("x", input.Value.Dimensions)} ({input.Value.ElementType})");
+                }
+                
+                Logger.Log($"[WarpingSPADEModel] Model outputs:");
+                foreach (var output in outputMetadata)
+                {
+                    Logger.Log($"[WarpingSPADEModel]   {output.Key}: {string.Join("x", output.Value.Dimensions)} ({output.Value.ElementType})");
+                }
             }
             catch (Exception e)
             {
@@ -300,10 +319,43 @@ namespace MuseTalk.Models
             
             try
             {
+                // Debug input shapes
+                var feature3DShape = GetFeature3DShape(feature3D);
+                var kpSourceShape = GetKeypointsShape(kpSource);
+                var kpDrivingShape = GetKeypointsShape(kpDriving);
+                
+                Logger.Log($"[WarpingSPADEModel] Input shapes:");
+                Logger.Log($"[WarpingSPADEModel]   feature3D: {feature3D.Length} -> [{string.Join(",", feature3DShape.Select(x => x.ToString()))}]");
+                Logger.Log($"[WarpingSPADEModel]   kpSource: {kpSource.Length} -> [{string.Join(",", kpSourceShape.Select(x => x.ToString()))}]");
+                Logger.Log($"[WarpingSPADEModel]   kpDriving: {kpDriving.Length} -> [{string.Join(",", kpDrivingShape.Select(x => x.ToString()))}]");
+                
+                // Verify shapes match expected sizes
+                int expectedFeature3DSize = feature3DShape.Aggregate(1, (a, b) => a * b);
+                int expectedKpSourceSize = kpSourceShape.Aggregate(1, (a, b) => a * b);
+                int expectedKpDrivingSize = kpDrivingShape.Aggregate(1, (a, b) => a * b);
+                
+                if (feature3D.Length != expectedFeature3DSize)
+                {
+                    Logger.LogError($"[WarpingSPADEModel] Feature3D size mismatch: got {feature3D.Length}, expected {expectedFeature3DSize}");
+                    return null;
+                }
+                
+                if (kpSource.Length != expectedKpSourceSize)
+                {
+                    Logger.LogError($"[WarpingSPADEModel] KpSource size mismatch: got {kpSource.Length}, expected {expectedKpSourceSize}");
+                    return null;
+                }
+                
+                if (kpDriving.Length != expectedKpDrivingSize)
+                {
+                    Logger.LogError($"[WarpingSPADEModel] KpDriving size mismatch: got {kpDriving.Length}, expected {expectedKpDrivingSize}");
+                    return null;
+                }
+                
                 // Convert arrays to tensors with proper shapes
-                var feature3DTensor = new DenseTensor<float>(feature3D, GetFeature3DShape(feature3D));
-                var kpSourceTensor = new DenseTensor<float>(kpSource, GetKeypointsShape(kpSource));
-                var kpDrivingTensor = new DenseTensor<float>(kpDriving, GetKeypointsShape(kpDriving));
+                var feature3DTensor = new DenseTensor<float>(feature3D, feature3DShape);
+                var kpSourceTensor = new DenseTensor<float>(kpSource, kpSourceShape);
+                var kpDrivingTensor = new DenseTensor<float>(kpDriving, kpDrivingShape);
                 
                 var inputs = new List<NamedOnnxValue>
                 {
@@ -312,13 +364,46 @@ namespace MuseTalk.Models
                     NamedOnnxValue.CreateFromTensor("kp_driving", kpDrivingTensor)
                 };
                 
+                // Debug input tensor details
+                Logger.Log($"[WarpingSPADEModel] Input tensor details:");
+                Logger.Log($"[WarpingSPADEModel]   feature3D tensor: {feature3DTensor.Length} elements, dtype: {feature3DTensor.GetType()}");
+                Logger.Log($"[WarpingSPADEModel]   kpSource tensor: {kpSourceTensor.Length} elements, dtype: {kpSourceTensor.GetType()}");
+                Logger.Log($"[WarpingSPADEModel]   kpDriving tensor: {kpDrivingTensor.Length} elements, dtype: {kpDrivingTensor.GetType()}");
+                
+                // Check for NaN or infinite values in inputs
+                bool hasNaN = feature3D.Any(x => float.IsNaN(x) || float.IsInfinity(x)) ||
+                             kpSource.Any(x => float.IsNaN(x) || float.IsInfinity(x)) ||
+                             kpDriving.Any(x => float.IsNaN(x) || float.IsInfinity(x));
+                Logger.Log($"[WarpingSPADEModel] Input contains NaN/Inf: {hasNaN}");
+                
+                // Check input value ranges
+                Logger.Log($"[WarpingSPADEModel] Input ranges:");
+                Logger.Log($"[WarpingSPADEModel]   feature3D: [{feature3D.Min():F6}, {feature3D.Max():F6}]");
+                Logger.Log($"[WarpingSPADEModel]   kpSource: [{kpSource.Min():F6}, {kpSource.Max():F6}]");
+                Logger.Log($"[WarpingSPADEModel]   kpDriving: [{kpDriving.Min():F6}, {kpDriving.Max():F6}]");
+                
+                Logger.Log($"[WarpingSPADEModel] Running ONNX inference...");
                 using var results = _session.Run(inputs);
                 var output = results.First().AsTensor<float>();
-                return output.ToArray();
+                var outputArray = output.ToArray();
+                
+                Logger.Log($"[WarpingSPADEModel] ONNX output: {outputArray.Length} elements, shape: [{string.Join(",", output.Dimensions.ToArray().Select(x => x.ToString()))}]");
+                
+                // Check output for issues
+                bool outputHasNaN = outputArray.Any(x => float.IsNaN(x) || float.IsInfinity(x));
+                Logger.Log($"[WarpingSPADEModel] Output contains NaN/Inf: {outputHasNaN}");
+                Logger.Log($"[WarpingSPADEModel] Output range: [{outputArray.Min():F6}, {outputArray.Max():F6}]");
+                
+                // Check if output is all zeros
+                bool allZeros = outputArray.All(x => Math.Abs(x) < 1e-10f);
+                Logger.Log($"[WarpingSPADEModel] Output is all zeros: {allZeros}");
+                
+                return outputArray;
             }
             catch (Exception e)
             {
                 Logger.LogError($"[WarpingSPADEModel] Warping failed: {e.Message}");
+                Logger.LogError($"[WarpingSPADEModel] Stack trace: {e.StackTrace}");
                 return null;
             }
         }
