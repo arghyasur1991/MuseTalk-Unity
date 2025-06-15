@@ -430,6 +430,7 @@ namespace MuseTalk.Core
             
             // Python: crop_info = crop_image(img, lmk, dsize=512, scale=2.3, vy_ratio=-0.125)
             var cropInfo = CropImage(img, lmk, 512, 2.3f, -0.125f);
+            // _debugImage = cropInfo.ImageCrop;
             
             Debug.Log($"[DEBUG_CROP_SRC] Crop info keys: ['M_o2c', 'M_c2o', 'img_crop', 'pt_crop']");
             
@@ -2059,9 +2060,9 @@ namespace MuseTalk.Core
                         // CRITICAL: Unity GetPixels() is bottom-left origin, flip Y for ONNX (top-left)
                         int unityY = inputSize - 1 - h; // Flip Y coordinate for ONNX coordinate system
                         int pixelIdx = unityY * inputSize + w;
-                        float pixelValue = c == 0 ? pixels[pixelIdx].b : 
+                        float pixelValue = c == 0 ? pixels[pixelIdx].r : 
                                           c == 1 ? pixels[pixelIdx].g : 
-                                                   pixels[pixelIdx].r;
+                                                   pixels[pixelIdx].b;
                         tensorData[idx++] = (pixelValue * 255f - 127.5f) / 128f;
                     }
                 }
@@ -2399,24 +2400,26 @@ namespace MuseTalk.Core
             return (cropped, transform);
         }
         
-        private DenseTensor<float> PreprocessLandmarkImage(Texture2D img)
+        private DenseTensor<float> PreprocessLandmarkImage(Texture2D img, int inputSize = 192)
         {
             var pixels = img.GetPixels();
-            var tensorData = new float[1 * 3 * 192 * 192];
+            var tensorData = new float[1 * 3 * inputSize * inputSize];
             
             int idx = 0;
-            for (int c = 0; c < 3; c++)
+            // The following loops perform the equivalent of numpy's transpose(2, 0, 1)
+            // to convert from HWC (height, width, channel) to CHW (channel, height, width).
+            for (int c = 0; c < 3; c++) // Channel
             {
-                for (int h = 0; h < 192; h++)
+                for (int h = 0; h < inputSize; h++) // Height
                 {
-                    for (int w = 0; w < 192; w++)
+                    for (int w = 0; w < inputSize; w++) // Width
                     {
                         // CRITICAL: Unity GetPixels() is bottom-left origin, flip Y for ONNX (top-left)
-                        int unityY = 192 - 1 - h; // Flip Y coordinate for ONNX coordinate system
-                        int pixelIdx = unityY * 192 + w;
-                        float pixelValue = c == 0 ? pixels[pixelIdx].b : 
+                        int unityY = inputSize - 1 - h; // Flip Y coordinate for ONNX coordinate system
+                        int pixelIdx = unityY * inputSize + w;
+                        float pixelValue = c == 0 ? pixels[pixelIdx].r : 
                                           c == 1 ? pixels[pixelIdx].g : 
-                                                   pixels[pixelIdx].r;
+                                                   pixels[pixelIdx].b;
                         // CRITICAL FIX: Python does NOT normalize to [0,1] for landmark detection!
                         // Keep pixel values in [0,255] range to match Python exactly
                         tensorData[idx++] = pixelValue * 255f; // Convert from [0,1] to [0,255]
@@ -2424,7 +2427,9 @@ namespace MuseTalk.Core
                 }
             }
             
-            return new DenseTensor<float>(tensorData, new[] { 1, 3, 192, 192 });
+            // The DenseTensor is created with a shape that includes the batch dimension (1),
+            // which is equivalent to numpy's expand_dims(axis=0).
+            return new DenseTensor<float>(tensorData, new[] { 1, 3, inputSize, inputSize });
         }
         
         private Matrix4x4 InvertAffineTransform(Matrix4x4 matrix)
