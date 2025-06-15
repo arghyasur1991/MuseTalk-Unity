@@ -9,7 +9,7 @@ namespace MuseTalk.Utils
     /// </summary>
     public class DebugLogger
     {
-        private static bool _enableLogging = true;
+        private static bool _enableLogging = false;
         private static bool _enableFileDebug = false;
         private static readonly string _debugOutputPath;
         

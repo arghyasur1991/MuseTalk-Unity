@@ -31,7 +31,7 @@ namespace MuseTalk.Utils
 
             if (config.UseINT8)
             {
-                Debug.Log("[MuseTalkInference] Enabling INT8 quantization optimizations");
+                // Debug.Log("[MuseTalkInference] Enabling INT8 quantization optimizations");
                 // INT8 models work best with all optimizations enabled
                 options.AddSessionConfigEntry("session.enable_memory_arena_shrinkage", "cpu:0;");
             }
