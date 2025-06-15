@@ -2076,7 +2076,8 @@ namespace MuseTalk.Core
             }
             scoreIndices.Sort((a, b) => b.score.CompareTo(a.score)); // Descending order
             
-            // Scale bboxes by detScale
+            // CRITICAL: Scale bboxes and keypoints by detScale to convert back to original image coordinates
+            // Python: bboxes /= det_scale, kpss /= det_scale
             for (int i = 0; i < allBboxes.Count; i++)
             {
                 allBboxes[i] /= detScale;
@@ -2111,9 +2112,8 @@ namespace MuseTalk.Core
             {
                 var bbox = preDet[keepIdx];
                 
-                // Note: bbox coordinates are already in original image coordinates after detScale division
-                // Python bbox format: [x1, y1, x2, y2] in OpenCV coordinates (top-left origin)
-                // We need to store them as-is for now since GetLandmark will handle coordinate conversion
+                // CRITICAL: Store bounding box in OpenCV coordinates (top-left origin) as Python expects
+                // Python bbox format: [x1, y1, x2, y2] in original image coordinates
                 var face = new FaceDetectionResult
                 {
                     BoundingBox = new Rect(bbox[0], bbox[1], bbox[2] - bbox[0], bbox[3] - bbox[1]),
@@ -2122,7 +2122,7 @@ namespace MuseTalk.Core
                     Landmarks106 = new Vector2[106] // Will be filled later
                 };
                 
-                // Store keypoints as-is (OpenCV coordinates)
+                // Store keypoints in original image coordinates (OpenCV format)
                 for (int k = 0; k < 5; k++)
                 {
                     face.Keypoints5[k] = new Vector2(
@@ -2137,18 +2137,26 @@ namespace MuseTalk.Core
             return faces;
         }
         
+        /// <summary>
+        /// Python: face_align(data, center, output_size, scale, rotation) - EXACT MATCH
+        /// </summary>
         private (Texture2D, Matrix4x4) FaceAlign(Texture2D img, Vector2 center, int inputSize, float scale, float rotate)
         {
-            // Python: face_align(data, center, output_size, scale, rotation) - EXACT MATCH
+            // Python: scale_ratio = scale
             float scaleRatio = scale;
-            float rot = rotate * Mathf.PI / 180.0f;  // Python: rot = float(rotation) * np.pi / 180.0
+            // Python: rot = float(rotation) * np.pi / 180.0
+            float rot = rotate * Mathf.PI / 180.0f;
             
             // Python: trans_M = np.array([[scale_ratio*cos(rot), -scale_ratio*sin(rot), output_size*0.5-center[0]*scale_ratio], 
             //                            [scale_ratio*sin(rot), scale_ratio*cos(rot), output_size*0.5-center[1]*scale_ratio], 
-            //                            [0, 0, 1]])
+            //                            [0, 0, 1]], dtype=np.float32)
+            float cosRot = Mathf.Cos(rot);
+            float sinRot = Mathf.Sin(rot);
+            float outputSizeHalf = inputSize * 0.5f;
+            
             float[,] transM = new float[,] {
-                { scaleRatio * Mathf.Cos(rot), -scaleRatio * Mathf.Sin(rot), inputSize * 0.5f - center.x * scaleRatio },
-                { scaleRatio * Mathf.Sin(rot), scaleRatio * Mathf.Cos(rot), inputSize * 0.5f - center.y * scaleRatio },
+                { scaleRatio * cosRot, -scaleRatio * sinRot, outputSizeHalf - center.x * scaleRatio },
+                { scaleRatio * sinRot, scaleRatio * cosRot, outputSizeHalf - center.y * scaleRatio },
                 { 0f, 0f, 1f }
             };
             
@@ -2171,7 +2179,7 @@ namespace MuseTalk.Core
             Debug.Log($"[DEBUG_FACE_ALIGN] Input image pixel range: [{minInput * 255f:F3}, {maxInput * 255f:F3}]");
             
             // Python: cropped = cv2.warpAffine(data, M, (output_size, output_size), borderValue=0.0)
-            var cropped = TransformImg(img, M, inputSize);
+            var cropped = TransformImgExact(img, M, inputSize);
             
             // Debug the output image range after transformation
             var outputPixels = cropped.GetPixels();
@@ -2363,6 +2371,90 @@ namespace MuseTalk.Core
                 );
             }
             
+            return result;
+        }
+        
+        /// <summary>
+        /// Python: cv2.warpAffine() - EXACT MATCH
+        /// This is the corrected version that matches OpenCV's warpAffine exactly
+        /// CRITICAL: Handles coordinate systems correctly
+        /// </summary>
+        private Texture2D TransformImgExact(Texture2D img, float[,] M, int dsize)
+        {
+            // Create result texture - MUST use RGB24 format for consistent processing
+            var result = new Texture2D(dsize, dsize, TextureFormat.RGB24, false);
+            
+            // Get source image data as raw pixel array - Unity format is RGBA but we need RGB
+            var srcPixels = img.GetPixels32(); // Get as Color32 for better precision
+            int srcWidth = img.width;
+            int srcHeight = img.height;
+            
+            // Create result pixel array
+            var resultPixels = new Color32[dsize * dsize];
+            
+            // CRITICAL: Process exactly like OpenCV cv2.warpAffine
+            // OpenCV processes in row-major order with top-left origin (0,0) at top-left
+            for (int dstY = 0; dstY < dsize; dstY++)
+            {
+                for (int dstX = 0; dstX < dsize; dstX++)
+                {
+                    // Apply transformation matrix to destination coordinates to get source coordinates
+                    // OpenCV: srcX = M[0,0]*dstX + M[0,1]*dstY + M[0,2]
+                    // OpenCV: srcY = M[1,0]*dstX + M[1,1]*dstY + M[1,2]
+                    float srcX = M[0, 0] * dstX + M[0, 1] * dstY + M[0, 2];
+                    float srcY = M[1, 0] * dstX + M[1, 1] * dstY + M[1, 2];
+                    
+                    // Get integer and fractional parts for bilinear interpolation
+                    int x0 = Mathf.FloorToInt(srcX);
+                    int y0 = Mathf.FloorToInt(srcY);
+                    int x1 = x0 + 1;
+                    int y1 = y0 + 1;
+                    
+                    float fx = srcX - x0;
+                    float fy = srcY - y0;
+                    
+                    // Default to black (borderValue=0.0 in OpenCV)
+                    byte r = 0, g = 0, b = 0;
+                    
+                    // Bounds check for bilinear interpolation
+                    if (x0 >= 0 && x1 < srcWidth && y0 >= 0 && y1 < srcHeight)
+                    {
+                        // CRITICAL: OpenCV uses top-left origin, Unity GetPixels32() uses bottom-left origin
+                        // Convert OpenCV coordinates to Unity coordinates for pixel access
+                        int unity_y0 = srcHeight - 1 - y0; // Convert OpenCV top-left to Unity bottom-left
+                        int unity_y1 = srcHeight - 1 - y1; // Convert OpenCV top-left to Unity bottom-left
+                        
+                        // Get the four corner pixels for bilinear interpolation
+                        var c00 = srcPixels[unity_y0 * srcWidth + x0];  // Top-left in OpenCV coords
+                        var c10 = srcPixels[unity_y0 * srcWidth + x1];  // Top-right in OpenCV coords
+                        var c01 = srcPixels[unity_y1 * srcWidth + x0];  // Bottom-left in OpenCV coords
+                        var c11 = srcPixels[unity_y1 * srcWidth + x1];  // Bottom-right in OpenCV coords
+                        
+                        // Bilinear interpolation - OpenCV formula
+                        // result = (1-fx)(1-fy)*c00 + fx(1-fy)*c10 + (1-fx)fy*c01 + fx*fy*c11
+                        float inv_fx = 1.0f - fx;
+                        float inv_fy = 1.0f - fy;
+                        
+                        float r_float = inv_fx * inv_fy * c00.r + fx * inv_fy * c10.r + inv_fx * fy * c01.r + fx * fy * c11.r;
+                        float g_float = inv_fx * inv_fy * c00.g + fx * inv_fy * c10.g + inv_fx * fy * c01.g + fx * fy * c11.g;
+                        float b_float = inv_fx * inv_fy * c00.b + fx * inv_fy * c10.b + inv_fx * fy * c01.b + fx * fy * c11.b;
+                        
+                        r = (byte)Mathf.Clamp(r_float, 0f, 255f);
+                        g = (byte)Mathf.Clamp(g_float, 0f, 255f);
+                        b = (byte)Mathf.Clamp(b_float, 0f, 255f);
+                    }
+                    
+                    // Store result pixel
+                    // CRITICAL: Result coordinate system - Unity SetPixels32 expects bottom-left origin
+                    // But we want to match OpenCV output which is conceptually top-left
+                    // So flip the Y coordinate when storing the result
+                    int result_y_flipped = dsize - 1 - dstY; // Flip Y for Unity SetPixels32
+                    resultPixels[result_y_flipped * dsize + dstX] = new Color32(r, g, b, 255);
+                }
+            }
+            
+            result.SetPixels32(resultPixels);
+            result.Apply();
             return result;
         }
         
