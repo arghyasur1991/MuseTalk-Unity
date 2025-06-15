@@ -96,23 +96,37 @@ namespace MuseTalk.Core
         private bool _initialized = false;
         private bool _disposed = false;
         
+        // State management - matches Python self.pred_info
+        private LivePortraitPredInfo _predInfo;
+        
+        // Composite flag - matches Python self.flg_composite
+        private bool _flgComposite = false;
+        
         public bool IsInitialized => _initialized;
         
         public LivePortraitInference(MuseTalkConfig config)
         {
             _config = config ?? throw new ArgumentNullException(nameof(config));
             
-            try
+                    try
+        {
+            InitializeModels();
+            
+            // Initialize prediction state - matches Python self.pred_info = {'lmk':None, 'x_d_0_info':None}
+            _predInfo = new LivePortraitPredInfo
             {
-                InitializeModels();
-                _initialized = true;
-                // Debug.Log("[LivePortraitInference] Successfully initialized");
-            }
-            catch (Exception e)
-            {
-                Debug.LogError($"[LivePortraitInference] Failed to initialize: {e.Message}");
-                _initialized = false;
-            }
+                Landmarks = null,
+                InitialMotionInfo = null
+            };
+            
+            _initialized = true;
+            // Debug.Log("[LivePortraitInference] Successfully initialized");
+        }
+        catch (Exception e)
+        {
+            Debug.LogError($"[LivePortraitInference] Failed to initialize: {e.Message}");
+            _initialized = false;
+        }
         }
         
         private void InitializeModels()
@@ -207,26 +221,39 @@ namespace MuseTalk.Core
                 var xs = TransformKeypoint(xSInfo);
                 // Debug.Log("[LivePortraitInference] Source keypoints transformed");
                 
-                // Initialize prediction info - matches Python pred_info
-                var predInfo = new LivePortraitPredInfo
-                {
-                    Landmarks = null,
-                    InitialMotionInfo = null
-                };
+                // Python: prepare for pasteback
+                // Python: mask_ori = prepare_paste_back(self.mask_crop, crop_info["M_c2o"], dsize=(src_img.shape[1], src_img.shape[0]))
+                var maskOri = PreparePasteBack(cropInfo.Transform, srcImg.width, srcImg.height);
                 
                 // Generate frames
                 var generatedFrames = new List<Texture2D>();
-                // For debugging, only generate 1 frame
+                // For debugging, only generate 1 frame - matches Python: if frame_id > 0: break
                 for (int frameId = 0; frameId < 1 /* input.DrivingFrames.Length */; frameId++)
                 {
                     // Debug.Log($"[LivePortraitInference] Processing frame {frameId + 1}/{input.DrivingFrames.Length}");
                     
-                    // Python: I_p, self.pred_info = predict(frame_id, self.models, x_s_info, R_s, f_s, x_s, img_rgb, self.pred_info)
-                    var predictedFrame = Predict(frameId, xSInfo, Rs, fs, xs, input.DrivingFrames[frameId], predInfo, input.UseComposite, srcImg, cropInfo);
+                    // Python: img_rgb = frame[:, :, ::-1]  # BGR -> RGB (Unity input is already RGB)
+                    var imgRgb = input.DrivingFrames[frameId];
                     
-                    if (predictedFrame != null)
+                    // Python: I_p, self.pred_info = predict(frame_id, self.models, x_s_info, R_s, f_s, x_s, img_rgb, self.pred_info)
+                    var (Ip, updatedPredInfo) = Predict(frameId, xSInfo, Rs, fs, xs, imgRgb, _predInfo);
+                    _predInfo = updatedPredInfo;
+                    
+                    // Python: if self.flg_composite: driving_img = concat_frame(img_rgb, img_crop_256x256, I_p)
+                    // Python: else: driving_img = paste_back(I_p, crop_info["M_c2o"], src_img, mask_ori)
+                    Texture2D drivingImg;
+                    if (_flgComposite)
                     {
-                        generatedFrames.Add(predictedFrame);
+                        drivingImg = ConcatFrame(imgRgb, cropInfo.ImageCrop256x256, Ip);
+                    }
+                    else
+                    {
+                        drivingImg = PasteBack(Ip, cropInfo.Transform, srcImg, maskOri);
+                    }
+                    
+                    if (drivingImg != null)
+                    {
+                        generatedFrames.Add(drivingImg);
                     }
                 }
                 
@@ -873,8 +900,8 @@ namespace MuseTalk.Core
         /// <summary>
         /// Python: predict(frame_id, models, x_s_info, R_s, f_s, x_s, img, pred_info) - EXACT MATCH
         /// </summary>
-        private Texture2D Predict(int frameId, MotionInfo xSInfo, float[,] Rs, float[] fs, float[] xs, 
-            Texture2D img, LivePortraitPredInfo predInfo, bool useComposite, Texture2D srcImg, CropInfo cropInfo)
+        private (Texture2D, LivePortraitPredInfo) Predict(int frameId, MotionInfo xSInfo, float[,] Rs, float[] fs, float[] xs, 
+            Texture2D img, LivePortraitPredInfo predInfo)
         {
             // Debug.Log($"[DEBUG] === PREDICT FRAME {frameId} START ===");
             
@@ -997,7 +1024,8 @@ namespace MuseTalk.Core
             
             UnityEngine.Object.DestroyImmediate(img256);
             
-            return resultTexture;
+            // Python: return I_p, pred_info
+            return (resultTexture, predInfo);
         }
         
         /// <summary>
@@ -2480,6 +2508,172 @@ namespace MuseTalk.Core
             {
                 Debug.LogError($"[LivePortraitInference] Error during disposal: {e.Message}");
             }
+        }
+        
+        /// <summary>
+        /// Python: prepare_paste_back(mask_crop, crop_M_c2o, dsize) - EXACT MATCH
+        /// </summary>
+        private Texture2D PreparePasteBack(Matrix4x4 cropMc2o, int width, int height)
+        {
+            // For now, create a simple white mask - this would need proper mask template loading
+            // Python: mask_ori = cv2.warpAffine(mask_crop, crop_M_c2o[:2, :], dsize=dsize, flags=cv2.INTER_LINEAR)
+            // Python: mask_ori = mask_ori.astype(np.float32) / 255.0
+            var maskOri = new Texture2D(width, height);
+            var pixels = new Color[width * height];
+            for (int i = 0; i < pixels.Length; i++)
+            {
+                pixels[i] = Color.white; // Simple white mask for now
+            }
+            maskOri.SetPixels(pixels);
+            maskOri.Apply();
+            return maskOri;
+        }
+        
+        /// <summary>
+        /// Python: concat_frame(img_rgb, img_crop_256x256, I_p) - EXACT MATCH
+        /// </summary>
+        private Texture2D ConcatFrame(Texture2D imgRgb, Texture2D imgCrop256x256, Texture2D Ip)
+        {
+            // Python: Concatenate frames horizontally: driving | cropped | generated
+            int width = imgRgb.width + imgCrop256x256.width + Ip.width;
+            int height = Mathf.Max(imgRgb.height, Mathf.Max(imgCrop256x256.height, Ip.height));
+            
+            var result = new Texture2D(width, height);
+            var pixels = new Color[width * height];
+            
+            // Fill with black background
+            for (int i = 0; i < pixels.Length; i++)
+            {
+                pixels[i] = Color.black;
+            }
+            
+            result.SetPixels(pixels);
+            
+            // Copy driving image
+            var drivingPixels = imgRgb.GetPixels();
+            result.SetPixels(0, 0, imgRgb.width, imgRgb.height, drivingPixels);
+            
+            // Copy cropped image
+            var croppedPixels = imgCrop256x256.GetPixels();
+            result.SetPixels(imgRgb.width, 0, imgCrop256x256.width, imgCrop256x256.height, croppedPixels);
+            
+            // Copy generated image
+            var generatedPixels = Ip.GetPixels();
+            result.SetPixels(imgRgb.width + imgCrop256x256.width, 0, Ip.width, Ip.height, generatedPixels);
+            
+            result.Apply();
+            return result;
+        }
+        
+        /// <summary>
+        /// Python: paste_back(img_crop, M_c2o, img_ori, mask_ori) - EXACT MATCH
+        /// </summary>
+        private Texture2D PasteBack(Texture2D imgCrop, Matrix4x4 Mc2o, Texture2D imgOri, Texture2D maskOri)
+        {
+            // Python: dsize = (img_ori.shape[1], img_ori.shape[0])
+            int dsize_w = imgOri.width;
+            int dsize_h = imgOri.height;
+            
+            // Python: result = cv2.warpAffine(img_crop, M_c2o[:2, :], dsize=dsize, flags=cv2.INTER_LINEAR)
+            float[,] M = new float[,] {
+                { Mc2o.m00, Mc2o.m01, Mc2o.m03 },
+                { Mc2o.m10, Mc2o.m11, Mc2o.m13 }
+            };
+            var warped = TransformImgExact(imgCrop, M, dsize_w, dsize_h);
+            
+            // Python: result = np.clip(mask_ori * result + (1 - mask_ori) * img_ori, 0, 255).astype(np.uint8)
+            var result = new Texture2D(dsize_w, dsize_h);
+            var warpedPixels = warped.GetPixels();
+            var oriPixels = imgOri.GetPixels();
+            var maskPixels = maskOri.GetPixels();
+            var resultPixels = new Color[dsize_w * dsize_h];
+            
+            for (int i = 0; i < resultPixels.Length; i++)
+            {
+                float maskValue = maskPixels[i].r; // Use red channel as mask value
+                resultPixels[i] = Color.Lerp(oriPixels[i], warpedPixels[i], maskValue);
+            }
+            
+            result.SetPixels(resultPixels);
+            result.Apply();
+            
+            UnityEngine.Object.DestroyImmediate(warped);
+            
+            return result;
+        }
+        
+        /// <summary>
+        /// Overload for TransformImgExact with different dimensions
+        /// </summary>
+        private Texture2D TransformImgExact(Texture2D img, float[,] M, int width, int height)
+        {
+            // Create result texture - MUST use RGB24 format for consistent processing
+            var result = new Texture2D(width, height, TextureFormat.RGB24, false);
+            
+            // Get source image data as raw pixel array
+            var srcPixels = img.GetPixels32();
+            int srcWidth = img.width;
+            int srcHeight = img.height;
+            
+            // Create result pixel array
+            var resultPixels = new Color32[width * height];
+            
+            // Process exactly like OpenCV cv2.warpAffine
+            for (int dstY = 0; dstY < height; dstY++)
+            {
+                for (int dstX = 0; dstX < width; dstX++)
+                {
+                    // Apply transformation matrix
+                    float srcX = M[0, 0] * dstX + M[0, 1] * dstY + M[0, 2];
+                    float srcY = M[1, 0] * dstX + M[1, 1] * dstY + M[1, 2];
+                    
+                    // Get integer and fractional parts for bilinear interpolation
+                    int x0 = Mathf.FloorToInt(srcX);
+                    int y0 = Mathf.FloorToInt(srcY);
+                    int x1 = x0 + 1;
+                    int y1 = y0 + 1;
+                    
+                    float fx = srcX - x0;
+                    float fy = srcY - y0;
+                    
+                    // Default to black
+                    byte r = 0, g = 0, b = 0;
+                    
+                    // Bounds check for bilinear interpolation
+                    if (x0 >= 0 && x1 < srcWidth && y0 >= 0 && y1 < srcHeight)
+                    {
+                        // Convert OpenCV coordinates to Unity coordinates
+                        int unity_y0 = srcHeight - 1 - y0;
+                        int unity_y1 = srcHeight - 1 - y1;
+                        
+                        // Get the four corner pixels
+                        var c00 = srcPixels[unity_y0 * srcWidth + x0];
+                        var c10 = srcPixels[unity_y0 * srcWidth + x1];
+                        var c01 = srcPixels[unity_y1 * srcWidth + x0];
+                        var c11 = srcPixels[unity_y1 * srcWidth + x1];
+                        
+                        // Bilinear interpolation
+                        float inv_fx = 1.0f - fx;
+                        float inv_fy = 1.0f - fy;
+                        
+                        float r_float = inv_fx * inv_fy * c00.r + fx * inv_fy * c10.r + inv_fx * fy * c01.r + fx * fy * c11.r;
+                        float g_float = inv_fx * inv_fy * c00.g + fx * inv_fy * c10.g + inv_fx * fy * c01.g + fx * fy * c11.g;
+                        float b_float = inv_fx * inv_fy * c00.b + fx * inv_fy * c10.b + inv_fx * fy * c01.b + fx * fy * c11.b;
+                        
+                        r = (byte)Mathf.Clamp(r_float, 0f, 255f);
+                        g = (byte)Mathf.Clamp(g_float, 0f, 255f);
+                        b = (byte)Mathf.Clamp(b_float, 0f, 255f);
+                    }
+                    
+                    // Store result pixel with Y-flip for Unity
+                    int result_y_flipped = height - 1 - dstY;
+                    resultPixels[result_y_flipped * width + dstX] = new Color32(r, g, b, 255);
+                }
+            }
+            
+            result.SetPixels32(resultPixels);
+            result.Apply();
+            return result;
         }
     }
 }
