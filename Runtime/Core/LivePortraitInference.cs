@@ -1000,11 +1000,37 @@ namespace MuseTalk.Core
             // Python: I_d = preprocess(img)
             var Id = Preprocess(img256);
             
+            // Python: collect s_d, R_d, δ_d and t_d for inference
             // Python: x_d_info = get_kp_info(models, I_d)
             var xDInfo = GetKpInfo(Id);
             
             // Python: R_d = get_rotation_matrix(x_d_info["pitch"], x_d_info["yaw"], x_d_info["roll"])
             var Rd = GetRotationMatrix(xDInfo.Pitch, xDInfo.Yaw, xDInfo.Roll);
+            
+            // CRITICAL FIX: Python restructures x_d_info to only contain specific fields with explicit float32 conversion
+            // Python: x_d_info = {
+            //     "scale": x_d_info["scale"].astype(np.float32),
+            //     "R_d": R_d.astype(np.float32),
+            //     "exp": x_d_info["exp"].astype(np.float32),
+            //     "t": x_d_info["t"].astype(np.float32),
+            // }
+            
+            // Ensure Rd is float32 equivalent (Python: R_d.astype(np.float32))
+            var RdFloat32 = EnsureFloat32Matrix(Rd);
+            
+            // Restructure xDInfo to match Python exactly - only keep the fields Python keeps
+            var restructuredXDInfo = new MotionInfo
+            {
+                Scale = EnsureFloat32Array(xDInfo.Scale),
+                Expression = EnsureFloat32Array(xDInfo.Expression),
+                Translation = EnsureFloat32Array(xDInfo.Translation),
+                RotationMatrix = RdFloat32,  // CRITICAL: Store R_d in restructured info as Python does
+                // Python doesn't keep pitch, yaw, roll, keypoints in the restructured version
+            };
+            
+            // Use restructured version for the rest of the function
+            xDInfo = restructuredXDInfo;
+            Rd = RdFloat32;
             
             if (frame0)
             {
@@ -1016,7 +1042,7 @@ namespace MuseTalk.Core
             var xD0Info = predInfo.InitialMotionInfo;
             
             // Python: R_d_0 = x_d_0_info["R_d"]
-            var Rd0 = GetRotationMatrix(xD0Info.Pitch, xD0Info.Yaw, xD0Info.Roll);
+            var Rd0 = xD0Info.RotationMatrix;  // FIXED: Access stored rotation matrix directly
             
             // Python: R_new = (R_d @ R_d_0.transpose(0, 2, 1)) @ R_s
             var Rd0Transposed = TransposeMatrix(Rd0);
@@ -2850,5 +2876,55 @@ namespace MuseTalk.Core
             // Return as array to match Python's keepdims=True behavior
             return new float[] { ratio };
         }
+        
+        /// <summary>
+        /// Ensure array is float32 precision - matches Python's .astype(np.float32)
+        /// </summary>
+        private float[] EnsureFloat32Array(float[] array)
+        {
+            if (array == null) return null;
+            
+            // Create new array to ensure float32 precision (C# float is already float32, but this ensures a copy)
+            var result = new float[array.Length];
+            Array.Copy(array, result, array.Length);
+            return result;
+        }
+        
+        /// <summary>
+        /// Ensure matrix is float32 precision - matches Python's .astype(np.float32)
+        /// </summary>
+        private float[,] EnsureFloat32Matrix(float[,] matrix)
+        {
+            if (matrix == null) return null;
+            
+            int rows = matrix.GetLength(0);
+            int cols = matrix.GetLength(1);
+            var result = new float[rows, cols];
+            
+            for (int i = 0; i < rows; i++)
+            {
+                for (int j = 0; j < cols; j++)
+                {
+                    result[i, j] = matrix[i, j];
+                }
+            }
+            
+            return result;
+        }
+    }
+
+    /// <summary>
+    /// Motion information extracted from face keypoints - matches Python kp_info structure
+    /// </summary>
+    public class MotionInfo
+    {
+        public float[] Pitch { get; set; }       // Processed pitch angles
+        public float[] Yaw { get; set; }         // Processed yaw angles  
+        public float[] Roll { get; set; }        // Processed roll angles
+        public float[] Translation { get; set; } // t: translation parameters
+        public float[] Expression { get; set; }  // exp: expression deformation
+        public float[] Scale { get; set; }       // scale: scaling factor
+        public float[] Keypoints { get; set; }   // kp: 3D keypoints
+        public float[,] RotationMatrix { get; set; } // R_d: rotation matrix (added for Python compatibility)
     }
 }
