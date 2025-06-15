@@ -1769,40 +1769,41 @@ namespace MuseTalk.Core
         /// <summary>
         /// Python: nms_boxes() - EXACT MATCH
         /// </summary>
-        private List<int> NmsBoxes(List<float[]> boxes, float iouThreshold)
+        private List<int> NmsBoxes(List<float[]> sortedBoxes, float iouThreshold)
         {
-            var keep = new List<int>();
-            
-            for (int i = 0; i < boxes.Count; i++)
+            if (sortedBoxes.Count == 0)
             {
-                bool isKeep = true;
-                
-                for (int j = 0; j < i; j++)
+                return new List<int>();
+            }
+
+            var keepIndices = new List<int>();
+            var suppressed = new bool[sortedBoxes.Count];
+
+            for (int i = 0; i < sortedBoxes.Count; i++)
+            {
+                if (suppressed[i])
                 {
-                    if (!keep.Contains(j)) continue;
-                    
-                    float iou = BbIntersectionOverUnion(boxes[i], boxes[j]);
-                    if (iou >= iouThreshold)
+                    continue;
+                }
+
+                keepIndices.Add(i);
+
+                for (int j = i + 1; j < sortedBoxes.Count; j++)
+                {
+                    if (suppressed[j])
                     {
-                        if (boxes[i][4] > boxes[j][4]) // Compare scores (index 4)
-                        {
-                            keep.Remove(j);
-                        }
-                        else
-                        {
-                            isKeep = false;
-                            break;
-                        }
+                        continue;
+                    }
+
+                    float iou = BbIntersectionOverUnion(sortedBoxes[i], sortedBoxes[j]);
+                    if (iou > iouThreshold)
+                    {
+                        suppressed[j] = true;
                     }
                 }
-                
-                if (isKeep)
-                {
-                    keep.Add(i);
-                }
             }
-            
-            return keep;
+
+            return keepIndices;
         }
         
         /// <summary>
@@ -2230,16 +2231,27 @@ namespace MuseTalk.Core
             }
             
             // Python: pre_det = np.hstack((bboxes, scores)).astype(np.float32, copy=False)
+            // Python: pre_det = pre_det[order, :]
+            // Python: kpss = kpss[order, :, :]
             var preDet = new List<float[]>();
-            for (int i = 0; i < allScores.Count; i++)
+            var kpssSorted = new List<float>();
+            foreach (var item in scoreIndices)
             {
+                int originalIndex = item.index;
+
                 var det = new float[5];
-                det[0] = allBboxes[i * 4 + 0];
-                det[1] = allBboxes[i * 4 + 1];
-                det[2] = allBboxes[i * 4 + 2];
-                det[3] = allBboxes[i * 4 + 3];
-                det[4] = allScores[i];
+                det[0] = allBboxes[originalIndex * 4 + 0];
+                det[1] = allBboxes[originalIndex * 4 + 1];
+                det[2] = allBboxes[originalIndex * 4 + 2];
+                det[3] = allBboxes[originalIndex * 4 + 3];
+                det[4] = item.score;
                 preDet.Add(det);
+
+                // Add corresponding keypoints
+                for (int k = 0; k < 10; k++)
+                {
+                    kpssSorted.Add(allKpss[originalIndex * 10 + k]);
+                }
             }
             
             // Python: keep = nms_boxes(pre_det, [1 for s in pre_det], nms_thresh)
@@ -2267,8 +2279,8 @@ namespace MuseTalk.Core
                 for (int k = 0; k < 5; k++)
                 {
                     face.Keypoints5[k] = new Vector2(
-                        allKpss[keepIdx * 10 + k * 2],
-                        allKpss[keepIdx * 10 + k * 2 + 1]
+                        kpssSorted[keepIdx * 10 + k * 2],
+                        kpssSorted[keepIdx * 10 + k * 2 + 1]
                     );
                 }
                 
@@ -2650,18 +2662,10 @@ namespace MuseTalk.Core
             };
             
             var maskOri = TransformImgExact(_maskTemplate, M, width, height);
-            
-            // Python: mask_ori = mask_ori.astype(np.float32) / 255.0
-            // Convert to float [0,1] range
-            var pixels = maskOri.GetPixels();
-            for (int i = 0; i < pixels.Length; i++)
-            {
-                // Convert from [0,255] to [0,1] and use grayscale
-                float grayValue = (pixels[i].r + pixels[i].g + pixels[i].b) / 3f;
-                pixels[i] = new Color(grayValue, grayValue, grayValue, 1f);
-            }
-            maskOri.SetPixels(pixels);
-            maskOri.Apply();
+
+            // In Unity, GetPixels() on an RGB24 texture returns float Colors in the [0,1] range, matching Python's / 255.0.
+            // The Python script does not convert to grayscale, so we remove the manual pixel loop.
+            // The warped 3-channel mask is returned directly.
             
             Debug.Log($"[PreparePasteBack] Transformed mask template: {_maskTemplate.width}x{_maskTemplate.height} -> {width}x{height}");
             
@@ -2801,8 +2805,17 @@ namespace MuseTalk.Core
             
             for (int i = 0; i < resultPixels.Length && i < warpedPixels.Length && i < oriPixels.Length && i < maskPixels.Length; i++)
             {
-                float maskValue = maskPixels[i].r; // Use red channel as mask value
-                resultPixels[i] = Color.Lerp(oriPixels[i], warpedPixels[i], maskValue);
+                // Python: result = np.clip(mask_ori * result + (1 - mask_ori) * img_ori, 0, 255)
+                // This is a per-channel blend, equivalent to Lerp(ori, warped, mask) for each channel.
+                Color warpedP = warpedPixels[i];
+                Color oriP = oriPixels[i];
+                Color maskP = maskPixels[i];
+                
+                float r = oriP.r * (1f - maskP.r) + warpedP.r * maskP.r;
+                float g = oriP.g * (1f - maskP.g) + warpedP.g * maskP.g;
+                float b = oriP.b * (1f - maskP.b) + warpedP.b * maskP.b;
+                
+                resultPixels[i] = new Color(r, g, b, 1f);
             }
             
             result.SetPixels(resultPixels);
