@@ -740,7 +740,7 @@ namespace MuseTalk.Core
         private Texture2D ConvertArrayToTexture(float[] data)
         {
             // Assume output is [1, 3, H, W] format
-            int channels = 3;
+            // int channels = 3;
             int height = 256; // Typical LivePortrait output
             int width = 256;
             

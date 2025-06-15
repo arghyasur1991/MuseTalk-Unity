@@ -680,7 +680,7 @@ namespace MuseTalk.Models
             float w = bbox.width;
             float h = bbox.height;
             Vector2 center = new Vector2(bbox.x + w * 0.5f, bbox.y + h * 0.5f);
-            float rotate = 0f;
+            // float rotate = 0f;
             float scale = 192f / (Mathf.Max(w, h) * 1.5f);
             
             // Create aligned crop
