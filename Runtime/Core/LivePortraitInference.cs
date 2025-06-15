@@ -106,7 +106,7 @@ namespace MuseTalk.Core
             {
                 InitializeModels();
                 _initialized = true;
-                Debug.Log("[LivePortraitInference] Successfully initialized");
+                // Debug.Log("[LivePortraitInference] Successfully initialized");
             }
             catch (Exception e)
             {
@@ -117,7 +117,7 @@ namespace MuseTalk.Core
         
         private void InitializeModels()
         {
-            Debug.Log("[LivePortraitInference] Initializing LivePortrait models...");
+            // Debug.Log("[LivePortraitInference] Initializing LivePortrait models...");
             
             // Load all ONNX models exactly as in Python
             _detFace = ModelUtils.LoadModel(_config, "det_10g");
@@ -156,7 +156,7 @@ namespace MuseTalk.Core
                 throw new InvalidOperationException($"Failed to initialize models: {string.Join(", ", failedModels)}");
             }
             
-            Debug.Log("[LivePortraitInference] All models initialized successfully");
+            // Debug.Log("[LivePortraitInference] All models initialized successfully");
         }
         
         /// <summary>
@@ -173,39 +173,39 @@ namespace MuseTalk.Core
                 
             try
             {
-                Debug.Log($"[LivePortraitInference] === STARTING LIVEPORTRAIT GENERATION ===");
-                Debug.Log($"[LivePortraitInference] Source: {input.SourceImage.width}x{input.SourceImage.height}, Driving frames: {input.DrivingFrames.Length}");
+                // Debug.Log($"[LivePortraitInference] === STARTING LIVEPORTRAIT GENERATION ===");
+                // Debug.Log($"[LivePortraitInference] Source: {input.SourceImage.width}x{input.SourceImage.height}, Driving frames: {input.DrivingFrames.Length}");
                 
                 // Python: img = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
                 // Python: img = img[:, :, ::-1]  # BGR -> RGB
                 // Python: src_img = src_preprocess(img)
                 var srcImg = SrcPreprocess(input.SourceImage);
-                Debug.Log("[LivePortraitInference] Source preprocessed");
+                // Debug.Log("[LivePortraitInference] Source preprocessed");
                 
                 // Python: crop_info = crop_src_image(self.models, src_img)
                 var cropInfo = CropSrcImage(srcImg);
-                Debug.Log("[LivePortraitInference] Source cropped");
+                // Debug.Log("[LivePortraitInference] Source cropped");
                 
                 // Python: img_crop_256x256 = crop_info["img_crop_256x256"]
                 // Python: I_s = preprocess(img_crop_256x256)
                 var Is = Preprocess(cropInfo.ImageCrop256x256);
-                Debug.Log("[LivePortraitInference] Source image prepared for inference");
+                // Debug.Log("[LivePortraitInference] Source image prepared for inference");
                 
                 // Python: x_s_info = get_kp_info(self.models, I_s)
                 var xSInfo = GetKpInfo(Is);
-                Debug.Log("[LivePortraitInference] Source keypoint info extracted");
+                // Debug.Log("[LivePortraitInference] Source keypoint info extracted");
                 
                 // Python: R_s = get_rotation_matrix(x_s_info["pitch"], x_s_info["yaw"], x_s_info["roll"])
                 var Rs = GetRotationMatrix(xSInfo.Pitch, xSInfo.Yaw, xSInfo.Roll);
-                Debug.Log("[LivePortraitInference] Source rotation matrix calculated");
+                // Debug.Log("[LivePortraitInference] Source rotation matrix calculated");
                 
                 // Python: f_s = extract_feature_3d(self.models, I_s)
                 var fs = ExtractFeature3d(Is);
-                Debug.Log("[LivePortraitInference] Source 3D features extracted");
+                // Debug.Log("[LivePortraitInference] Source 3D features extracted");
                 
                 // Python: x_s = transform_keypoint(x_s_info)
                 var xs = TransformKeypoint(xSInfo);
-                Debug.Log("[LivePortraitInference] Source keypoints transformed");
+                // Debug.Log("[LivePortraitInference] Source keypoints transformed");
                 
                 // Initialize prediction info - matches Python pred_info
                 var predInfo = new LivePortraitPredInfo
@@ -219,7 +219,7 @@ namespace MuseTalk.Core
                 // For debugging, only generate 1 frame
                 for (int frameId = 0; frameId < 1 /* input.DrivingFrames.Length */; frameId++)
                 {
-                    Debug.Log($"[LivePortraitInference] Processing frame {frameId + 1}/{input.DrivingFrames.Length}");
+                    // Debug.Log($"[LivePortraitInference] Processing frame {frameId + 1}/{input.DrivingFrames.Length}");
                     
                     // Python: I_p, self.pred_info = predict(frame_id, self.models, x_s_info, R_s, f_s, x_s, img_rgb, self.pred_info)
                     var predictedFrame = Predict(frameId, xSInfo, Rs, fs, xs, input.DrivingFrames[frameId], predInfo, input.UseComposite, srcImg, cropInfo);
@@ -236,7 +236,7 @@ namespace MuseTalk.Core
                     GeneratedFrames = generatedFrames
                 };
                 
-                Debug.Log($"[LivePortraitInference] === GENERATION COMPLETED - {generatedFrames.Count} frames ===");
+                // Debug.Log($"[LivePortraitInference] === GENERATION COMPLETED - {generatedFrames.Count} frames ===");
                 return result;
             }
             catch (Exception e)
@@ -330,7 +330,7 @@ namespace MuseTalk.Core
             // Python: elif len(src_face) > 1: print(f"More than one face detected in the image, only pick one face.")
             if (srcFaces.Count > 1)
             {
-                Debug.LogWarning("More than one face detected in the image, only pick one face.");
+                // Debug.LogWarning("More than one face detected in the image, only pick one face.");
             }
             
             // Python: src_face = src_face[0]
@@ -363,7 +363,7 @@ namespace MuseTalk.Core
         /// </summary>
         private List<FaceDetectionResult> FaceAnalysis(Texture2D img)
         {
-            Debug.Log($"[FaceAnalysis] Starting face detection on image {img.width}x{img.height}");
+            // Debug.Log($"[FaceAnalysis] Starting face detection on image {img.width}x{img.height}");
             
             // Python: input_size = 512
             const int inputSize = 512;
@@ -428,19 +428,19 @@ namespace MuseTalk.Core
             // Python: output = det_face.run(None, {"input.1": det_img})
             // Use the actual input name from the model metadata
             string inputName = _detFace.InputMetadata.Keys.First();
-            Debug.Log($"[FaceAnalysis] Using face detection input name: {inputName}");
+            // Debug.Log($"[FaceAnalysis] Using face detection input name: {inputName}");
             
             var inputs = new List<NamedOnnxValue>
             {
                 NamedOnnxValue.CreateFromTensor(inputName, inputTensor)
             };
             
-            Debug.Log($"[FaceAnalysis] Running ONNX inference with tensor shape: [{inputTensor.Dimensions[0]}x{inputTensor.Dimensions[1]}x{inputTensor.Dimensions[2]}x{inputTensor.Dimensions[3]}]");
+            // Debug.Log($"[FaceAnalysis] Running ONNX inference with tensor shape: [{inputTensor.Dimensions[0]}x{inputTensor.Dimensions[1]}x{inputTensor.Dimensions[2]}x{inputTensor.Dimensions[3]}]");
             
             using var results = _detFace.Run(inputs);
             var outputs = results.ToArray();
             
-            Debug.Log($"[FaceAnalysis] Got {outputs.Length} outputs from face detection model");
+            // Debug.Log($"[FaceAnalysis] Got {outputs.Length} outputs from face detection model");
             
             // Process detection results exactly as in Python
             var faces = ProcessDetectionResults(outputs, detScale);
@@ -465,7 +465,7 @@ namespace MuseTalk.Core
             UnityEngine.Object.DestroyImmediate(resizedImg);
             UnityEngine.Object.DestroyImmediate(detImg);
             
-            Debug.Log($"[FaceAnalysis] Completed face detection: found {finalFaces.Count} faces");
+            // Debug.Log($"[FaceAnalysis] Completed face detection: found {finalFaces.Count} faces");
             
             return finalFaces;
         }
@@ -591,9 +591,21 @@ namespace MuseTalk.Core
             // Python: img = np.expand_dims(img, axis=0)
             // Python: img = img.astype(np.float32)
             
+            Debug.Log($"[DEBUG_PREPROCESS] Input shape: {img.width}x{img.height}, format: {img.format}");
+            
             var pixels = img.GetPixels();
             int height = img.height;
             int width = img.width;
+            
+            // Calculate input range
+            float minVal = float.MaxValue, maxVal = float.MinValue;
+            foreach (var pixel in pixels)
+            {
+                minVal = Mathf.Min(minVal, Mathf.Min(pixel.r, Mathf.Min(pixel.g, pixel.b)));
+                maxVal = Mathf.Max(maxVal, Mathf.Max(pixel.r, Mathf.Max(pixel.g, pixel.b)));
+            }
+            Debug.Log($"[DEBUG_PREPROCESS] Input range: [{minVal:F3}, {maxVal:F3}]");
+            Debug.Log($"[DEBUG_PREPROCESS] After normalize: [0.000, 1.000]"); // Unity pixels are already [0,1]
             
             var data = new float[1 * 3 * height * width];
             
@@ -614,6 +626,10 @@ namespace MuseTalk.Core
                 }
             }
             
+            Debug.Log($"[DEBUG_PREPROCESS] Final tensor shape: 1x3x{height}x{width}");
+            float dataMin = data.Min(), dataMax = data.Max();
+            Debug.Log($"[DEBUG_PREPROCESS] Final tensor range: [{dataMin:F3}, {dataMax:F3}]");
+            
             return data;
         }
         
@@ -622,6 +638,10 @@ namespace MuseTalk.Core
         /// </summary>
         private MotionInfo GetKpInfo(float[] preprocessedData)
         {
+            Debug.Log($"[DEBUG_GET_KP_INFO] Input tensor shape: 1x3x256x256");
+            float dataMin = preprocessedData.Min(), dataMax = preprocessedData.Max();
+            Debug.Log($"[DEBUG_GET_KP_INFO] Input tensor range: [{dataMin:F3}, {dataMax:F3}]");
+            
             // Convert to tensor
             var inputTensor = new DenseTensor<float>(preprocessedData, new[] { 1, 3, 256, 256 });
             
@@ -629,7 +649,7 @@ namespace MuseTalk.Core
             // Python: output = net.run(None, {"img": x})
             // Use the actual input name from the model metadata
             string inputName = _motionExtractor.InputMetadata.Keys.First();
-            Debug.Log($"[GetKpInfo] Using motion extractor input name: {inputName}");
+            // Debug.Log($"[GetKpInfo] Using motion extractor input name: {inputName}");
             
             var inputs = new List<NamedOnnxValue>
             {
@@ -648,12 +668,21 @@ namespace MuseTalk.Core
             var scale = outputs[5].AsTensor<float>().ToArray();
             var kp = outputs[6].AsTensor<float>().ToArray();
             
+            Debug.Log($"[DEBUG_GET_KP_INFO] Raw outputs - pitch: {outputs[0].AsTensor<float>().Dimensions.ToArray().Length}D, yaw: {outputs[1].AsTensor<float>().Dimensions.ToArray().Length}D, roll: {outputs[2].AsTensor<float>().Dimensions.ToArray().Length}D");
+            Debug.Log($"[DEBUG_GET_KP_INFO] Raw outputs - t: {outputs[3].AsTensor<float>().Dimensions.ToArray().Length}D, exp: {outputs[4].AsTensor<float>().Dimensions.ToArray().Length}D, scale: {outputs[5].AsTensor<float>().Dimensions.ToArray().Length}D, kp: {outputs[6].AsTensor<float>().Dimensions.ToArray().Length}D");
+            
             // Python: pred = softmax(kp_info["pitch"], axis=1)
             // Python: degree = np.sum(pred * np.arange(66), axis=1) * 3 - 97.5
             // Python: kp_info["pitch"] = degree[:, None]  # Bx1
             var processedPitch = ProcessAngleSoftmax(pitch);
             var processedYaw = ProcessAngleSoftmax(yaw);
             var processedRoll = ProcessAngleSoftmax(roll);
+            
+            Debug.Log($"[DEBUG_GET_KP_INFO] Processed - pitch: [{string.Join(", ", processedPitch.Select(x => x.ToString("F3")))}], yaw: [{string.Join(", ", processedYaw.Select(x => x.ToString("F3")))}], roll: [{string.Join(", ", processedRoll.Select(x => x.ToString("F3")))}]");
+            Debug.Log($"[DEBUG_GET_KP_INFO] Processed - t: [{string.Join(", ", t.Select(x => x.ToString("F3")))}], scale: [{string.Join(", ", scale.Select(x => x.ToString("F3")))}]");
+            Debug.Log($"[DEBUG_GET_KP_INFO] Processed - kp shape: 1x{kp.Length/3}x3, exp shape: 1x{exp.Length/3}x3");
+            Debug.Log($"[DEBUG_GET_KP_INFO] Processed - kp range: [{kp.Min():F3}, {kp.Max():F3}]");
+            Debug.Log($"[DEBUG_GET_KP_INFO] Processed - exp range: [{exp.Min():F3}, {exp.Max():F3}]");
             
             // Python: bs = kp_info["kp"].shape[0]
             // Python: kp_info["kp"] = kp_info["kp"].reshape(bs, -1, 3)  # BxNx3
@@ -676,13 +705,17 @@ namespace MuseTalk.Core
         /// </summary>
         private float[] ExtractFeature3d(float[] preprocessedData)
         {
+            Debug.Log($"[DEBUG_EXTRACT_FEATURE_3D] Input tensor shape: 1x3x256x256");
+            float dataMin = preprocessedData.Min(), dataMax = preprocessedData.Max();
+            Debug.Log($"[DEBUG_EXTRACT_FEATURE_3D] Input tensor range: [{dataMin:F3}, {dataMax:F3}]");
+            
             var inputTensor = new DenseTensor<float>(preprocessedData, new[] { 1, 3, 256, 256 });
             
             // Python: net = models["appearance_feature_extractor"]
             // Python: output = net.run(None, {"img": x})
             // Use the actual input name from the model metadata
             string inputName = _appearanceFeatureExtractor.InputMetadata.Keys.First();
-            Debug.Log($"[ExtractFeature3d] Using appearance extractor input name: {inputName}");
+            // Debug.Log($"[ExtractFeature3d] Using appearance extractor input name: {inputName}");
             
             var inputs = new List<NamedOnnxValue>
             {
@@ -691,6 +724,12 @@ namespace MuseTalk.Core
             
             using var results = _appearanceFeatureExtractor.Run(inputs);
             var output = results.First().AsTensor<float>().ToArray();
+            
+            var outputTensor = results.First().AsTensor<float>();
+            var outputShape = outputTensor.Dimensions.ToArray();
+            Debug.Log($"[DEBUG_EXTRACT_FEATURE_3D] Output shape: {string.Join("x", outputShape)}");
+            float outputMin = output.Min(), outputMax = output.Max();
+            Debug.Log($"[DEBUG_EXTRACT_FEATURE_3D] Output range: [{outputMin:F3}, {outputMax:F3}]");
             
             // Python: f_s = output[0]
             // Python: f_s = f_s.astype(np.float32)
@@ -785,7 +824,7 @@ namespace MuseTalk.Core
         private Texture2D Predict(int frameId, MotionInfo xSInfo, float[,] Rs, float[] fs, float[] xs, 
             Texture2D img, LivePortraitPredInfo predInfo, bool useComposite, Texture2D srcImg, CropInfo cropInfo)
         {
-            Debug.Log($"[DEBUG] === PREDICT FRAME {frameId} START ===");
+            // Debug.Log($"[DEBUG] === PREDICT FRAME {frameId} START ===");
             
             // Python: frame_0 = pred_info['lmk'] is None
             bool frame0 = predInfo.Landmarks == null;
@@ -803,7 +842,7 @@ namespace MuseTalk.Core
                 
                 if (srcFaces.Count > 1)
                 {
-                    Debug.LogWarning("More than one face detected in the driving frame, only pick one face.");
+                    // Debug.LogWarning("More than one face detected in the driving frame, only pick one face.");
                 }
                 
                 // Python: src_face = src_face[0]
@@ -880,10 +919,10 @@ namespace MuseTalk.Core
             var xDNew = CalculateNewKeypoints(xCs, RNew, deltaNew, scaleNew, tNew);
             
             // Debug: Check keypoint transformation values
-            Debug.Log($"[Predict] xCs range: [{xCs.Min():F3}, {xCs.Max():F3}]");
-            Debug.Log($"[Predict] xDNew range: [{xDNew.Min():F3}, {xDNew.Max():F3}]");
-            Debug.Log($"[Predict] scaleNew: [{string.Join(", ", scaleNew.Select(x => x.ToString("F3")))}]");
-            Debug.Log($"[Predict] tNew: [{string.Join(", ", tNew.Select(x => x.ToString("F3")))}]");
+            Debug.Log($"[DEBUG_PREDICT] xCs range: [{xCs.Min():F3}, {xCs.Max():F3}]");
+            Debug.Log($"[DEBUG_PREDICT] xDNew range: [{xDNew.Min():F3}, {xDNew.Max():F3}]");
+            Debug.Log($"[DEBUG_PREDICT] scaleNew: [{string.Join(", ", scaleNew.Select(x => x.ToString("F3")))}]");
+            Debug.Log($"[DEBUG_PREDICT] tNew: [{string.Join(", ", tNew.Select(x => x.ToString("F3")))}]");
             
             // Python: x_d_new = stitching(models, x_s, x_d_new)
             xDNew = Stitching(xs, xDNew);
@@ -891,11 +930,18 @@ namespace MuseTalk.Core
             // Python: out = warping_spade(models, f_s, x_s, x_d_new)
             var output = WarpingSpade(fs, xs, xDNew);
             
+            Debug.Log($"[DEBUG_PREDICT] Raw warping output shape: 1x3x512x512");
+            float outputMin = output.Min(), outputMax = output.Max();
+            Debug.Log($"[DEBUG_PREDICT] Raw warping output range: [{outputMin:F3}, {outputMax:F3}]");
+            
             // Python: out = out.transpose(0, 2, 3, 1)  # 1x3xHxW -> 1xHxWx3
             // Python: out = np.clip(out, 0, 1)  # clip to 0~1
             // Python: out = (out * 255).astype(np.uint8)  # 0~1 -> 0~255
             // Python: I_p = out[0]
             var resultTexture = ConvertOutputToTexture(output);
+            
+            Debug.Log($"[DEBUG_PREDICT] Final output shape: {resultTexture.width}x{resultTexture.height}");
+            Debug.Log($"[DEBUG_PREDICT] Final output range: [0, 255]"); // After conversion to texture
             
             UnityEngine.Object.DestroyImmediate(img256);
             
@@ -925,7 +971,7 @@ namespace MuseTalk.Core
             // Python: output = net.run(None, {"input": feat})
             // Use actual input name from model metadata
             string inputName = _stitching.InputMetadata.Keys.First();
-            Debug.Log($"[Stitching] Using stitching input name: {inputName}");
+            // Debug.Log($"[Stitching] Using stitching input name: {inputName}");
             
             var inputs = new List<NamedOnnxValue>
             {
@@ -971,18 +1017,19 @@ namespace MuseTalk.Core
             var kpSourceTensor = new DenseTensor<float>(kpSource, new[] { 1, kpSource.Length / 3, 3 });
             var kpDrivingTensor = new DenseTensor<float>(kpDriving, new[] { 1, kpDriving.Length / 3, 3 });
             
-            Debug.Log($"[WarpingSpade] Input shapes - feature3d: {feature3DTensor.Dimensions[0]}x{feature3DTensor.Dimensions[1]}x{feature3DTensor.Dimensions[2]}x{feature3DTensor.Dimensions[3]}x{feature3DTensor.Dimensions[4]}, kpSource: {kpSourceTensor.Dimensions[0]}x{kpSourceTensor.Dimensions[1]}x{kpSourceTensor.Dimensions[2]}, kpDriving: {kpDrivingTensor.Dimensions[0]}x{kpDrivingTensor.Dimensions[1]}x{kpDrivingTensor.Dimensions[2]}");
+            // Debug.Log($"[WarpingSpade] Input shapes - feature3d: {feature3DTensor.Dimensions[0]}x{feature3DTensor.Dimensions[1]}x{feature3DTensor.Dimensions[2]}x{feature3DTensor.Dimensions[3]}x{feature3DTensor.Dimensions[4]}, kpSource: {kpSourceTensor.Dimensions[0]}x{kpSourceTensor.Dimensions[1]}x{kpSourceTensor.Dimensions[2]}, kpDriving: {kpDrivingTensor.Dimensions[0]}x{kpDrivingTensor.Dimensions[1]}x{kpDrivingTensor.Dimensions[2]}");
             
-            // Debug: Check input value ranges
-            Debug.Log($"[WarpingSpade] Feature3D range: [{feature3d.Min():F3}, {feature3d.Max():F3}]");
-            Debug.Log($"[WarpingSpade] KpSource range: [{kpSource.Min():F3}, {kpSource.Max():F3}]");
-            Debug.Log($"[WarpingSpade] KpDriving range: [{kpDriving.Min():F3}, {kpDriving.Max():F3}]");
+            // Debug: Check input value ranges (moved to DEBUG_WARPING_SPADE)
+            Debug.Log($"[DEBUG_WARPING_SPADE] Input shapes - feature_3d: {feature3DTensor.Dimensions[0]}x{feature3DTensor.Dimensions[1]}x{feature3DTensor.Dimensions[2]}x{feature3DTensor.Dimensions[3]}x{feature3DTensor.Dimensions[4]}, kp_source: {kpSourceTensor.Dimensions[0]}x{kpSourceTensor.Dimensions[1]}x{kpSourceTensor.Dimensions[2]}, kp_driving: {kpDrivingTensor.Dimensions[0]}x{kpDrivingTensor.Dimensions[1]}x{kpDrivingTensor.Dimensions[2]}");
+            Debug.Log($"[DEBUG_WARPING_SPADE] Feature3D range: [{feature3d.Min():F3}, {feature3d.Max():F3}]");
+            Debug.Log($"[DEBUG_WARPING_SPADE] KpSource range: [{kpSource.Min():F3}, {kpSource.Max():F3}]");
+            Debug.Log($"[DEBUG_WARPING_SPADE] KpDriving range: [{kpDriving.Min():F3}, {kpDriving.Max():F3}]");
             
             // Python: net = models["warping_spade"]
             // Python: output = net.run(None, {"feature_3d": feature_3d, "kp_driving": kp_driving, "kp_source": kp_source})
             // Use actual input names from model metadata
             var inputNames = _warpingSpade.InputMetadata.Keys.ToArray();
-            Debug.Log($"[WarpingSpade] Available input names: {string.Join(", ", inputNames)}");
+            // Debug.Log($"[WarpingSpade] Available input names: {string.Join(", ", inputNames)}");
             
             var inputs = new List<NamedOnnxValue>
             {
@@ -994,15 +1041,14 @@ namespace MuseTalk.Core
             using var results = _warpingSpade.Run(inputs);
             var outputs = results.ToArray();
             
-            Debug.Log($"[WarpingSpade] Got {outputs.Length} outputs from warping_spade model");
-            for (int i = 0; i < outputs.Length; i++)
-            {
-                var shape = outputs[i].AsTensor<float>().Dimensions;
-                Debug.Log($"[WarpingSpade] Output {i}: {string.Join("x", shape.ToArray())}");
-            }
+            // Debug.Log($"[WarpingSpade] Got {outputs.Length} outputs from warping_spade model");
+            var outputShape = outputs[0].AsTensor<float>().Dimensions.ToArray();
+            Debug.Log($"[DEBUG_WARPING_SPADE] Output shape: {string.Join("x", outputShape)}");
             
             // Python: return output[0] - take the first output (warped_feature)
             var output = outputs[0].AsTensor<float>().ToArray();
+            
+            Debug.Log($"[DEBUG_WARPING_SPADE] Output range: [{output.Min():F3}, {output.Max():F3}]");
             
             return output;
         }
@@ -1792,7 +1838,7 @@ namespace MuseTalk.Core
         
         private List<FaceDetectionResult> ProcessDetectionResults(NamedOnnxValue[] outputs, float detScale)
         {
-            Debug.Log($"[ProcessDetectionResults] Processing {outputs.Length} outputs, detScale={detScale}");
+            // Debug.Log($"[ProcessDetectionResults] Processing {outputs.Length} outputs, detScale={detScale}");
             
             // Python: process detection results exactly as in face_analysis function
             var scoresList = new List<float[]>();
@@ -1885,11 +1931,11 @@ namespace MuseTalk.Core
                     }
                 }
                 
-                Debug.Log($"[ProcessDetectionResults] Stride {stride}: {scores.Length} scores, {posInds.Count} above threshold {detThresh}");
-                if (scores.Length > 0)
-                {
-                    Debug.Log($"[ProcessDetectionResults] Stride {stride}: Score range [{scores.Min():F3}, {scores.Max():F3}]");
-                }
+                // Debug.Log($"[ProcessDetectionResults] Stride {stride}: {scores.Length} scores, {posInds.Count} above threshold {detThresh}");
+                // if (scores.Length > 0)
+                // {
+                //     Debug.Log($"[ProcessDetectionResults] Stride {stride}: Score range [{scores.Min():F3}, {scores.Max():F3}]");
+                // }
                 
                 if (posInds.Count > 0)
                 {
@@ -2229,7 +2275,7 @@ namespace MuseTalk.Core
                 _insightFaceHelper?.Dispose();
                 
                 _disposed = true;
-                Debug.Log("[LivePortraitInference] Disposed successfully");
+                // Debug.Log("[LivePortraitInference] Disposed successfully");
             }
             catch (Exception e)
             {
