@@ -244,17 +244,20 @@ namespace MuseTalk.Core
                 // Python: crop_info = crop_src_image(self.models, src_img)
                 var cropInfo = CropSrcImage(srcImg);
                 // generatedFrames.Add(cropInfo.ImageCrop);
-                generatedFrames.Add(_debugImage);
-                return new LivePortraitResult
-                {
-                    Success = true,
-                    GeneratedFrames = generatedFrames
-                };
+                
                 // Debug.Log("[LivePortraitInference] Source cropped");
                 
                 // Python: img_crop_256x256 = crop_info["img_crop_256x256"]
                 // Python: I_s = preprocess(img_crop_256x256)
                 var Is = Preprocess(cropInfo.ImageCrop256x256);
+
+                _debugImage = cropInfo.ImageCrop256x256;
+                // generatedFrames.Add(_debugImage);
+                // return new LivePortraitResult
+                // {
+                //     Success = true,
+                //     GeneratedFrames = generatedFrames
+                // };
                 // Debug.Log("[LivePortraitInference] Source image prepared for inference");
                 
                 // Python: x_s_info = get_kp_info(self.models, I_s)
@@ -276,9 +279,16 @@ namespace MuseTalk.Core
                 // Python: prepare for pasteback
                 // Python: mask_ori = prepare_paste_back(self.mask_crop, crop_info["M_c2o"], dsize=(src_img.shape[1], src_img.shape[0]))
                 var maskOri = PreparePasteBack(cropInfo.Transform, srcImg.width, srcImg.height);
+                // _debugImage = maskOri;
+                // generatedFrames.Add(_debugImage);
+                // return new LivePortraitResult
+                // {
+                //     Success = true,
+                //     GeneratedFrames = generatedFrames
+                // };
 
                 // For debugging, only generate 1 frame - matches Python: if frame_id > 0: break
-                for (int frameId = 0; frameId < 1 /* input.DrivingFrames.Length */; frameId++)
+                for (int frameId = 0; frameId < input.DrivingFrames.Length; frameId++)
                 {
                     // Debug.Log($"[LivePortraitInference] Processing frame {frameId + 1}/{input.DrivingFrames.Length}");
                     
@@ -292,6 +302,8 @@ namespace MuseTalk.Core
                     // Python: if self.flg_composite: driving_img = concat_frame(img_rgb, img_crop_256x256, I_p)
                     // Python: else: driving_img = paste_back(I_p, crop_info["M_c2o"], src_img, mask_ori)
                     Texture2D drivingImg;
+                    // generatedFrames.Add(Ip);
+                    
                     if (_flgComposite)
                     {
                         drivingImg = ConcatFrame(imgRgb, cropInfo.ImageCrop256x256, Ip);
@@ -2894,7 +2906,7 @@ namespace MuseTalk.Core
                     }
                     
                     // Store result pixel
-                    int result_idx = dstY * width + dstX;
+                    int result_idx = (height - 1 - dstY) * width + dstX;
                     resultPixels[result_idx] = new Color32(r, g, b, 255);
                 }
             }
