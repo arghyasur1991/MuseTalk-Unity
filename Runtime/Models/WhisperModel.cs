@@ -79,8 +79,8 @@ namespace MuseTalk.Models
             var inputMeta = _session.InputMetadata;
             var outputMeta = _session.OutputMetadata;
             
-            Debug.Log($"[WhisperModel] Inputs: {string.Join(", ", inputMeta.Keys)}");
-            Debug.Log($"[WhisperModel] Outputs: {string.Join(", ", outputMeta.Keys)}");
+            // Debug.Log($"[WhisperModel] Inputs: {string.Join(", ", inputMeta.Keys)}");
+            // Debug.Log($"[WhisperModel] Outputs: {string.Join(", ", outputMeta.Keys)}");
             
             if (!inputMeta.ContainsKey(INPUT_NAME))
             {

@@ -31,7 +31,7 @@ namespace MuseTalk.Utils
 
             if (config.UseINT8)
             {
-                Debug.Log("[MuseTalkInference] Enabling INT8 quantization optimizations");
+                // Debug.Log("[MuseTalkInference] Enabling INT8 quantization optimizations");
                 // INT8 models work best with all optimizations enabled
                 options.AddSessionConfigEntry("session.enable_memory_arena_shrinkage", "cpu:0;");
             }
@@ -67,7 +67,7 @@ namespace MuseTalk.Utils
                 }
                 catch (Exception)
                 {
-                    Debug.Log("[MuseTalkInference] Using CPU execution provider (GPU not available)");
+                    // Debug.Log("[MuseTalkInference] Using CPU execution provider (GPU not available)");
                 }
             }
             
@@ -85,10 +85,10 @@ namespace MuseTalk.Utils
                 modelName == "1k3d68"
             )
             {
-                sessionOptions.AppendExecutionProvider_CoreML();
+                // sessionOptions.AppendExecutionProvider_CoreML();
             }
             var model = new InferenceSession(modelPath, sessionOptions);
-            Debug.Log($"[MuseTalkInference] Loaded {modelName} from {modelPath}");
+            // Debug.Log($"[MuseTalkInference] Loaded {modelName} from {modelPath}");
             return model;
         }
 
@@ -98,11 +98,18 @@ namespace MuseTalk.Utils
         /// </summary>
         public static string GetModelPath(MuseTalkConfig config, string baseName)
         {
-            // SPECIAL CASE: Whisper and Face Parsing models don't use version suffix
+            // SPECIAL CASE: Models that don't use version suffix
             bool isVersionIndependent = baseName.Contains("whisper_encoder") || 
                                         baseName.Contains("face_parsing") ||
                                         baseName.Contains("det_10g") ||
-                                        baseName.Contains("1k3d68");
+                                        baseName.Contains("1k3d68") ||
+                                        // LivePortrait models are version independent
+                                        baseName == "appearance_feature_extractor" ||
+                                        baseName == "motion_extractor" ||
+                                        baseName == "warping_spade" ||
+                                        baseName == "stitching" ||
+                                        baseName == "landmark" ||
+                                        baseName == "2d106det";
             
             string baseModelPath;
             if (isVersionIndependent)
@@ -132,14 +139,77 @@ namespace MuseTalk.Utils
                 
                 if (File.Exists(int8ModelPath))
                 {
-                    Debug.Log($"[MuseTalkInference] Using INT8 model (performance optimization): {int8ModelPath}");
+                    // Debug.Log($"[MuseTalkInference] Using INT8 model (performance optimization): {int8ModelPath}");
                     return int8ModelPath;
                 }
-                Debug.LogWarning($"[MuseTalkInference] INT8 model not found: {int8ModelPath}, falling back to FP32");
+                // Debug.LogWarning($"[MuseTalkInference] INT8 model not found: {int8ModelPath}, falling back to FP32");
             }
             
-            Debug.Log($"[MuseTalkInference] Using FP32 model: {baseModelPath}");
+            // Debug.Log($"[MuseTalkInference] Using FP32 model: {baseModelPath}");
             return baseModelPath;
+        }
+
+        /// <summary>
+        /// Load mask template texture from Resources or StreamingAssets
+        /// Matches Python: mask_crop = cv2.imread('mask_template.png')
+        /// </summary>
+        public static Texture2D LoadMaskTemplate(MuseTalkConfig config)
+        {
+            try
+            {
+                // First try to load from Resources
+                var maskTexture = Resources.Load<Texture2D>("mask_template");
+                if (maskTexture != null)
+                {
+                    Debug.Log("[ModelUtils] Loaded mask template from Resources");
+                    return maskTexture;
+                }
+                
+                // Try to load from StreamingAssets
+                string maskPath = System.IO.Path.Combine(Application.streamingAssetsPath, "mask_template.png");
+                if (System.IO.File.Exists(maskPath))
+                {
+                    byte[] fileData = System.IO.File.ReadAllBytes(maskPath);
+                    var texture = new Texture2D(2, 2);
+                    if (texture.LoadImage(fileData))
+                    {
+                        Debug.Log("[ModelUtils] Loaded mask template from StreamingAssets");
+                        return texture;
+                    }
+                    else
+                    {
+                        UnityEngine.Object.DestroyImmediate(texture);
+                    }
+                }
+                
+                // Try to load from config model path
+                if (!string.IsNullOrEmpty(config?.ModelPath))
+                {
+                    string configMaskPath = System.IO.Path.Combine(config.ModelPath, "mask_template.png");
+                    if (System.IO.File.Exists(configMaskPath))
+                    {
+                        byte[] fileData = System.IO.File.ReadAllBytes(configMaskPath);
+                        var texture = new Texture2D(2, 2);
+                        if (texture.LoadImage(fileData))
+                        {
+                            Debug.Log($"[ModelUtils] Loaded mask template from config path: {configMaskPath}");
+                            return texture;
+                        }
+                        else
+                        {
+                            UnityEngine.Object.DestroyImmediate(texture);
+                        }
+                    }
+                }
+                
+                Debug.LogWarning("[ModelUtils] Could not find mask_template.png in Resources, StreamingAssets, or config path. Will use default mask.");
+                return null;
+            }
+            catch (System.Exception e)
+            {
+                Debug.LogError($"[ModelUtils] Error loading mask template: {e.Message}");
+                return null;
+            }
         }
     }
 } 
