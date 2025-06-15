@@ -1278,10 +1278,15 @@ namespace MuseTalk.Core
         
         private CropInfo CropImage(Texture2D img, Vector2[] lmk, int dsize, float scale, float vyRatio)
         {
+            for (int i = 0; i < lmk.Length; i++)
+            {
+                // Debug.Log($"[DEBUG_CROP_IMAGE] lmk[{i}]: {lmk[i]}");
+                // proved correct
+            }
             // Python: crop_image(img, pts: np.ndarray, dsize=224, scale=1.5, vy_ratio=-0.1) - EXACT MATCH
-            var (MInv, M) = EstimateSimilarTransformFromPts(lmk, dsize, scale, 0f, vyRatio, true);
+            var (MInv, _) = EstimateSimilarTransformFromPts(lmk, dsize, scale, 0f, vyRatio, true);
             
-            var imgCrop = TransformImg(img, MInv, dsize);
+            var imgCrop = TransformImgExact(img, MInv, dsize);
             var ptCrop = TransformPts(lmk, MInv);
             
             // Python: M_o2c = np.vstack([M_INV, np.array([0, 0, 1], dtype=np.float32)])
@@ -1422,6 +1427,7 @@ namespace MuseTalk.Core
                 pt2 = new Vector2[] { ptLeftEye, ptRightEye };
             }
             
+            Debug.Log($"[DEBUG_PARSE_PT2_FROM_PT106] pt2: {pt2[0]}, {pt2[1]}");
             return pt2;
         }
         
@@ -1441,6 +1447,7 @@ namespace MuseTalk.Core
                 pt2[1] = new Vector2(pt2[0].x - v.y, pt2[0].y + v.x);
             }
             
+            Debug.Log($"[DEBUG_PARSE_PT2_FROM_PT_X] pt2: {pt2[0]}, {pt2[1]}");
             return pt2;
         }
         
@@ -1467,15 +1474,19 @@ namespace MuseTalk.Core
             }
             
             // Python: ux = np.array((uy[1], -uy[0]), dtype=np.float32)
-            Vector2 ux = new Vector2(uy.y, -uy.x);
+            Vector2 ux = new(uy.y, -uy.x);
+
+            Debug.Log($"[DEBUG_PARSE_RECT_FROM_LANDMARK] ux: {ux}, uy: {uy}");
             
             // Python: angle = acos(ux[0])
             // Python: if ux[1] < 0: angle = -angle
-            float angle = Mathf.Acos(Mathf.Clamp(ux.x, -1f, 1f));
+            float angle = Mathf.Acos(ux.x);
+            // float angle = Mathf.Acos(Mathf.Clamp(ux.x, -1f, 1f));
             if (ux.y < 0)
             {
                 angle = -angle;
             }
+            Debug.Log($"[DEBUG_PARSE_RECT_FROM_LANDMARK] angle: {angle}");
             
             // Python: M = np.array([ux, uy])
             float[,] M = new float[,] { { ux.x, ux.y }, { uy.x, uy.y } };
@@ -1501,8 +1512,8 @@ namespace MuseTalk.Core
             
             // Python: lt_pt = np.min(rpts, axis=0)
             // Python: rb_pt = np.max(rpts, axis=0)
-            Vector2 ltPt = new Vector2(float.MaxValue, float.MaxValue);
-            Vector2 rbPt = new Vector2(float.MinValue, float.MinValue);
+            Vector2 ltPt = new(float.MaxValue, float.MaxValue);
+            Vector2 rbPt = new(float.MinValue, float.MinValue);
             
             for (int i = 0; i < rpts.Length; i++)
             {
@@ -1538,7 +1549,7 @@ namespace MuseTalk.Core
             // Python: if use_deg_flag: angle = degrees(angle)
             if (useDegFlag)
             {
-                angle = angle * Mathf.Rad2Deg;
+                angle *= Mathf.Rad2Deg;
             }
             
             return (center, size, angle);
@@ -1551,10 +1562,13 @@ namespace MuseTalk.Core
         private (float[,], float[,]) EstimateSimilarTransformFromPts(Vector2[] pts, int dsize, float scale, float vxRatio, float vyRatio, bool flagDoRot)
         {
             var (center, size, angle) = ParseRectFromLandmark(pts, scale, true, vxRatio, vyRatio, false);
+
+            Debug.Log($"[DEBUG_ESTIMATE_SIMILAR_TRANSFORM_FROM_PTS] center: {center}, size: {size}, angle: {angle}");
             
             float s = dsize / size.x;  // Python: s = dsize / size[0]
-            Vector2 tgtCenter = new Vector2(dsize / 2f, dsize / 2f);  // Python: tgt_center = np.array([dsize / 2, dsize / 2])
+            Vector2 tgtCenter = new(dsize / 2f, dsize / 2f);  // Python: tgt_center = np.array([dsize / 2, dsize / 2])
             
+            Debug.Log($"[DEBUG_ESTIMATE_SIMILAR_TRANSFORM_FROM_PTS] s: {s}, tgtCenter: {tgtCenter}, flagDoRot: {flagDoRot}");
             float[,] MInv;
             
             if (flagDoRot)
@@ -1562,6 +1576,7 @@ namespace MuseTalk.Core
                 // Python: costheta, sintheta = cos(angle), sin(angle)
                 float costheta = Mathf.Cos(angle);
                 float sintheta = Mathf.Sin(angle);
+                Debug.Log($"[DEBUG_ESTIMATE_SIMILAR_TRANSFORM_FROM_PTS] costheta: {costheta}, sintheta: {sintheta}");
                 float cx = center.x, cy = center.y;  // Python: cx, cy = center[0], center[1]
                 float tcx = tgtCenter.x, tcy = tgtCenter.y;  // Python: tcx, tcy = tgt_center[0], tgt_center[1]
                 
@@ -1595,7 +1610,9 @@ namespace MuseTalk.Core
                 { M[0, 0], M[0, 1], M[0, 2] },
                 { M[1, 0], M[1, 1], M[1, 2] }
             };
-            
+
+            Debug.Log($"[DEBUG_ESTIMATE_SIMILAR_TRANSFORM_FROM_PTS] M: {M[0, 0]}, {M[0, 1]}, {M[0, 2]}, {M[1, 0]}, {M[1, 1]}, {M[1, 2]}");
+            Debug.Log($"[DEBUG_ESTIMATE_SIMILAR_TRANSFORM_FROM_PTS] MInv: {MInv[0, 0]}, {MInv[0, 1]}, {MInv[0, 2]}, {MInv[1, 0]}, {MInv[1, 1]}, {MInv[1, 2]}");
             // Python: return M_INV, M[:2, ...]
             return (MInv, M2x3);
         }
@@ -1636,81 +1653,6 @@ namespace MuseTalk.Core
                     result[j, i] = matrix[i, j];
                 }
             }
-            return result;
-        }
-        
-        /// <summary>
-        /// Python: _transform_img() - EXACT MATCH
-        /// Conduct similarity or affine transformation to the image
-        /// CRITICAL: This must match OpenCV's cv2.warpAffine exactly
-        /// </summary>
-        private Texture2D TransformImg(Texture2D img, float[,] M, int dsize)
-        {
-            // Create result texture
-            var result = new Texture2D(dsize, dsize, TextureFormat.RGB24, false);
-            var resultPixels = new Color32[dsize * dsize];
-            
-            // Get source pixels as Color (not Color32) for better precision
-            var srcPixels = img.GetPixels();
-            int srcWidth = img.width;
-            int srcHeight = img.height;
-            
-            // Transform each pixel using inverse mapping - EXACTLY like OpenCV
-            for (int y = 0; y < dsize; y++)
-            {
-                for (int x = 0; x < dsize; x++)
-                {
-                    // Apply inverse transformation to find source coordinates
-                    // OpenCV uses (x, y) coordinates directly without Y-flipping here
-                    float srcX = M[0, 0] * x + M[0, 1] * y + M[0, 2];
-                    float srcY = M[1, 0] * x + M[1, 1] * y + M[1, 2];
-                    
-                    // Bilinear interpolation - match OpenCV exactly
-                    int x0 = Mathf.FloorToInt(srcX);
-                    int y0 = Mathf.FloorToInt(srcY);
-                    int x1 = x0 + 1;
-                    int y1 = y0 + 1;
-                    
-                    float fx = srcX - x0;
-                    float fy = srcY - y0;
-                    
-                    Color color = Color.black; // Default black (borderValue=0.0)
-                    
-                    // Check bounds and interpolate - OpenCV style bounds checking
-                    if (x0 >= 0 && x1 < srcWidth && y0 >= 0 && y1 < srcHeight)
-                    {
-                        // CRITICAL: Unity texture GetPixels() is bottom-left origin, OpenCV is top-left
-                        // We need to flip the Y coordinates when accessing Unity pixels
-                        int unityY0 = srcHeight - 1 - y0; // Flip for Unity coordinate system
-                        int unityY1 = srcHeight - 1 - y1; // Flip for Unity coordinate system
-                        
-                        var c00 = srcPixels[unityY0 * srcWidth + x0];  // top-left in OpenCV = bottom-left in Unity
-                        var c10 = srcPixels[unityY0 * srcWidth + x1];  // top-right in OpenCV 
-                        var c01 = srcPixels[unityY1 * srcWidth + x0];  // bottom-left in OpenCV = top-left in Unity
-                        var c11 = srcPixels[unityY1 * srcWidth + x1];  // bottom-right in OpenCV
-                        
-                        // Bilinear interpolation - standard formula
-                        float r = (1 - fx) * (1 - fy) * c00.r + fx * (1 - fy) * c10.r + (1 - fx) * fy * c01.r + fx * fy * c11.r;
-                        float g = (1 - fx) * (1 - fy) * c00.g + fx * (1 - fy) * c10.g + (1 - fx) * fy * c01.g + fx * fy * c11.g;
-                        float b = (1 - fx) * (1 - fy) * c00.b + fx * (1 - fy) * c10.b + (1 - fx) * fy * c01.b + fx * fy * c11.b;
-                        
-                        color = new Color(r, g, b, 1f);
-                    }
-                    
-                    // CRITICAL: SetPixels32 expects bottom-left origin, but OpenCV output is top-left
-                    // We need to flip Y coordinate when setting result pixels
-                    int resultYFlipped = dsize - 1 - y; // Flip Y for Unity SetPixels32
-                    resultPixels[resultYFlipped * dsize + x] = new Color32(
-                        (byte)(color.r * 255f),
-                        (byte)(color.g * 255f), 
-                        (byte)(color.b * 255f),
-                        255
-                    );
-                }
-            }
-            
-            result.SetPixels32(resultPixels);
-            result.Apply();
             return result;
         }
         
@@ -2094,11 +2036,17 @@ namespace MuseTalk.Core
                 int stride = featStrideFpn[idx];
                 
                 // Python: scores = output[idx]
-                var scores = outputs[idx].AsTensor<float>().ToArray();
+                var scoresTensor = outputs[idx].AsTensor<float>();
+                // The scores tensor is often flattened by the ONNX runtime to [N, 1] or just [N].
+                // We just need the flat array of scores, so we can call ToArray() directly.
+                var scores = scoresTensor.ToArray();
                 
                 // Python: bbox_preds = output[idx + fmc]
-                var bboxPreds = outputs[idx + fmc].AsTensor<float>().ToArray();
-                
+                var bboxPredsTensor = outputs[idx + fmc].AsTensor<float>();
+                var bboxPreds = bboxPredsTensor.ToArray();
+
+                Debug.Log($"[DEBUG_PROCESS_DETECTION_RESULTS] bboxPreds: {bboxPreds[0]}, {bboxPreds[1]}, {bboxPreds[2]}, {bboxPreds[3]}");
+                Debug.Log($"[DEBUG_PROCESS_DETECTION_RESULTS] bboxPreds.Length: {bboxPreds.Length}");
                 // Python: bbox_preds = bbox_preds * stride
                 for (int i = 0; i < bboxPreds.Length; i++)
                 {
@@ -2106,7 +2054,8 @@ namespace MuseTalk.Core
                 }
                 
                 // Python: kps_preds = output[idx + fmc * 2] * stride
-                var kpsPreds = outputs[idx + fmc * 2].AsTensor<float>().ToArray();
+                var kpsPredsTensor = outputs[idx + fmc * 2].AsTensor<float>();
+                var kpsPreds = kpsPredsTensor.ToArray();
                 for (int i = 0; i < kpsPreds.Length; i++)
                 {
                     kpsPreds[i] *= stride;
@@ -2235,6 +2184,7 @@ namespace MuseTalk.Core
             
             foreach (var bboxes in bboxesList)
             {
+                Debug.Log($"[DEBUG_PROCESS_DETECTION_RESULTS] bboxes: {bboxes[0]}, {bboxes[1]}, {bboxes[2]}, {bboxes[3]}");
                 allBboxes.AddRange(bboxes);
             }
             
@@ -3035,3 +2985,4 @@ namespace MuseTalk.Core
         public float[,] RotationMatrix { get; set; } // R_d: rotation matrix (added for Python compatibility)
     }
 }
+
