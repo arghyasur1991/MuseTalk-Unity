@@ -363,6 +363,8 @@ namespace MuseTalk.Core
         /// </summary>
         private List<FaceDetectionResult> FaceAnalysis(Texture2D img)
         {
+            Logger.Log($"[FaceAnalysis] Starting face detection on image {img.width}x{img.height}");
+            
             // Python: input_size = 512
             const int inputSize = 512;
             
@@ -401,13 +403,13 @@ namespace MuseTalk.Core
                 detPixels[i] = Color.black;
             }
             
-            // Copy resized image to top-left
+            // Copy resized image to top-left - NO coordinate flipping here since we handle it in tensor creation
             for (int y = 0; y < newHeight; y++)
             {
                 for (int x = 0; x < newWidth; x++)
                 {
                     int srcIdx = y * newWidth + x;
-                    int dstIdx = (inputSize - 1 - y) * inputSize + x; // Unity bottom-to-top
+                    int dstIdx = y * inputSize + x; // Direct copy, no flipping
                     if (srcIdx < resizedPixels.Length)
                     {
                         detPixels[dstIdx] = resizedPixels[srcIdx];
@@ -424,13 +426,21 @@ namespace MuseTalk.Core
             var inputTensor = PreprocessDetectionImage(detImg);
             
             // Python: output = det_face.run(None, {"input.1": det_img})
+            // Use the actual input name from the model metadata
+            string inputName = _detFace.InputMetadata.Keys.First();
+            Logger.Log($"[FaceAnalysis] Using face detection input name: {inputName}");
+            
             var inputs = new List<NamedOnnxValue>
             {
-                NamedOnnxValue.CreateFromTensor("input.1", inputTensor)
+                NamedOnnxValue.CreateFromTensor(inputName, inputTensor)
             };
+            
+            Logger.Log($"[FaceAnalysis] Running ONNX inference with tensor shape: [{inputTensor.Dimensions[0]}x{inputTensor.Dimensions[1]}x{inputTensor.Dimensions[2]}x{inputTensor.Dimensions[3]}]");
             
             using var results = _detFace.Run(inputs);
             var outputs = results.ToArray();
+            
+            Logger.Log($"[FaceAnalysis] Got {outputs.Length} outputs from face detection model");
             
             // Process detection results exactly as in Python
             var faces = ProcessDetectionResults(outputs, detScale);
@@ -454,6 +464,8 @@ namespace MuseTalk.Core
             
             UnityEngine.Object.DestroyImmediate(resizedImg);
             UnityEngine.Object.DestroyImmediate(detImg);
+            
+            Logger.Log($"[FaceAnalysis] Completed face detection: found {finalFaces.Count} faces");
             
             return finalFaces;
         }
@@ -615,9 +627,13 @@ namespace MuseTalk.Core
             
             // Python: net = models["motion_extractor"]
             // Python: output = net.run(None, {"img": x})
+            // Use the actual input name from the model metadata
+            string inputName = _motionExtractor.InputMetadata.Keys.First();
+            Logger.Log($"[GetKpInfo] Using motion extractor input name: {inputName}");
+            
             var inputs = new List<NamedOnnxValue>
             {
-                NamedOnnxValue.CreateFromTensor("img", inputTensor)
+                NamedOnnxValue.CreateFromTensor(inputName, inputTensor)
             };
             
             using var results = _motionExtractor.Run(inputs);
@@ -664,9 +680,13 @@ namespace MuseTalk.Core
             
             // Python: net = models["appearance_feature_extractor"]
             // Python: output = net.run(None, {"img": x})
+            // Use the actual input name from the model metadata
+            string inputName = _appearanceFeatureExtractor.InputMetadata.Keys.First();
+            Logger.Log($"[ExtractFeature3d] Using appearance extractor input name: {inputName}");
+            
             var inputs = new List<NamedOnnxValue>
             {
-                NamedOnnxValue.CreateFromTensor("img", inputTensor)
+                NamedOnnxValue.CreateFromTensor(inputName, inputTensor)
             };
             
             using var results = _appearanceFeatureExtractor.Run(inputs);
@@ -679,12 +699,84 @@ namespace MuseTalk.Core
         
         /// <summary>
         /// Python: transform_keypoint(x_s_info) - EXACT MATCH
+        /// Transform the implicit keypoints with the pose, shift, and expression deformation
+        /// kp: BxNx3
         /// </summary>
         private float[] TransformKeypoint(MotionInfo xSInfo)
         {
-            // This should match the Python transform_keypoint function
-            // For now, return the keypoints as-is (this may need refinement based on Python implementation)
-            return xSInfo.Keypoints;
+            // Python: kp = kp_info["kp"]  # (bs, k, 3)
+            var kp = xSInfo.Keypoints;
+            
+            // Python: pitch, yaw, roll = kp_info["pitch"], kp_info["yaw"], kp_info["roll"]
+            var pitch = xSInfo.Pitch;
+            var yaw = xSInfo.Yaw;
+            var roll = xSInfo.Roll;
+            
+            // Python: t, exp = kp_info["t"], kp_info["exp"]
+            var t = xSInfo.Translation;
+            var exp = xSInfo.Expression;
+            
+            // Python: scale = kp_info["scale"]
+            var scale = xSInfo.Scale;
+            
+            // Python: bs = kp.shape[0]
+            // Python: num_kp = kp.shape[1]  # Bxnum_kpx3
+            int bs = 1; // Batch size is always 1 in our case
+            int numKp = kp.Length / 3;
+            
+            // Python: rot_mat = get_rotation_matrix(pitch, yaw, roll)  # (bs, 3, 3)
+            var rotMat = GetRotationMatrix(pitch, yaw, roll);
+            
+            // Python: kp_transformed = kp.reshape(bs, num_kp, 3) @ rot_mat + exp.reshape(bs, num_kp, 3)
+            var kpTransformed = new float[kp.Length];
+            
+            for (int i = 0; i < numKp; i++)
+            {
+                // Get keypoint coordinates
+                float x = kp[i * 3 + 0];
+                float y = kp[i * 3 + 1];
+                float z = kp[i * 3 + 2];
+                
+                // Matrix multiplication: kp @ rot_mat
+                float newX = x * rotMat[0, 0] + y * rotMat[1, 0] + z * rotMat[2, 0];
+                float newY = x * rotMat[0, 1] + y * rotMat[1, 1] + z * rotMat[2, 1];
+                float newZ = x * rotMat[0, 2] + y * rotMat[1, 2] + z * rotMat[2, 2];
+                
+                // Add expression deformation: + exp.reshape(bs, num_kp, 3)
+                if (i * 3 + 2 < exp.Length)
+                {
+                    newX += exp[i * 3 + 0];
+                    newY += exp[i * 3 + 1];
+                    newZ += exp[i * 3 + 2];
+                }
+                
+                kpTransformed[i * 3 + 0] = newX;
+                kpTransformed[i * 3 + 1] = newY;
+                kpTransformed[i * 3 + 2] = newZ;
+            }
+            
+            // Python: kp_transformed *= scale[..., None]  # (bs, k, 3) * (bs, 1, 1) = (bs, k, 3)
+            if (scale.Length > 0)
+            {
+                float scaleValue = scale[0];
+                for (int i = 0; i < kpTransformed.Length; i++)
+                {
+                    kpTransformed[i] *= scaleValue;
+                }
+            }
+            
+            // Python: kp_transformed[:, :, 0:2] += t[:, None, 0:2]  # remove z, only apply tx ty
+            if (t.Length >= 2)
+            {
+                for (int i = 0; i < numKp; i++)
+                {
+                    kpTransformed[i * 3 + 0] += t[0]; // tx
+                    kpTransformed[i * 3 + 1] += t[1]; // ty
+                    // Don't add tz to z coordinate as per Python comment "remove z"
+                }
+            }
+            
+            return kpTransformed;
         }
         
         /// <summary>
@@ -819,9 +911,13 @@ namespace MuseTalk.Core
             
             // Python: net = models["stitching"]
             // Python: output = net.run(None, {"input": feat})
+            // Use actual input name from model metadata
+            string inputName = _stitching.InputMetadata.Keys.First();
+            Logger.Log($"[Stitching] Using stitching input name: {inputName}");
+            
             var inputs = new List<NamedOnnxValue>
             {
-                NamedOnnxValue.CreateFromTensor("input", inputTensor)
+                NamedOnnxValue.CreateFromTensor(inputName, inputTensor)
             };
             
             using var results = _stitching.Run(inputs);
@@ -863,19 +959,34 @@ namespace MuseTalk.Core
             var kpSourceTensor = new DenseTensor<float>(kpSource, new[] { 1, kpSource.Length / 3, 3 });
             var kpDrivingTensor = new DenseTensor<float>(kpDriving, new[] { 1, kpDriving.Length / 3, 3 });
             
+            Logger.Log($"[WarpingSpade] Input shapes - feature3d: {feature3DTensor.Dimensions[0]}x{feature3DTensor.Dimensions[1]}x{feature3DTensor.Dimensions[2]}x{feature3DTensor.Dimensions[3]}x{feature3DTensor.Dimensions[4]}, kpSource: {kpSourceTensor.Dimensions[0]}x{kpSourceTensor.Dimensions[1]}x{kpSourceTensor.Dimensions[2]}, kpDriving: {kpDrivingTensor.Dimensions[0]}x{kpDrivingTensor.Dimensions[1]}x{kpDrivingTensor.Dimensions[2]}");
+            
             // Python: net = models["warping_spade"]
             // Python: output = net.run(None, {"feature_3d": feature_3d, "kp_driving": kp_driving, "kp_source": kp_source})
+            // Use actual input names from model metadata
+            var inputNames = _warpingSpade.InputMetadata.Keys.ToArray();
+            Logger.Log($"[WarpingSpade] Available input names: {string.Join(", ", inputNames)}");
+            
             var inputs = new List<NamedOnnxValue>
             {
-                NamedOnnxValue.CreateFromTensor("feature_3d", feature3DTensor),
-                NamedOnnxValue.CreateFromTensor("kp_driving", kpDrivingTensor),
-                NamedOnnxValue.CreateFromTensor("kp_source", kpSourceTensor)
+                NamedOnnxValue.CreateFromTensor(inputNames[0], feature3DTensor),  // feature_3d
+                NamedOnnxValue.CreateFromTensor(inputNames[1], kpDrivingTensor), // kp_driving  
+                NamedOnnxValue.CreateFromTensor(inputNames[2], kpSourceTensor)   // kp_source
             };
             
             using var results = _warpingSpade.Run(inputs);
-            var output = results.First().AsTensor<float>().ToArray();
+            var outputs = results.ToArray();
             
-            // Python: return output[0]
+            Logger.Log($"[WarpingSpade] Got {outputs.Length} outputs from warping_spade model");
+            for (int i = 0; i < outputs.Length; i++)
+            {
+                var shape = outputs[i].AsTensor<float>().Dimensions;
+                Logger.Log($"[WarpingSpade] Output {i}: {string.Join("x", shape.ToArray())}");
+            }
+            
+            // Python: return output[0] - take the first output (warped_feature)
+            var output = outputs[0].AsTensor<float>().ToArray();
+            
             return output;
         }
         
@@ -1588,29 +1699,41 @@ namespace MuseTalk.Core
         /// </summary>
         private Texture2D ConvertOutputToTexture(float[] output)
         {
-            // Assume output is in CHW format from ONNX model (1x3x512x512)
+            // CRITICAL FIX: Warping SPADE output is 1x3x256x256, not 1x3x512x512!
+            // Based on Python warping_spade output and the fact that it's resized to 256x256 for processing
             int channels = 3;
-            int totalPixels = output.Length / channels;
-            int size = Mathf.RoundToInt(Mathf.Sqrt(totalPixels));
+            int height = 256;  // Fixed size based on Python processing
+            int width = 256;   // Fixed size based on Python processing
             
-            var texture = new Texture2D(size, size);
-            var pixels = new Color[size * size];
+            // Verify the output size matches expected dimensions
+            int expectedSize = channels * height * width;
+            if (output.Length != expectedSize)
+            {
+                Logger.LogError($"[ConvertOutputToTexture] Unexpected output size: {output.Length}, expected: {expectedSize}");
+                // Fallback to dynamic calculation
+                int totalPixels = output.Length / channels;
+                int size = Mathf.RoundToInt(Mathf.Sqrt(totalPixels));
+                height = width = size;
+            }
+            
+            var texture = new Texture2D(width, height);
+            var pixels = new Color[width * height];
             
             // Python: out = out.transpose(0, 2, 3, 1)  # 1x3xHxW -> 1xHxWx3
             // Python: out = np.clip(out, 0, 1)  # clip to 0~1
             // Python: out = (out * 255).astype(np.uint8)  # 0~1 -> 0~255
-            for (int h = 0; h < size; h++)
+            for (int h = 0; h < height; h++)
             {
-                for (int w = 0; w < size; w++)
+                for (int w = 0; w < width; w++)
                 {
                     // CRITICAL: ONNX output is top-left origin, flip Y for Unity SetPixels (bottom-left)
-                    int unityY = size - 1 - h; // Flip Y coordinate for Unity coordinate system
-                    int pixelIdx = unityY * size + w;
+                    int unityY = height - 1 - h; // Flip Y coordinate for Unity coordinate system
+                    int pixelIdx = unityY * width + w;
                     
                     // CHW indexing
-                    int rIdx = 0 * size * size + h * size + w;
-                    int gIdx = 1 * size * size + h * size + w;
-                    int bIdx = 2 * size * size + h * size + w;
+                    int rIdx = 0 * height * width + h * width + w;
+                    int gIdx = 1 * height * width + h * width + w;
+                    int bIdx = 2 * height * width + h * width + w;
                     
                     float r = Mathf.Clamp01(output[rIdx]);
                     float g = Mathf.Clamp01(output[gIdx]);
@@ -1655,6 +1778,8 @@ namespace MuseTalk.Core
         
         private List<FaceDetectionResult> ProcessDetectionResults(NamedOnnxValue[] outputs, float detScale)
         {
+            Logger.Log($"[ProcessDetectionResults] Processing {outputs.Length} outputs, detScale={detScale}");
+            
             // Python: process detection results exactly as in face_analysis function
             var scoresList = new List<float[]>();
             var bboxesList = new List<float[]>();
@@ -1744,6 +1869,12 @@ namespace MuseTalk.Core
                     {
                         posInds.Add(i);
                     }
+                }
+                
+                Logger.Log($"[ProcessDetectionResults] Stride {stride}: {scores.Length} scores, {posInds.Count} above threshold {detThresh}");
+                if (scores.Length > 0)
+                {
+                    Logger.Log($"[ProcessDetectionResults] Stride {stride}: Score range [{scores.Min():F3}, {scores.Max():F3}]");
                 }
                 
                 if (posInds.Count > 0)
