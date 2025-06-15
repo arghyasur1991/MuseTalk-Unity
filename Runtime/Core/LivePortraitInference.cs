@@ -1699,22 +1699,14 @@ namespace MuseTalk.Core
         /// </summary>
         private Texture2D ConvertOutputToTexture(float[] output)
         {
-            // CRITICAL FIX: Warping SPADE output is 1x3x256x256, not 1x3x512x512!
-            // Based on Python warping_spade output and the fact that it's resized to 256x256 for processing
+            // CRITICAL FIX: Warping SPADE output is 1x3x512x512 as confirmed by logs!
             int channels = 3;
-            int height = 256;  // Fixed size based on Python processing
-            int width = 256;   // Fixed size based on Python processing
+            int totalPixels = output.Length / channels;
+            int size = Mathf.RoundToInt(Mathf.Sqrt(totalPixels));
+            int height = size;
+            int width = size;
             
-            // Verify the output size matches expected dimensions
-            int expectedSize = channels * height * width;
-            if (output.Length != expectedSize)
-            {
-                Logger.LogError($"[ConvertOutputToTexture] Unexpected output size: {output.Length}, expected: {expectedSize}");
-                // Fallback to dynamic calculation
-                int totalPixels = output.Length / channels;
-                int size = Mathf.RoundToInt(Mathf.Sqrt(totalPixels));
-                height = width = size;
-            }
+            Logger.Log($"[ConvertOutputToTexture] Processing output: {output.Length} elements -> {channels}x{height}x{width}");
             
             var texture = new Texture2D(width, height);
             var pixels = new Color[width * height];
