@@ -975,7 +975,10 @@ namespace MuseTalk.Core
             predInfo.Landmarks = lmk;
             
             // Python: calc_driving_ratio - CRITICAL FIX: Now implementing the missing calculation
-            // Python: lmk = lmk[None]  # Add batch dimension
+            // Python: lmk = lmk[None]  # Add batch dimension - CRITICAL: This changes shape from (106,2) to (1,106,2)
+            // IMPORTANT: Python adds batch dimension here, but our CalculateDistanceRatio function expects unbatched landmarks
+            // So we pass the original lmk array directly since our function handles single batch internally
+            
             // Python: c_d_eyes = np.concatenate([calculate_distance_ratio(lmk, 6, 18, 0, 12), calculate_distance_ratio(lmk, 30, 42, 24, 36)], axis=1)
             // Python: c_d_lip = calculate_distance_ratio(lmk, 90, 102, 48, 66)
             // Python: c_d_eyes = c_d_eyes.astype(np.float32)
@@ -1045,6 +1048,8 @@ namespace MuseTalk.Core
             var Rd0 = xD0Info.RotationMatrix;  // FIXED: Access stored rotation matrix directly
             
             // Python: R_new = (R_d @ R_d_0.transpose(0, 2, 1)) @ R_s
+            // CRITICAL FIX: Python transpose(0, 2, 1) swaps last two dimensions for batch matrices
+            // For 3x3 matrices, this is equivalent to standard matrix transpose
             var Rd0Transposed = TransposeMatrix(Rd0);
             var RdTimesRd0T = MatrixMultiply(Rd, Rd0Transposed);
             var RNew = MatrixMultiply(RdTimesRd0T, Rs);
@@ -1165,14 +1170,32 @@ namespace MuseTalk.Core
         /// </summary>
         private float[] WarpingSpade(float[] feature3d, float[] kpSource, float[] kpDriving)
         {
+            // CRITICAL FIX: Verify tensor shapes match Python exactly
+            // Python: feature_3d shape should be (1, 32, 16, 64, 64) = 2,097,152 elements
+            // Python: kp_source shape should be (1, 21, 3) = 63 elements  
+            // Python: kp_driving shape should be (1, 21, 3) = 63 elements
+            
+            Debug.Log($"[DEBUG_WARPING_SPADE] Input array sizes - feature3d: {feature3d.Length}, kpSource: {kpSource.Length}, kpDriving: {kpDriving.Length}");
+            
+            // Verify expected sizes
+            int expectedFeature3DSize = 1 * 32 * 16 * 64 * 64; // 2,097,152
+            int expectedKpSize = 21 * 3; // 63 (21 keypoints * 3 coordinates)
+            
+            if (feature3d.Length != expectedFeature3DSize)
+            {
+                Debug.LogError($"[DEBUG_WARPING_SPADE] Feature3D size mismatch! Expected: {expectedFeature3DSize}, Got: {feature3d.Length}");
+            }
+            
+            if (kpSource.Length != expectedKpSize || kpDriving.Length != expectedKpSize)
+            {
+                Debug.LogError($"[DEBUG_WARPING_SPADE] Keypoint size mismatch! Expected: {expectedKpSize}, Got kpSource: {kpSource.Length}, kpDriving: {kpDriving.Length}");
+            }
+            
             // Create tensors with proper shapes
             var feature3DTensor = new DenseTensor<float>(feature3d, new[] { 1, 32, 16, 64, 64 });
             var kpSourceTensor = new DenseTensor<float>(kpSource, new[] { 1, kpSource.Length / 3, 3 });
             var kpDrivingTensor = new DenseTensor<float>(kpDriving, new[] { 1, kpDriving.Length / 3, 3 });
             
-            // Debug.Log($"[WarpingSpade] Input shapes - feature3d: {feature3DTensor.Dimensions[0]}x{feature3DTensor.Dimensions[1]}x{feature3DTensor.Dimensions[2]}x{feature3DTensor.Dimensions[3]}x{feature3DTensor.Dimensions[4]}, kpSource: {kpSourceTensor.Dimensions[0]}x{kpSourceTensor.Dimensions[1]}x{kpSourceTensor.Dimensions[2]}, kpDriving: {kpDrivingTensor.Dimensions[0]}x{kpDrivingTensor.Dimensions[1]}x{kpDrivingTensor.Dimensions[2]}");
-            
-            // Debug: Check input value ranges (moved to DEBUG_WARPING_SPADE)
             Debug.Log($"[DEBUG_WARPING_SPADE] Input shapes - feature_3d: {feature3DTensor.Dimensions[0]}x{feature3DTensor.Dimensions[1]}x{feature3DTensor.Dimensions[2]}x{feature3DTensor.Dimensions[3]}x{feature3DTensor.Dimensions[4]}, kp_source: {kpSourceTensor.Dimensions[0]}x{kpSourceTensor.Dimensions[1]}x{kpSourceTensor.Dimensions[2]}, kp_driving: {kpDrivingTensor.Dimensions[0]}x{kpDrivingTensor.Dimensions[1]}x{kpDrivingTensor.Dimensions[2]}");
             Debug.Log($"[DEBUG_WARPING_SPADE] Feature3D range: [{feature3d.Min():F3}, {feature3d.Max():F3}]");
             Debug.Log($"[DEBUG_WARPING_SPADE] KpSource range: [{kpSource.Min():F3}, {kpSource.Max():F3}]");
@@ -2856,24 +2879,30 @@ namespace MuseTalk.Core
         /// <summary>
         /// Python: calculate_distance_ratio(lmk, idx1, idx2, idx3, idx4, eps=1e-6) - EXACT MATCH
         /// Calculate the ratio between two distances
+        /// CRITICAL: Python expects lmk with batch dimension: (batch_size, num_landmarks, 2)
         /// </summary>
         private float[] CalculateDistanceRatio(Vector2[] lmk, int idx1, int idx2, int idx3, int idx4, float eps = 1e-6f)
         {
+            // CRITICAL FIX: Python function expects batched landmarks lmk[:, idx1] means lmk[batch_idx, landmark_idx]
+            // Since we have batch_size=1, lmk[:, idx1] becomes lmk[0, idx1] which is just lmk[idx1]
             // Python: d1 = np.linalg.norm(lmk[:, idx1] - lmk[:, idx2], axis=1, keepdims=True)
             // Python: d2 = np.linalg.norm(lmk[:, idx3] - lmk[:, idx4], axis=1, keepdims=True)
             // Python: ratio = d1 / (d2 + eps)
             
+            // For batch_size=1: lmk[:, idx1] = lmk[0, idx1] = lmk[idx1]
             Vector2 p1 = lmk[idx1];
             Vector2 p2 = lmk[idx2];
             Vector2 p3 = lmk[idx3];
             Vector2 p4 = lmk[idx4];
             
+            // np.linalg.norm(p1 - p2, axis=1, keepdims=True) with axis=1 means norm across coordinate dimension
+            // For 2D points, this is just the Euclidean distance
             float d1 = Vector2.Distance(p1, p2);
             float d2 = Vector2.Distance(p3, p4);
             
             float ratio = d1 / (d2 + eps);
             
-            // Return as array to match Python's keepdims=True behavior
+            // Return as array to match Python's keepdims=True behavior (shape becomes (1,))
             return new float[] { ratio };
         }
         
