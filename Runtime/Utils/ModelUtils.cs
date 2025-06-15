@@ -98,11 +98,18 @@ namespace MuseTalk.Utils
         /// </summary>
         public static string GetModelPath(MuseTalkConfig config, string baseName)
         {
-            // SPECIAL CASE: Whisper and Face Parsing models don't use version suffix
+            // SPECIAL CASE: Models that don't use version suffix
             bool isVersionIndependent = baseName.Contains("whisper_encoder") || 
                                         baseName.Contains("face_parsing") ||
                                         baseName.Contains("det_10g") ||
-                                        baseName.Contains("1k3d68");
+                                        baseName.Contains("1k3d68") ||
+                                        // LivePortrait models are version independent
+                                        baseName == "appearance_feature_extractor" ||
+                                        baseName == "motion_extractor" ||
+                                        baseName == "warping_spade" ||
+                                        baseName == "stitching" ||
+                                        baseName == "landmark" ||
+                                        baseName == "2d106det";
             
             string baseModelPath;
             if (isVersionIndependent)
