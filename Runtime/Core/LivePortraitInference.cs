@@ -241,6 +241,12 @@ namespace MuseTalk.Core
                 
                 // Python: crop_info = crop_src_image(self.models, src_img)
                 var cropInfo = CropSrcImage(srcImg);
+                generatedFrames.Add(cropInfo.ImageCrop);
+                return new LivePortraitResult
+                {
+                    Success = true,
+                    GeneratedFrames = generatedFrames
+                };
                 // Debug.Log("[LivePortraitInference] Source cropped");
                 
                 // Python: img_crop_256x256 = crop_info["img_crop_256x256"]
@@ -591,7 +597,7 @@ namespace MuseTalk.Core
             float h = bbox.height;
             
             // Python: center = (bbox[2] + bbox[0]) / 2, (bbox[3] + bbox[1]) / 2
-            Vector2 center = new Vector2(bbox.x + w * 0.5f, bbox.y + h * 0.5f);
+            Vector2 center = new(bbox.x + w * 0.5f, bbox.y + h * 0.5f);
             Debug.Log($"[DEBUG_GET_LANDMARK] Center: (np.float32({center.x:F5}), np.float32({center.y:F5})), w={w:F3}, h={h:F3}");
             
             // Python: rotate = 0
@@ -2050,9 +2056,9 @@ namespace MuseTalk.Core
                         // CRITICAL: Unity GetPixels() is bottom-left origin, flip Y for ONNX (top-left)
                         int unityY = inputSize - 1 - h; // Flip Y coordinate for ONNX coordinate system
                         int pixelIdx = unityY * inputSize + w;
-                        float pixelValue = c == 0 ? pixels[pixelIdx].r : 
+                        float pixelValue = c == 0 ? pixels[pixelIdx].b : 
                                           c == 1 ? pixels[pixelIdx].g : 
-                                                   pixels[pixelIdx].b;
+                                                   pixels[pixelIdx].r;
                         tensorData[idx++] = (pixelValue * 255f - 127.5f) / 128f;
                     }
                 }
@@ -2358,16 +2364,16 @@ namespace MuseTalk.Core
             var cropped = TransformImgExact(img, M, inputSize);
             
             // Debug the output image range after transformation
-            var outputPixels = cropped.GetPixels();
-            float minOutput = float.MaxValue, maxOutput = float.MinValue;
-            foreach (var pixel in outputPixels)
-            {
-                float pixelMax = Mathf.Max(pixel.r, Mathf.Max(pixel.g, pixel.b));
-                float pixelMin = Mathf.Min(pixel.r, Mathf.Min(pixel.g, pixel.b));
-                maxOutput = Mathf.Max(maxOutput, pixelMax);
-                minOutput = Mathf.Min(minOutput, pixelMin);
-            }
-            Debug.Log($"[DEBUG_FACE_ALIGN] Output image pixel range: [{minOutput * 255f:F3}, {maxOutput * 255f:F3}]");
+            // var outputPixels = cropped.GetPixels();
+            // float minOutput = float.MaxValue, maxOutput = float.MinValue;
+            // foreach (var pixel in outputPixels)
+            // {
+            //     float pixelMax = Mathf.Max(pixel.r, Mathf.Max(pixel.g, pixel.b));
+            //     float pixelMin = Mathf.Min(pixel.r, Mathf.Min(pixel.g, pixel.b));
+            //     maxOutput = Mathf.Max(maxOutput, pixelMax);
+            //     minOutput = Mathf.Min(minOutput, pixelMin);
+            // }
+            // Debug.Log($"[DEBUG_FACE_ALIGN] Output image pixel range: [{minOutput * 255f:F3}, {maxOutput * 255f:F3}]");
             
             // Convert to Matrix4x4 for Unity compatibility
             var transform = new Matrix4x4();
