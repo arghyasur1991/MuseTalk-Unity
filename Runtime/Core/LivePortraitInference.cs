@@ -216,7 +216,17 @@ namespace MuseTalk.Core
                 // Python: img = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
                 // Python: img = img[:, :, ::-1]  # BGR -> RGB
                 // Python: src_img = src_preprocess(img)
+                
+                // Generate frames
+                var generatedFrames = new List<Texture2D>();
                 var srcImg = SrcPreprocess(input.SourceImage);
+                
+                // generatedFrames.Add(srcImg);
+                // return new LivePortraitResult
+                // {
+                //     Success = true,
+                //     GeneratedFrames = generatedFrames
+                // };
                 // Debug.Log("[LivePortraitInference] Source preprocessed");
                 
                 // CRITICAL FIX: Keep reference to preprocessed source image for pasteback
@@ -224,10 +234,10 @@ namespace MuseTalk.Core
                 Debug.Log($"[DEBUG_SRCIMG] Preprocessed source image: {srcImg.width}x{srcImg.height}, format: {srcImg.format}");
                 
                 // Debug source image pixel values to ensure it's not black
-                var srcPixels = srcImg.GetPixels();
-                float srcMin = srcPixels.Min(p => Mathf.Min(p.r, Mathf.Min(p.g, p.b)));
-                float srcMax = srcPixels.Max(p => Mathf.Max(p.r, Mathf.Max(p.g, p.b)));
-                Debug.Log($"[DEBUG_SRCIMG] Source image pixel range: [{srcMin:F3}, {srcMax:F3}]");
+                // var srcPixels = srcImg.GetPixels();
+                // float srcMin = srcPixels.Min(p => Mathf.Min(p.r, Mathf.Min(p.g, p.b)));
+                // float srcMax = srcPixels.Max(p => Mathf.Max(p.r, Mathf.Max(p.g, p.b)));
+                // Debug.Log($"[DEBUG_SRCIMG] Source image pixel range: [{srcMin:F3}, {srcMax:F3}]");
                 
                 // Python: crop_info = crop_src_image(self.models, src_img)
                 var cropInfo = CropSrcImage(srcImg);
@@ -257,9 +267,7 @@ namespace MuseTalk.Core
                 // Python: prepare for pasteback
                 // Python: mask_ori = prepare_paste_back(self.mask_crop, crop_info["M_c2o"], dsize=(src_img.shape[1], src_img.shape[0]))
                 var maskOri = PreparePasteBack(cropInfo.Transform, srcImg.width, srcImg.height);
-                
-                // Generate frames
-                var generatedFrames = new List<Texture2D>();
+
                 // For debugging, only generate 1 frame - matches Python: if frame_id > 0: break
                 for (int frameId = 0; frameId < 1 /* input.DrivingFrames.Length */; frameId++)
                 {
@@ -360,7 +368,7 @@ namespace MuseTalk.Core
             // Python: if new_h != img.shape[0] or new_w != img.shape[1]: img = img[:new_h, :new_w]
             if (finalHeight != h || finalWidth != w)
             {
-                var cropped = new Texture2D(finalWidth, finalHeight);
+                var cropped = new Texture2D(finalWidth, finalHeight, TextureFormat.RGB24, false);
                 // Python crops from top-left: img[:new_h, :new_w]
                 // Unity GetPixels origin is bottom-left, so we need to crop from top by using (0, h - finalHeight)
                 var pixels = img.GetPixels(0, h - finalHeight, finalWidth, finalHeight);
@@ -464,13 +472,13 @@ namespace MuseTalk.Core
             if (imRatio > 1)
             {
                 newHeight = inputSize;
-                newWidth = Mathf.RoundToInt(newHeight / imRatio);
+                newWidth = Mathf.FloorToInt(newHeight / imRatio);
             }
             else
             {
                 // Python: else: new_width = input_size; new_height = int(new_width * im_ratio)
                 newWidth = inputSize;
-                newHeight = Mathf.RoundToInt(newWidth * imRatio);
+                newHeight = Mathf.FloorToInt(newWidth * imRatio);
             }
             
             // Python: det_scale = float(new_height) / img.shape[0]
@@ -481,7 +489,7 @@ namespace MuseTalk.Core
             
             // Python: det_img = np.zeros((input_size, input_size, 3), dtype=np.uint8)
             // Python: det_img[:new_height, :new_width, :] = resized_img
-            var detImg = new Texture2D(inputSize, inputSize);
+            var detImg = new Texture2D(inputSize, inputSize, TextureFormat.RGB24, false);
             var detPixels = new Color[inputSize * inputSize];
             var resizedPixels = resizedImg.GetPixels();
             
@@ -511,7 +519,8 @@ namespace MuseTalk.Core
             // Python: det_img = (det_img - 127.5) / 128
             // Python: det_img = det_img.transpose(2, 0, 1)  # HWC -> CHW
             // Python: det_img = np.expand_dims(det_img, axis=0)
-            var inputTensor = PreprocessDetectionImage(detImg);
+            // Python: det_img = det_img.astype(np.float32)
+            var inputTensor = PreprocessDetectionImage(detImg, inputSize);
             
             // Python: output = det_face.run(None, {"input.1": det_img})
             // Use the actual input name from the model metadata
@@ -1232,7 +1241,7 @@ namespace MuseTalk.Core
         // Helper methods - all implemented inline for self-sufficiency
         private Texture2D ResizeTexture(Texture2D source, int width, int height)
         {
-            var result = new Texture2D(width, height);
+            var result = new Texture2D(width, height, TextureFormat.RGB24, false);
             var rt = RenderTexture.GetTemporary(width, height);
             Graphics.Blit(source, rt);
             
@@ -1979,7 +1988,7 @@ namespace MuseTalk.Core
             float maxVal = output.Max();
             Debug.Log($"[ConvertOutputToTexture] Output value range: [{minVal:F3}, {maxVal:F3}]");
             
-            var texture = new Texture2D(width, height);
+            var texture = new Texture2D(width, height, TextureFormat.RGB24, false);
             var pixels = new Color[width * height];
             
             // Python: out = out.transpose(0, 2, 3, 1)  # 1x3xHxW -> 1xHxWx3
@@ -2012,22 +2021,25 @@ namespace MuseTalk.Core
         }
         
         // Face detection and landmark processing methods - SIMPLIFIED FOR NOW
-        private DenseTensor<float> PreprocessDetectionImage(Texture2D img)
+        private DenseTensor<float> PreprocessDetectionImage(Texture2D img, int inputSize)
         {
             var pixels = img.GetPixels();
-            var tensorData = new float[1 * 3 * 512 * 512];
+            var tensorData = new float[1 * 3 * inputSize * inputSize];
             
             int idx = 0;
             // Python: det_img = (det_img - 127.5) / 128
+            // Python: det_img = det_img.transpose(2, 0, 1)  # HWC -> CHW
+            // Python: det_img = np.expand_dims(det_img, axis=0)
+            // Python: det_img = det_img.astype(np.float32)
             for (int c = 0; c < 3; c++)
             {
-                for (int h = 0; h < 512; h++)
+                for (int h = 0; h < inputSize; h++)
                 {
-                    for (int w = 0; w < 512; w++)
+                    for (int w = 0; w < inputSize; w++)
                     {
                         // CRITICAL: Unity GetPixels() is bottom-left origin, flip Y for ONNX (top-left)
-                        int unityY = 512 - 1 - h; // Flip Y coordinate for ONNX coordinate system
-                        int pixelIdx = unityY * 512 + w;
+                        int unityY = inputSize - 1 - h; // Flip Y coordinate for ONNX coordinate system
+                        int pixelIdx = unityY * inputSize + w;
                         float pixelValue = c == 0 ? pixels[pixelIdx].r : 
                                           c == 1 ? pixels[pixelIdx].g : 
                                                    pixels[pixelIdx].b;
@@ -2036,7 +2048,7 @@ namespace MuseTalk.Core
                 }
             }
             
-            return new DenseTensor<float>(tensorData, new[] { 1, 3, 512, 512 });
+            return new DenseTensor<float>(tensorData, new[] { 1, 3, inputSize, inputSize });
         }
         
         private List<FaceDetectionResult> ProcessDetectionResults(NamedOnnxValue[] outputs, float detScale)
@@ -2677,7 +2689,7 @@ namespace MuseTalk.Core
         /// </summary>
         private Texture2D CreateDefaultMask(int width, int height)
         {
-            var maskOri = new Texture2D(width, height);
+            var maskOri = new Texture2D(width, height, TextureFormat.RGB24, false);
             var pixels = new Color[width * height];
             
             // Create a circular/elliptical mask in the center region
@@ -2733,7 +2745,7 @@ namespace MuseTalk.Core
             int width = imgRgb.width + imgCrop256x256.width + Ip.width;
             int height = Mathf.Max(imgRgb.height, Mathf.Max(imgCrop256x256.height, Ip.height));
             
-            var result = new Texture2D(width, height);
+            var result = new Texture2D(width, height, TextureFormat.RGB24, false);
             var pixels = new Color[width * height];
             
             // Fill with black background
@@ -2791,7 +2803,7 @@ namespace MuseTalk.Core
             Debug.Log($"[DEBUG_PASTEBACK] Warped image pixel range: [{warpedMin:F3}, {warpedMax:F3}]");
             
             // Python: result = np.clip(mask_ori * result + (1 - mask_ori) * img_ori, 0, 255).astype(np.uint8)
-            var result = new Texture2D(dsize_w, dsize_h);
+            var result = new Texture2D(dsize_w, dsize_h, TextureFormat.RGB24, false);
             var warpedPixels = warped.GetPixels();
             var oriPixels = imgOri.GetPixels();
             var maskPixels = maskOri.GetPixels();
