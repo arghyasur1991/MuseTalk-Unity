@@ -85,7 +85,7 @@ namespace MuseTalk.Utils
                 modelName == "1k3d68"
             )
             {
-                sessionOptions.AppendExecutionProvider_CoreML();
+                // sessionOptions.AppendExecutionProvider_CoreML();
             }
             var model = new InferenceSession(modelPath, sessionOptions);
             Debug.Log($"[MuseTalkInference] Loaded {modelName} from {modelPath}");

@@ -217,7 +217,7 @@ namespace MuseTalk.Core
                 // Generate frames
                 var generatedFrames = new List<Texture2D>();
                 // For debugging, only generate 1 frame
-                for (int frameId = 0; frameId < 1 /* input.DrivingFrames.Length */; frameId++)
+                for (int frameId = 0; frameId < 10 /* input.DrivingFrames.Length */; frameId++)
                 {
                     Logger.Log($"[LivePortraitInference] Processing frame {frameId + 1}/{input.DrivingFrames.Length}");
                     
