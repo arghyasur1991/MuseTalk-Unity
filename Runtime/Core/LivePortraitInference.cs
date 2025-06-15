@@ -576,16 +576,10 @@ namespace MuseTalk.Core
             
             // Python: IM = cv2.invertAffineTransform(M)
             // Python: pred = trans_points2d(pred, IM)
-            var inverseMatrix = InvertAffineTransform(transformMatrix);
-            
-            // Convert to 2x3 matrix for logging to match Python format
-            float[,] IM = new float[2, 3] {
-                { inverseMatrix.m00, inverseMatrix.m01, inverseMatrix.m03 },
-                { inverseMatrix.m10, inverseMatrix.m11, inverseMatrix.m13 }
-            };
+            var IM = InvertAffineTransformToMatrix(transformMatrix);
             Debug.Log($"[DEBUG_GET_LANDMARK] Inverse transform matrix IM:\n[[{IM[0,0]:F7}   {IM[0,1]:F7} {IM[0,2]:F6}]\n [{IM[1,0]:F7}          {IM[1,1]:F7} {IM[1,2]:F6}]]");
             
-            landmarks = TransPoints2D(landmarks, inverseMatrix);
+            landmarks = TransPoints2D(landmarks, IM);
             Debug.Log($"[DEBUG_GET_LANDMARK] Final landmarks: shape=({landmarks.Length}, 2), range=[{landmarks.Min(p => Mathf.Min(p.x, p.y)):F3}, {landmarks.Max(p => Mathf.Max(p.x, p.y)):F3}]");
             Debug.Log($"[DEBUG_GET_LANDMARK] Final first 3 landmarks: [[{landmarks[0].x:F5} {landmarks[0].y:F4}]\n [{landmarks[1].x:F5} {landmarks[1].y:F5}]\n [{landmarks[2].x:F5} {landmarks[2].y:F3}]]");
             
@@ -1486,6 +1480,7 @@ namespace MuseTalk.Core
         /// <summary>
         /// Python: _transform_img() - EXACT MATCH
         /// Conduct similarity or affine transformation to the image
+        /// CRITICAL: This must match OpenCV's cv2.warpAffine exactly
         /// </summary>
         private Texture2D TransformImg(Texture2D img, float[,] M, int dsize)
         {
@@ -1493,21 +1488,22 @@ namespace MuseTalk.Core
             var result = new Texture2D(dsize, dsize, TextureFormat.RGB24, false);
             var resultPixels = new Color32[dsize * dsize];
             
-            // Get source pixels
-            var srcPixels = img.GetPixels32();
+            // Get source pixels as Color (not Color32) for better precision
+            var srcPixels = img.GetPixels();
             int srcWidth = img.width;
             int srcHeight = img.height;
             
-            // Transform each pixel using inverse mapping
+            // Transform each pixel using inverse mapping - EXACTLY like OpenCV
             for (int y = 0; y < dsize; y++)
             {
                 for (int x = 0; x < dsize; x++)
                 {
                     // Apply inverse transformation to find source coordinates
+                    // OpenCV uses (x, y) coordinates directly without Y-flipping here
                     float srcX = M[0, 0] * x + M[0, 1] * y + M[0, 2];
                     float srcY = M[1, 0] * x + M[1, 1] * y + M[1, 2];
                     
-                    // Bilinear interpolation
+                    // Bilinear interpolation - match OpenCV exactly
                     int x0 = Mathf.FloorToInt(srcX);
                     int y0 = Mathf.FloorToInt(srcY);
                     int x1 = x0 + 1;
@@ -1516,31 +1512,38 @@ namespace MuseTalk.Core
                     float fx = srcX - x0;
                     float fy = srcY - y0;
                     
-                    Color32 color = new Color32(0, 0, 0, 255); // Default black
+                    Color color = Color.black; // Default black (borderValue=0.0)
                     
-                    // Check bounds and interpolate
+                    // Check bounds and interpolate - OpenCV style bounds checking
                     if (x0 >= 0 && x1 < srcWidth && y0 >= 0 && y1 < srcHeight)
                     {
-                        // Unity texture coordinates: bottom-left origin, but we need top-left for OpenCV compatibility
-                        int srcY0Flipped = srcHeight - 1 - y0;
-                        int srcY1Flipped = srcHeight - 1 - y1;
+                        // CRITICAL: Unity texture GetPixels() is bottom-left origin, OpenCV is top-left
+                        // We need to flip the Y coordinates when accessing Unity pixels
+                        int unityY0 = srcHeight - 1 - y0; // Flip for Unity coordinate system
+                        int unityY1 = srcHeight - 1 - y1; // Flip for Unity coordinate system
                         
-                        var c00 = srcPixels[srcY0Flipped * srcWidth + x0];
-                        var c10 = srcPixels[srcY0Flipped * srcWidth + x1];
-                        var c01 = srcPixels[srcY1Flipped * srcWidth + x0];
-                        var c11 = srcPixels[srcY1Flipped * srcWidth + x1];
+                        var c00 = srcPixels[unityY0 * srcWidth + x0];  // top-left in OpenCV = bottom-left in Unity
+                        var c10 = srcPixels[unityY0 * srcWidth + x1];  // top-right in OpenCV 
+                        var c01 = srcPixels[unityY1 * srcWidth + x0];  // bottom-left in OpenCV = top-left in Unity
+                        var c11 = srcPixels[unityY1 * srcWidth + x1];  // bottom-right in OpenCV
                         
-                        // Bilinear interpolation
+                        // Bilinear interpolation - standard formula
                         float r = (1 - fx) * (1 - fy) * c00.r + fx * (1 - fy) * c10.r + (1 - fx) * fy * c01.r + fx * fy * c11.r;
                         float g = (1 - fx) * (1 - fy) * c00.g + fx * (1 - fy) * c10.g + (1 - fx) * fy * c01.g + fx * fy * c11.g;
                         float b = (1 - fx) * (1 - fy) * c00.b + fx * (1 - fy) * c10.b + (1 - fx) * fy * c01.b + fx * fy * c11.b;
                         
-                        color = new Color32((byte)r, (byte)g, (byte)b, 255);
+                        color = new Color(r, g, b, 1f);
                     }
                     
-                    // Unity SetPixels32 expects bottom-left origin, so flip y
-                    int resultY = dsize - 1 - y;
-                    resultPixels[resultY * dsize + x] = color;
+                    // CRITICAL: SetPixels32 expects bottom-left origin, but OpenCV output is top-left
+                    // We need to flip Y coordinate when setting result pixels
+                    int resultYFlipped = dsize - 1 - y; // Flip Y for Unity SetPixels32
+                    resultPixels[resultYFlipped * dsize + x] = new Color32(
+                        (byte)(color.r * 255f),
+                        (byte)(color.g * 255f), 
+                        (byte)(color.b * 255f),
+                        255
+                    );
                 }
             }
             
@@ -2155,8 +2158,32 @@ namespace MuseTalk.Core
                 { transM[1, 0], transM[1, 1], transM[1, 2] }
             };
             
+            // Debug the input image range before transformation
+            var inputPixels = img.GetPixels();
+            float minInput = float.MaxValue, maxInput = float.MinValue;
+            foreach (var pixel in inputPixels)
+            {
+                float pixelMax = Mathf.Max(pixel.r, Mathf.Max(pixel.g, pixel.b));
+                float pixelMin = Mathf.Min(pixel.r, Mathf.Min(pixel.g, pixel.b));
+                maxInput = Mathf.Max(maxInput, pixelMax);
+                minInput = Mathf.Min(minInput, pixelMin);
+            }
+            Debug.Log($"[DEBUG_FACE_ALIGN] Input image pixel range: [{minInput * 255f:F3}, {maxInput * 255f:F3}]");
+            
             // Python: cropped = cv2.warpAffine(data, M, (output_size, output_size), borderValue=0.0)
             var cropped = TransformImg(img, M, inputSize);
+            
+            // Debug the output image range after transformation
+            var outputPixels = cropped.GetPixels();
+            float minOutput = float.MaxValue, maxOutput = float.MinValue;
+            foreach (var pixel in outputPixels)
+            {
+                float pixelMax = Mathf.Max(pixel.r, Mathf.Max(pixel.g, pixel.b));
+                float pixelMin = Mathf.Min(pixel.r, Mathf.Min(pixel.g, pixel.b));
+                maxOutput = Mathf.Max(maxOutput, pixelMax);
+                minOutput = Mathf.Min(minOutput, pixelMin);
+            }
+            Debug.Log($"[DEBUG_FACE_ALIGN] Output image pixel range: [{minOutput * 255f:F3}, {maxOutput * 255f:F3}]");
             
             // Convert to Matrix4x4 for Unity compatibility
             var transform = new Matrix4x4();
@@ -2202,6 +2229,20 @@ namespace MuseTalk.Core
         }
         
         /// <summary>
+        /// Invert Matrix4x4 using the same method as the 2x3 affine transform for consistency
+        /// </summary>
+        private float[,] InvertAffineTransformToMatrix(Matrix4x4 matrix)
+        {
+            // Extract 2x3 transformation matrix
+            float[,] M = new float[2, 3] {
+                { matrix.m00, matrix.m01, matrix.m03 },
+                { matrix.m10, matrix.m11, matrix.m13 }
+            };
+            
+            return InvertAffineTransform(M);
+        }
+        
+        /// <summary>
         /// Python: cv2.invertAffineTransform(M) - EXACT MATCH
         /// Invert a 2x3 affine transformation matrix
         /// </summary>
@@ -2231,6 +2272,8 @@ namespace MuseTalk.Core
             
             return inv;
         }
+        
+
         
         private Vector2[] TransformPoints2D(Vector2[] points, Matrix4x4 transform)
         {
