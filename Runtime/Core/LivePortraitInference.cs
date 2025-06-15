@@ -301,6 +301,8 @@ namespace MuseTalk.Core
             if (finalHeight != h || finalWidth != w)
             {
                 var cropped = new Texture2D(finalWidth, finalHeight);
+                // Python crops from top-left: img[:new_h, :new_w]
+                // Unity GetPixels origin is bottom-left, so we need to crop from top by using (0, h - finalHeight)
                 var pixels = img.GetPixels(0, h - finalHeight, finalWidth, finalHeight);
                 cropped.SetPixels(pixels);
                 cropped.Apply();
@@ -1551,10 +1553,36 @@ namespace MuseTalk.Core
         
         private (Texture2D, Matrix4x4) FaceAlign(Texture2D img, Vector2 center, int inputSize, float scale, float rotate)
         {
-            // TEMPORARY: Simplified face alignment
-            var alignedImg = ResizeTexture(img, inputSize, inputSize);
-            var transform = Matrix4x4.identity;
-            return (alignedImg, transform);
+            // Python: face_align(data, center, output_size, scale, rotation) - EXACT MATCH
+            float scaleRatio = scale;
+            float rot = rotate * Mathf.PI / 180.0f;  // Python: rot = float(rotation) * np.pi / 180.0
+            
+            // Python: trans_M = np.array([[scale_ratio*cos(rot), -scale_ratio*sin(rot), output_size*0.5-center[0]*scale_ratio], 
+            //                            [scale_ratio*sin(rot), scale_ratio*cos(rot), output_size*0.5-center[1]*scale_ratio], 
+            //                            [0, 0, 1]])
+            float[,] transM = new float[,] {
+                { scaleRatio * Mathf.Cos(rot), -scaleRatio * Mathf.Sin(rot), inputSize * 0.5f - center.x * scaleRatio },
+                { scaleRatio * Mathf.Sin(rot), scaleRatio * Mathf.Cos(rot), inputSize * 0.5f - center.y * scaleRatio },
+                { 0f, 0f, 1f }
+            };
+            
+            // Python: M = trans_M[0:2]
+            float[,] M = new float[,] {
+                { transM[0, 0], transM[0, 1], transM[0, 2] },
+                { transM[1, 0], transM[1, 1], transM[1, 2] }
+            };
+            
+            // Python: cropped = cv2.warpAffine(data, M, (output_size, output_size), borderValue=0.0)
+            var cropped = TransformImg(img, M, inputSize);
+            
+            // Convert to Matrix4x4 for Unity compatibility
+            var transform = new Matrix4x4();
+            transform.m00 = M[0, 0]; transform.m01 = M[0, 1]; transform.m02 = 0f; transform.m03 = M[0, 2];
+            transform.m10 = M[1, 0]; transform.m11 = M[1, 1]; transform.m12 = 0f; transform.m13 = M[1, 2];
+            transform.m20 = 0f; transform.m21 = 0f; transform.m22 = 1f; transform.m23 = 0f;
+            transform.m30 = 0f; transform.m31 = 0f; transform.m32 = 0f; transform.m33 = 1f;
+            
+            return (cropped, transform);
         }
         
         private DenseTensor<float> PreprocessLandmarkImage(Texture2D img)
