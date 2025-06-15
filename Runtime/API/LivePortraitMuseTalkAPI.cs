@@ -144,12 +144,12 @@ namespace MuseTalk.API
         }
         
         /// <summary>
-        /// Generate talking head animation using the integrated LivePortrait + MuseTalk workflow
+        /// Generate talking head animation using the integrated LivePortrait + MuseTalk workflow (SYNCHRONOUS)
         /// 
         /// Step 1: LivePortrait generates animated textures from source image + driving frames
         /// Step 2: MuseTalk applies lip sync to animated textures using audio
         /// </summary>
-        public async Task<LivePortraitMuseTalkResult> GenerateAsync(LivePortraitMuseTalkInput input)
+        public LivePortraitMuseTalkResult Generate(LivePortraitMuseTalkInput input)
         {
             if (!_initialized)
                 throw new InvalidOperationException("API not initialized");
@@ -162,12 +162,12 @@ namespace MuseTalk.API
             
             try
             {
-                Logger.Log($"[LivePortraitMuseTalkAPI] === STARTING INTEGRATED WORKFLOW ===");
+                Logger.Log($"[LivePortraitMuseTalkAPI] === STARTING INTEGRATED WORKFLOW (SYNC) ===");
                 Logger.Log($"[LivePortraitMuseTalkAPI] Source: {input.SourceImage.width}x{input.SourceImage.height}");
                 Logger.Log($"[LivePortraitMuseTalkAPI] Driving frames: {input.DrivingFrames.Length}");
                 Logger.Log($"[LivePortraitMuseTalkAPI] Audio: {input.AudioClip.name} ({input.AudioClip.length:F2}s)");
                 
-                // STAGE 1: Generate animated textures using LivePortrait
+                // STAGE 1: Generate animated textures using LivePortrait (SYNCHRONOUS)
                 Logger.Log("[LivePortraitMuseTalkAPI] STAGE 1: Generating animated textures with LivePortrait...");
                 var livePortraitStartTime = Time.realtimeSinceStartup;
                 
@@ -178,7 +178,7 @@ namespace MuseTalk.API
                     UseComposite = input.UseComposite
                 };
                 
-                var livePortraitResult = await _livePortrait.GenerateAsync(livePortraitInput);
+                var livePortraitResult = _livePortrait.Generate(livePortraitInput);
                 var livePortraitEndTime = Time.realtimeSinceStartup;
                 
                 if (!livePortraitResult.Success)
@@ -194,7 +194,7 @@ namespace MuseTalk.API
                 
                 Logger.Log($"[LivePortraitMuseTalkAPI] Stage 1 completed - Generated {result.AnimatedTextures.Count} animated textures in {result.Metrics.LivePortraitDurationSeconds:F2}s");
                 
-                // STAGE 2: Apply lip sync using MuseTalk
+                // STAGE 2: Apply lip sync using MuseTalk (SYNCHRONOUS)
                 Logger.Log("[LivePortraitMuseTalkAPI] STAGE 2: Applying lip sync with MuseTalk...");
                 var museTalkStartTime = Time.realtimeSinceStartup;
                 
@@ -203,13 +203,15 @@ namespace MuseTalk.API
                     BatchSize = input.BatchSize
                 };
                 
-                var museTalkResult = await _museTalk.GenerateAsync(museTalkInput);
+                var museTalkTask = _museTalk.GenerateAsync(museTalkInput);
+                museTalkTask.Wait(); // Block until completion for synchronous behavior
+                var museTalkResult = museTalkTask.Result;
                 var museTalkEndTime = Time.realtimeSinceStartup;
                 
                 if (!museTalkResult.Success)
                 {
                     result.Success = false;
-                    result.ErrorMessage = $"MuseTalk generation failed: {museTalkResult.ErrorMessage}";
+                    result.ErrorMessage = $"MuseTalk lip sync failed: {museTalkResult.ErrorMessage}";
                     return result;
                 }
                 
@@ -217,40 +219,35 @@ namespace MuseTalk.API
                 result.Metrics.MuseTalkDurationSeconds = museTalkEndTime - museTalkStartTime;
                 result.Metrics.GeneratedTalkingFrames = museTalkResult.GeneratedFrames.Count;
                 
-                Logger.Log($"[LivePortraitMuseTalkAPI] Stage 2 completed - Generated {result.TalkingHeadFrames.Count} talking head frames in {result.Metrics.MuseTalkDurationSeconds:F2}s");
-                
-                // Success!
-                result.Success = true;
                 var totalEndTime = Time.realtimeSinceStartup;
-                var totalDuration = totalEndTime - startTime;
+                Logger.Log($"[LivePortraitMuseTalkAPI] Stage 2 completed - Generated {result.TalkingHeadFrames.Count} talking head frames in {result.Metrics.MuseTalkDurationSeconds:F2}s");
+                Logger.Log($"[LivePortraitMuseTalkAPI] === WORKFLOW COMPLETED in {totalEndTime - startTime:F2}s ===");
                 
-                Logger.Log($"[LivePortraitMuseTalkAPI] === WORKFLOW COMPLETED ===");
-                Logger.Log($"[LivePortraitMuseTalkAPI] Total time: {totalDuration:F2}s");
-                Logger.Log($"[LivePortraitMuseTalkAPI] LivePortrait: {result.Metrics.LivePortraitDurationSeconds:F2}s ({result.Metrics.LivePortraitDurationSeconds/totalDuration*100:F1}%)");
-                Logger.Log($"[LivePortraitMuseTalkAPI] MuseTalk: {result.Metrics.MuseTalkDurationSeconds:F2}s ({result.Metrics.MuseTalkDurationSeconds/totalDuration*100:F1}%)");
-                Logger.Log($"[LivePortraitMuseTalkAPI] Animated frames: {result.Metrics.GeneratedAnimatedFrames}");
-                Logger.Log($"[LivePortraitMuseTalkAPI] Talking frames: {result.Metrics.GeneratedTalkingFrames}");
-                
+                result.Success = true;
                 return result;
             }
             catch (Exception e)
             {
-                Logger.LogError($"[LivePortraitMuseTalkAPI] Workflow failed: {e.Message}");
+                Logger.LogError($"[LivePortraitMuseTalkAPI] Workflow failed: {e.Message}\n{e.StackTrace}");
                 result.Success = false;
                 result.ErrorMessage = e.Message;
                 return result;
             }
         }
-        
+
         /// <summary>
-        /// Generate only animated textures using LivePortrait (Stage 1 only)
-        /// Useful for previewing or when lip sync is not needed
+        /// Generate animated textures only using LivePortrait (SYNCHRONOUS)
         /// </summary>
-        public async Task<LivePortraitResult> GenerateAnimatedTexturesAsync(Texture2D sourceImage, Texture2D[] drivingFrames, bool useComposite = false)
+        public LivePortraitResult GenerateAnimatedTextures(Texture2D sourceImage, Texture2D[] drivingFrames, bool useComposite = false)
         {
             if (!_initialized)
                 throw new InvalidOperationException("API not initialized");
                 
+            if (sourceImage == null || drivingFrames == null)
+                throw new ArgumentException("Invalid input: source image and driving frames are required");
+                
+            Logger.Log($"[LivePortraitMuseTalkAPI] Generating animated textures (SYNC): {drivingFrames.Length} driving frames");
+            
             var input = new LivePortraitInput
             {
                 SourceImage = sourceImage,
@@ -258,24 +255,15 @@ namespace MuseTalk.API
                 UseComposite = useComposite
             };
             
-            return await _livePortrait.GenerateAsync(input);
+            return _livePortrait.Generate(input);
         }
-        
+
         /// <summary>
-        /// Apply lip sync to existing animated textures using MuseTalk (Stage 2 only)
-        /// Useful when you already have animated textures and want to add lip sync
+        /// Generate talking head animation using the integrated LivePortrait + MuseTalk workflow (ASYNC - LEGACY)
         /// </summary>
-        public async Task<MuseTalkResult> ApplyLipSyncAsync(Texture2D[] animatedTextures, AudioClip audioClip, int batchSize = 4)
+        public async Task<LivePortraitMuseTalkResult> GenerateAsync(LivePortraitMuseTalkInput input)
         {
-            if (!_initialized)
-                throw new InvalidOperationException("API not initialized");
-                
-            var input = new MuseTalkInput(animatedTextures, audioClip)
-            {
-                BatchSize = batchSize
-            };
-            
-            return await _museTalk.GenerateAsync(input);
+            return await Task.Run(() => Generate(input));
         }
         
         /// <summary>
