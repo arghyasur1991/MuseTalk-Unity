@@ -872,7 +872,7 @@ namespace MuseTalk.Core
             
             // Python: bs = kp.shape[0]
             // Python: num_kp = kp.shape[1]  # Bxnum_kpx3
-            int bs = 1; // Batch size is always 1 in our case
+            // int bs = 1; // Batch size is always 1 in our case
             int numKp = kp.Length / 3;
             
             // Python: rot_mat = get_rotation_matrix(pitch, yaw, roll)  # (bs, 3, 3)
