@@ -91,6 +91,8 @@ namespace MuseTalk.Core
         
         // Face analysis (reuse existing InsightFace)
         private InsightFaceHelper _insightFaceHelper;
+
+        private Texture2D _debugImage;
         
         // Configuration
         private MuseTalkConfig _config;
@@ -241,7 +243,8 @@ namespace MuseTalk.Core
                 
                 // Python: crop_info = crop_src_image(self.models, src_img)
                 var cropInfo = CropSrcImage(srcImg);
-                generatedFrames.Add(cropInfo.ImageCrop);
+                // generatedFrames.Add(cropInfo.ImageCrop);
+                generatedFrames.Add(_debugImage);
                 return new LivePortraitResult
                 {
                     Success = true,
@@ -565,8 +568,8 @@ namespace MuseTalk.Core
                 return areaB.CompareTo(areaA); // Descending order
             });
             
-            UnityEngine.Object.DestroyImmediate(resizedImg);
-            UnityEngine.Object.DestroyImmediate(detImg);
+            // UnityEngine.Object.DestroyImmediate(resizedImg);
+            // UnityEngine.Object.DestroyImmediate(detImg);
             
             // Debug.Log($"[FaceAnalysis] Completed face detection: found {finalFaces.Count} faces");
             
@@ -658,7 +661,7 @@ namespace MuseTalk.Core
             Debug.Log($"[DEBUG_GET_LANDMARK] Final landmarks: shape=({landmarks.Length}, 2), range=[{landmarks.Min(p => Mathf.Min(p.x, p.y)):F3}, {landmarks.Max(p => Mathf.Max(p.x, p.y)):F3}]");
             Debug.Log($"[DEBUG_GET_LANDMARK] Final first 3 landmarks: [[{landmarks[0].x:F5} {landmarks[0].y:F4}]\n [{landmarks[1].x:F5} {landmarks[1].y:F5}]\n [{landmarks[2].x:F5} {landmarks[2].y:F3}]]");
             
-            UnityEngine.Object.DestroyImmediate(alignedImg);
+            // UnityEngine.Object.DestroyImmediate(alignedImg);
             
             return landmarks;
         }
@@ -702,7 +705,7 @@ namespace MuseTalk.Core
             // Python: lmk = lmk @ M[:2, :2].T + M[:2, 2]
             refinedLmk = TransformLandmarksWithMatrix(refinedLmk, cropDct.Transform);
             
-            UnityEngine.Object.DestroyImmediate(imgCrop);
+            // UnityEngine.Object.DestroyImmediate(imgCrop);
             
             return refinedLmk;
         }
@@ -1115,7 +1118,7 @@ namespace MuseTalk.Core
             Debug.Log($"[DEBUG_PREDICT] Final output shape: {resultTexture.width}x{resultTexture.height}");
             Debug.Log($"[DEBUG_PREDICT] Final output range: [0, 255]"); // After conversion to texture
             
-            UnityEngine.Object.DestroyImmediate(img256);
+            // UnityEngine.Object.DestroyImmediate(img256);
             
             // Python: return I_p, pred_info
             return (resultTexture, predInfo);
@@ -2327,42 +2330,39 @@ namespace MuseTalk.Core
             // Python: scale_ratio = scale
             float scaleRatio = scale;
             // Python: rot = float(rotation) * np.pi / 180.0
-            float rot = rotate * Mathf.PI / 180.0f;
+            float rot = rotate * Mathf.Deg2Rad;
             
-            // Python: trans_M = np.array([[scale_ratio*cos(rot), -scale_ratio*sin(rot), output_size*0.5-center[0]*scale_ratio], 
-            //                            [scale_ratio*sin(rot), scale_ratio*cos(rot), output_size*0.5-center[1]*scale_ratio], 
+            // Python: trans_M = np.array([[scale_ratio*cos(rot), -scale_ratio*sin(rot), output_size*0.5-center[0]*scale_ratio*cos(rot) + center[1]*scale_ratio*sin(rot)], 
+            //                            [scale_ratio*sin(rot), scale_ratio*cos(rot), output_size*0.5-center[0]*scale_ratio*sin(rot) - center[1]*scale_ratio*cos(rot)], 
             //                            [0, 0, 1]], dtype=np.float32)
+            // Simplified from python:
+            // t_x = output_size*0.5 - (center[0]*scale_ratio*cos(rot) - center[1]*scale_ratio*sin(rot))
+            // t_y = output_size*0.5 - (center[0]*scale_ratio*sin(rot) + center[1]*scale_ratio*cos(rot))
             float cosRot = Mathf.Cos(rot);
             float sinRot = Mathf.Sin(rot);
             float outputSizeHalf = inputSize * 0.5f;
             
-            float[,] transM = new float[,] {
-                { scaleRatio * cosRot, -scaleRatio * sinRot, outputSizeHalf - center.x * scaleRatio },
-                { scaleRatio * sinRot, scaleRatio * cosRot, outputSizeHalf - center.y * scaleRatio },
-                { 0f, 0f, 1f }
-            };
+            float m00 = scaleRatio * cosRot;
+            float m01 = -scaleRatio * sinRot;
+            float m02 = outputSizeHalf - center.x * m00 - center.y * m01;
             
-            // Python: M = trans_M[0:2]
+            float m10 = scaleRatio * sinRot;
+            float m11 = scaleRatio * cosRot;
+            float m12 = outputSizeHalf - center.x * m10 - center.y * m11;
+
             float[,] M = new float[,] {
-                { transM[0, 0], transM[0, 1], transM[0, 2] },
-                { transM[1, 0], transM[1, 1], transM[1, 2] }
+                { m00, m01, m02 },
+                { m10, m11, m12 }
             };
+
+            Debug.Log($"[DEBUG_FACE_ALIGN] M: {M[0, 0]}, {M[0, 1]}, {M[0, 2]}, {M[1, 0]}, {M[1, 1]}, {M[1, 2]}");
             
-            // Debug the input image range before transformation
-            var inputPixels = img.GetPixels();
-            float minInput = float.MaxValue, maxInput = float.MinValue;
-            foreach (var pixel in inputPixels)
-            {
-                float pixelMax = Mathf.Max(pixel.r, Mathf.Max(pixel.g, pixel.b));
-                float pixelMin = Mathf.Min(pixel.r, Mathf.Min(pixel.g, pixel.b));
-                maxInput = Mathf.Max(maxInput, pixelMax);
-                minInput = Mathf.Min(minInput, pixelMin);
-            }
-            Debug.Log($"[DEBUG_FACE_ALIGN] Input image pixel range: [{minInput * 255f:F3}, {maxInput * 255f:F3}]");
-            
+            _debugImage = img;
             // Python: cropped = cv2.warpAffine(data, M, (output_size, output_size), borderValue=0.0)
             var cropped = TransformImgExact(img, M, inputSize);
-            
+
+            _debugImage = cropped;
+
             // Debug the output image range after transformation
             // var outputPixels = cropped.GetPixels();
             // float minOutput = float.MaxValue, maxOutput = float.MinValue;
@@ -2374,14 +2374,28 @@ namespace MuseTalk.Core
             //     minOutput = Mathf.Min(minOutput, pixelMin);
             // }
             // Debug.Log($"[DEBUG_FACE_ALIGN] Output image pixel range: [{minOutput * 255f:F3}, {maxOutput * 255f:F3}]");
-            
+
             // Convert to Matrix4x4 for Unity compatibility
-            var transform = new Matrix4x4();
-            transform.m00 = M[0, 0]; transform.m01 = M[0, 1]; transform.m02 = 0f; transform.m03 = M[0, 2];
-            transform.m10 = M[1, 0]; transform.m11 = M[1, 1]; transform.m12 = 0f; transform.m13 = M[1, 2];
-            transform.m20 = 0f; transform.m21 = 0f; transform.m22 = 1f; transform.m23 = 0f;
-            transform.m30 = 0f; transform.m31 = 0f; transform.m32 = 0f; transform.m33 = 1f;
-            
+            var transform = new Matrix4x4
+            {
+                m00 = M[0, 0],
+                m01 = M[0, 1],
+                m02 = 0f,
+                m03 = M[0, 2],
+                m10 = M[1, 0],
+                m11 = M[1, 1],
+                m12 = 0f,
+                m13 = M[1, 2],
+                m20 = 0f,
+                m21 = 0f,
+                m22 = 1f,
+                m23 = 0f,
+                m30 = 0f,
+                m31 = 0f,
+                m32 = 0f,
+                m33 = 1f
+            };
+
             return (cropped, transform);
         }
         
@@ -2400,9 +2414,9 @@ namespace MuseTalk.Core
                         // CRITICAL: Unity GetPixels() is bottom-left origin, flip Y for ONNX (top-left)
                         int unityY = 192 - 1 - h; // Flip Y coordinate for ONNX coordinate system
                         int pixelIdx = unityY * 192 + w;
-                        float pixelValue = c == 0 ? pixels[pixelIdx].r : 
+                        float pixelValue = c == 0 ? pixels[pixelIdx].b : 
                                           c == 1 ? pixels[pixelIdx].g : 
-                                                   pixels[pixelIdx].b;
+                                                   pixels[pixelIdx].r;
                         // CRITICAL FIX: Python does NOT normalize to [0,1] for landmark detection!
                         // Keep pixel values in [0,255] range to match Python exactly
                         tensorData[idx++] = pixelValue * 255f; // Convert from [0,1] to [0,255]
@@ -2570,12 +2584,19 @@ namespace MuseTalk.Core
             var srcPixels = img.GetPixels32(); // Get as Color32 for better precision
             int srcWidth = img.width;
             int srcHeight = img.height;
+
+            Debug.Log($"[DEBUG_TRANSFORM_IMG_EXACT] src: {srcWidth}x{srcHeight}");
+            Debug.Log($"[DEBUG_TRANSFORM_IMG_EXACT] M: {M[0, 0]}, {M[0, 1]}, {M[0, 2]}, {M[1, 0]}, {M[1, 1]}, {M[1, 2]}");
             
             // Create result pixel array
             var resultPixels = new Color32[dsize * dsize];
             
             // CRITICAL: Process exactly like OpenCV cv2.warpAffine
             // OpenCV processes in row-major order with top-left origin (0,0) at top-left
+            var minSrcX = float.MaxValue;
+            var minSrcY = float.MaxValue;
+            var maxSrcX = float.MinValue;
+            var maxSrcY = float.MinValue;
             for (int dstY = 0; dstY < dsize; dstY++)
             {
                 for (int dstX = 0; dstX < dsize; dstX++)
@@ -2585,10 +2606,15 @@ namespace MuseTalk.Core
                     // OpenCV: srcY = M[1,0]*dstX + M[1,1]*dstY + M[1,2]
                     float srcX = M[0, 0] * dstX + M[0, 1] * dstY + M[0, 2];
                     float srcY = M[1, 0] * dstX + M[1, 1] * dstY + M[1, 2];
+
+                    minSrcX = Mathf.Min(minSrcX, srcX);
+                    minSrcY = Mathf.Min(minSrcY, srcY);
+                    maxSrcX = Mathf.Max(maxSrcX, srcX);
+                    maxSrcY = Mathf.Max(maxSrcY, srcY);
                     
                     // Get integer and fractional parts for bilinear interpolation
                     int x0 = Mathf.FloorToInt(srcX);
-                    int y0 = Mathf.FloorToInt(srcY);
+                    int y0 = Mathf.FloorToInt(srcY); // srcHeight - 1 - Mathf.FloorToInt(srcY);
                     int x1 = x0 + 1;
                     int y1 = y0 + 1;
                     
@@ -2603,8 +2629,8 @@ namespace MuseTalk.Core
                     {
                         // CRITICAL: OpenCV uses top-left origin, Unity GetPixels32() uses bottom-left origin
                         // Convert OpenCV coordinates to Unity coordinates for pixel access
-                        int unity_y0 = srcHeight - 1 - y0; // Convert OpenCV top-left to Unity bottom-left
-                        int unity_y1 = srcHeight - 1 - y1; // Convert OpenCV top-left to Unity bottom-left
+                        int unity_y0 = y0; // Convert OpenCV top-left to Unity bottom-left
+                        int unity_y1 = y1; // Convert OpenCV top-left to Unity bottom-left
                         
                         // Get the four corner pixels for bilinear interpolation
                         var c00 = srcPixels[unity_y0 * srcWidth + x0];  // Top-left in OpenCV coords
@@ -2634,6 +2660,8 @@ namespace MuseTalk.Core
                     resultPixels[result_y_flipped * dsize + dstX] = new Color32(r, g, b, 255);
                 }
             }
+
+            Debug.Log($"[DEBUG_TRANSFORM_IMG_EXACT] minSrcX: {minSrcX}, minSrcY: {minSrcY}, maxSrcX: {maxSrcX}, maxSrcY: {maxSrcY}");
             
             result.SetPixels32(resultPixels);
             result.Apply();
@@ -2856,7 +2884,7 @@ namespace MuseTalk.Core
             float resultMax = resultPixelsDebug.Max(p => Mathf.Max(p.r, Mathf.Max(p.g, p.b)));
             Debug.Log($"[DEBUG_PASTEBACK] Final result pixel range: [{resultMin:F3}, {resultMax:F3}]");
             
-            UnityEngine.Object.DestroyImmediate(warped);
+            // UnityEngine.Object.DestroyImmediate(warped);
             
             return result;
         }
