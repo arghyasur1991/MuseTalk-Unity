@@ -1778,40 +1778,50 @@ namespace MuseTalk.Core
         /// <summary>
         /// Python: nms_boxes() - EXACT MATCH
         /// </summary>
-        private List<int> NmsBoxes(List<float[]> sortedBoxes, float iouThreshold)
+        private List<int> NmsBoxes(List<float[]> boxes, List<float> scores, float iouThreshold)
         {
-            if (sortedBoxes.Count == 0)
+            if (boxes.Count == 0)
             {
                 return new List<int>();
             }
 
-            var keepIndices = new List<int>();
-            var suppressed = new bool[sortedBoxes.Count];
+            var keep = new List<bool>();
 
-            for (int i = 0; i < sortedBoxes.Count; i++)
+            for (int i = 0; i < boxes.Count; i++)
             {
-                if (suppressed[i])
+                bool isKeep = true;
+                for (int j = 0; j < i; j++)
                 {
-                    continue;
-                }
-
-                keepIndices.Add(i);
-
-                for (int j = i + 1; j < sortedBoxes.Count; j++)
-                {
-                    if (suppressed[j])
+                    if (!keep[j])
                     {
                         continue;
                     }
 
-                    float iou = BbIntersectionOverUnion(sortedBoxes[i], sortedBoxes[j]);
-                    if (iou > iouThreshold)
+                    float iou = BbIntersectionOverUnion(boxes[i], boxes[j]);
+                    if (iou >= iouThreshold)
                     {
-                        suppressed[j] = true;
+                        if (scores[i] > scores[j])
+                        {
+                            keep[j] = false;
+                        }
+                        else
+                        {
+                            isKeep = false;
+                            break;
+                        }
                     }
                 }
+                keep.Add(isKeep);
             }
 
+            var keepIndices = new List<int>();
+            for (int i = 0; i < keep.Count; i++)
+            {
+                if (keep[i])
+                {
+                    keepIndices.Add(i);
+                }
+            }
             return keepIndices;
         }
         
@@ -2268,7 +2278,8 @@ namespace MuseTalk.Core
             
             // Python: keep = nms_boxes(pre_det, [1 for s in pre_det], nms_thresh)
             const float nmsThresh = 0.4f;
-            var keep = NmsBoxes(preDet, nmsThresh);
+            var scoresForNms = Enumerable.Repeat(1f, preDet.Count).ToList();
+            var keep = NmsBoxes(preDet, scoresForNms, nmsThresh);
             
             // Build final face detection results
             var faces = new List<FaceDetectionResult>();
