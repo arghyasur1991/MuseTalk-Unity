@@ -148,5 +148,68 @@ namespace MuseTalk.Utils
             // Debug.Log($"[MuseTalkInference] Using FP32 model: {baseModelPath}");
             return baseModelPath;
         }
+
+        /// <summary>
+        /// Load mask template texture from Resources or StreamingAssets
+        /// Matches Python: mask_crop = cv2.imread('mask_template.png')
+        /// </summary>
+        public static Texture2D LoadMaskTemplate(MuseTalkConfig config)
+        {
+            try
+            {
+                // First try to load from Resources
+                var maskTexture = Resources.Load<Texture2D>("mask_template");
+                if (maskTexture != null)
+                {
+                    Debug.Log("[ModelUtils] Loaded mask template from Resources");
+                    return maskTexture;
+                }
+                
+                // Try to load from StreamingAssets
+                string maskPath = System.IO.Path.Combine(Application.streamingAssetsPath, "mask_template.png");
+                if (System.IO.File.Exists(maskPath))
+                {
+                    byte[] fileData = System.IO.File.ReadAllBytes(maskPath);
+                    var texture = new Texture2D(2, 2);
+                    if (texture.LoadImage(fileData))
+                    {
+                        Debug.Log("[ModelUtils] Loaded mask template from StreamingAssets");
+                        return texture;
+                    }
+                    else
+                    {
+                        UnityEngine.Object.DestroyImmediate(texture);
+                    }
+                }
+                
+                // Try to load from config model path
+                if (!string.IsNullOrEmpty(config?.ModelPath))
+                {
+                    string configMaskPath = System.IO.Path.Combine(config.ModelPath, "mask_template.png");
+                    if (System.IO.File.Exists(configMaskPath))
+                    {
+                        byte[] fileData = System.IO.File.ReadAllBytes(configMaskPath);
+                        var texture = new Texture2D(2, 2);
+                        if (texture.LoadImage(fileData))
+                        {
+                            Debug.Log($"[ModelUtils] Loaded mask template from config path: {configMaskPath}");
+                            return texture;
+                        }
+                        else
+                        {
+                            UnityEngine.Object.DestroyImmediate(texture);
+                        }
+                    }
+                }
+                
+                Debug.LogWarning("[ModelUtils] Could not find mask_template.png in Resources, StreamingAssets, or config path. Will use default mask.");
+                return null;
+            }
+            catch (System.Exception e)
+            {
+                Debug.LogError($"[ModelUtils] Error loading mask template: {e.Message}");
+                return null;
+            }
+        }
     }
 } 

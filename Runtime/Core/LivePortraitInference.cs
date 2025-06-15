@@ -44,6 +44,7 @@ namespace MuseTalk.Core
         public Texture2D SourceImage { get; set; }
         public Texture2D[] DrivingFrames { get; set; }
         public bool UseComposite { get; set; } = false;
+        public Texture2D MaskTemplate { get; set; } // Python: mask_crop from mask_template.png
     }
 
     /// <summary>
@@ -102,6 +103,9 @@ namespace MuseTalk.Core
         // Composite flag - matches Python self.flg_composite
         private bool _flgComposite = false;
         
+        // Mask template - matches Python self.mask_crop
+        private Texture2D _maskTemplate;
+        
         public bool IsInitialized => _initialized;
         
         public LivePortraitInference(MuseTalkConfig config)
@@ -118,6 +122,9 @@ namespace MuseTalk.Core
                 Landmarks = null,
                 InitialMotionInfo = null
             };
+            
+            // Load mask template - matches Python self.mask_crop = cv2.imread('mask_template.png')
+            _maskTemplate = ModelUtils.LoadMaskTemplate(_config);
             
             _initialized = true;
             // Debug.Log("[LivePortraitInference] Successfully initialized");
@@ -185,6 +192,22 @@ namespace MuseTalk.Core
             if (input?.SourceImage == null || input.DrivingFrames == null || input.DrivingFrames.Length == 0)
                 throw new ArgumentException("Invalid input: source image and driving frames are required");
                 
+            // Store mask template - matches Python self.mask_crop
+            // Use input mask template if provided, otherwise use the one loaded during initialization
+            if (input.MaskTemplate != null)
+            {
+                _maskTemplate = input.MaskTemplate;
+                Debug.Log("[LivePortraitInference] Using mask template from input");
+            }
+            else if (_maskTemplate != null)
+            {
+                Debug.Log("[LivePortraitInference] Using mask template loaded during initialization");
+            }
+            else
+            {
+                Debug.LogWarning("[LivePortraitInference] No mask template available, will use default circular mask");
+            }
+                
             try
             {
                 // Debug.Log($"[LivePortraitInference] === STARTING LIVEPORTRAIT GENERATION ===");
@@ -195,6 +218,16 @@ namespace MuseTalk.Core
                 // Python: src_img = src_preprocess(img)
                 var srcImg = SrcPreprocess(input.SourceImage);
                 // Debug.Log("[LivePortraitInference] Source preprocessed");
+                
+                // CRITICAL FIX: Keep reference to preprocessed source image for pasteback
+                // In Python, src_img is used for pasteback - make sure it's valid
+                Debug.Log($"[DEBUG_SRCIMG] Preprocessed source image: {srcImg.width}x{srcImg.height}, format: {srcImg.format}");
+                
+                // Debug source image pixel values to ensure it's not black
+                var srcPixels = srcImg.GetPixels();
+                float srcMin = srcPixels.Min(p => Mathf.Min(p.r, Mathf.Min(p.g, p.b)));
+                float srcMax = srcPixels.Max(p => Mathf.Max(p.r, Mathf.Max(p.g, p.b)));
+                Debug.Log($"[DEBUG_SRCIMG] Source image pixel range: [{srcMin:F3}, {srcMax:F3}]");
                 
                 // Python: crop_info = crop_src_image(self.models, src_img)
                 var cropInfo = CropSrcImage(srcImg);
@@ -2501,6 +2534,13 @@ namespace MuseTalk.Core
                 _warpingSpade?.Dispose();
                 _insightFaceHelper?.Dispose();
                 
+                // Clean up mask template if it was loaded during initialization
+                if (_maskTemplate != null)
+                {
+                    UnityEngine.Object.DestroyImmediate(_maskTemplate);
+                    _maskTemplate = null;
+                }
+                
                 _disposed = true;
                 // Debug.Log("[LivePortraitInference] Disposed successfully");
             }
@@ -2515,17 +2555,89 @@ namespace MuseTalk.Core
         /// </summary>
         private Texture2D PreparePasteBack(Matrix4x4 cropMc2o, int width, int height)
         {
-            // For now, create a simple white mask - this would need proper mask template loading
             // Python: mask_ori = cv2.warpAffine(mask_crop, crop_M_c2o[:2, :], dsize=dsize, flags=cv2.INTER_LINEAR)
             // Python: mask_ori = mask_ori.astype(np.float32) / 255.0
-            var maskOri = new Texture2D(width, height);
-            var pixels = new Color[width * height];
+            
+            if (_maskTemplate == null)
+            {
+                Debug.LogWarning("[PreparePasteBack] No mask template provided, creating default circular mask");
+                return CreateDefaultMask(width, height);
+            }
+            
+            // Transform mask template using crop transformation matrix
+            float[,] M = new float[,] {
+                { cropMc2o.m00, cropMc2o.m01, cropMc2o.m03 },
+                { cropMc2o.m10, cropMc2o.m11, cropMc2o.m13 }
+            };
+            
+            var maskOri = TransformImgExact(_maskTemplate, M, width, height);
+            
+            // Python: mask_ori = mask_ori.astype(np.float32) / 255.0
+            // Convert to float [0,1] range
+            var pixels = maskOri.GetPixels();
             for (int i = 0; i < pixels.Length; i++)
             {
-                pixels[i] = Color.white; // Simple white mask for now
+                // Convert from [0,255] to [0,1] and use grayscale
+                float grayValue = (pixels[i].r + pixels[i].g + pixels[i].b) / 3f;
+                pixels[i] = new Color(grayValue, grayValue, grayValue, 1f);
             }
             maskOri.SetPixels(pixels);
             maskOri.Apply();
+            
+            Debug.Log($"[PreparePasteBack] Transformed mask template: {_maskTemplate.width}x{_maskTemplate.height} -> {width}x{height}");
+            
+            return maskOri;
+        }
+        
+        /// <summary>
+        /// Create default circular mask when no template is provided
+        /// </summary>
+        private Texture2D CreateDefaultMask(int width, int height)
+        {
+            var maskOri = new Texture2D(width, height);
+            var pixels = new Color[width * height];
+            
+            // Create a circular/elliptical mask in the center region
+            Vector2 center = new Vector2(width * 0.5f, height * 0.5f);
+            float radiusX = width * 0.3f;  // Elliptical mask
+            float radiusY = height * 0.4f;
+            
+            for (int y = 0; y < height; y++)
+            {
+                for (int x = 0; x < width; x++)
+                {
+                    int pixelIdx = y * width + x;
+                    
+                    // Calculate distance from center (elliptical)
+                    float dx = (x - center.x) / radiusX;
+                    float dy = (y - center.y) / radiusY;
+                    float distance = Mathf.Sqrt(dx * dx + dy * dy);
+                    
+                    // Smooth falloff from center
+                    float maskValue;
+                    if (distance <= 0.8f)
+                    {
+                        maskValue = 1.0f; // Full mask in center
+                    }
+                    else if (distance <= 1.2f)
+                    {
+                        // Smooth transition
+                        maskValue = Mathf.Lerp(1.0f, 0.0f, (distance - 0.8f) / 0.4f);
+                    }
+                    else
+                    {
+                        maskValue = 0.0f; // No mask at edges
+                    }
+                    
+                    pixels[pixelIdx] = new Color(maskValue, maskValue, maskValue, 1f);
+                }
+            }
+            
+            maskOri.SetPixels(pixels);
+            maskOri.Apply();
+            
+            Debug.Log($"[PreparePasteBack] Created default mask: {width}x{height}, center=({center.x:F1},{center.y:F1}), radii=({radiusX:F1},{radiusY:F1})");
+            
             return maskOri;
         }
         
@@ -2570,9 +2682,17 @@ namespace MuseTalk.Core
         /// </summary>
         private Texture2D PasteBack(Texture2D imgCrop, Matrix4x4 Mc2o, Texture2D imgOri, Texture2D maskOri)
         {
+            Debug.Log($"[DEBUG_PASTEBACK] Input dimensions - imgCrop: {imgCrop.width}x{imgCrop.height}, imgOri: {imgOri.width}x{imgOri.height}, maskOri: {maskOri.width}x{maskOri.height}");
+            
             // Python: dsize = (img_ori.shape[1], img_ori.shape[0])
             int dsize_w = imgOri.width;
             int dsize_h = imgOri.height;
+            
+            // Debug original image pixel values
+            var oriPixelsDebug = imgOri.GetPixels();
+            float oriMin = oriPixelsDebug.Min(p => Mathf.Min(p.r, Mathf.Min(p.g, p.b)));
+            float oriMax = oriPixelsDebug.Max(p => Mathf.Max(p.r, Mathf.Max(p.g, p.b)));
+            Debug.Log($"[DEBUG_PASTEBACK] Original image pixel range: [{oriMin:F3}, {oriMax:F3}]");
             
             // Python: result = cv2.warpAffine(img_crop, M_c2o[:2, :], dsize=dsize, flags=cv2.INTER_LINEAR)
             float[,] M = new float[,] {
@@ -2581,6 +2701,12 @@ namespace MuseTalk.Core
             };
             var warped = TransformImgExact(imgCrop, M, dsize_w, dsize_h);
             
+            // Debug warped image pixel values
+            var warpedPixelsDebug = warped.GetPixels();
+            float warpedMin = warpedPixelsDebug.Min(p => Mathf.Min(p.r, Mathf.Min(p.g, p.b)));
+            float warpedMax = warpedPixelsDebug.Max(p => Mathf.Max(p.r, Mathf.Max(p.g, p.b)));
+            Debug.Log($"[DEBUG_PASTEBACK] Warped image pixel range: [{warpedMin:F3}, {warpedMax:F3}]");
+            
             // Python: result = np.clip(mask_ori * result + (1 - mask_ori) * img_ori, 0, 255).astype(np.uint8)
             var result = new Texture2D(dsize_w, dsize_h);
             var warpedPixels = warped.GetPixels();
@@ -2588,7 +2714,13 @@ namespace MuseTalk.Core
             var maskPixels = maskOri.GetPixels();
             var resultPixels = new Color[dsize_w * dsize_h];
             
-            for (int i = 0; i < resultPixels.Length; i++)
+            // Check array sizes match
+            if (warpedPixels.Length != oriPixels.Length || oriPixels.Length != maskPixels.Length)
+            {
+                Debug.LogError($"[DEBUG_PASTEBACK] Pixel array size mismatch! warped: {warpedPixels.Length}, ori: {oriPixels.Length}, mask: {maskPixels.Length}");
+            }
+            
+            for (int i = 0; i < resultPixels.Length && i < warpedPixels.Length && i < oriPixels.Length && i < maskPixels.Length; i++)
             {
                 float maskValue = maskPixels[i].r; // Use red channel as mask value
                 resultPixels[i] = Color.Lerp(oriPixels[i], warpedPixels[i], maskValue);
@@ -2596,6 +2728,12 @@ namespace MuseTalk.Core
             
             result.SetPixels(resultPixels);
             result.Apply();
+            
+            // Debug final result pixel values
+            var resultPixelsDebug = result.GetPixels();
+            float resultMin = resultPixelsDebug.Min(p => Mathf.Min(p.r, Mathf.Min(p.g, p.b)));
+            float resultMax = resultPixelsDebug.Max(p => Mathf.Max(p.r, Mathf.Max(p.g, p.b)));
+            Debug.Log($"[DEBUG_PASTEBACK] Final result pixel range: [{resultMin:F3}, {resultMax:F3}]");
             
             UnityEngine.Object.DestroyImmediate(warped);
             
