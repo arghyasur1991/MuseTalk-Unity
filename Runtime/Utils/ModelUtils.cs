@@ -67,7 +67,7 @@ namespace MuseTalk.Utils
                 }
                 catch (Exception)
                 {
-                    Debug.Log("[MuseTalkInference] Using CPU execution provider (GPU not available)");
+                    // Debug.Log("[MuseTalkInference] Using CPU execution provider (GPU not available)");
                 }
             }
             
@@ -88,7 +88,7 @@ namespace MuseTalk.Utils
                 // sessionOptions.AppendExecutionProvider_CoreML();
             }
             var model = new InferenceSession(modelPath, sessionOptions);
-            Debug.Log($"[MuseTalkInference] Loaded {modelName} from {modelPath}");
+            // Debug.Log($"[MuseTalkInference] Loaded {modelName} from {modelPath}");
             return model;
         }
 
@@ -139,13 +139,13 @@ namespace MuseTalk.Utils
                 
                 if (File.Exists(int8ModelPath))
                 {
-                    Debug.Log($"[MuseTalkInference] Using INT8 model (performance optimization): {int8ModelPath}");
+                    // Debug.Log($"[MuseTalkInference] Using INT8 model (performance optimization): {int8ModelPath}");
                     return int8ModelPath;
                 }
-                Debug.LogWarning($"[MuseTalkInference] INT8 model not found: {int8ModelPath}, falling back to FP32");
+                // Debug.LogWarning($"[MuseTalkInference] INT8 model not found: {int8ModelPath}, falling back to FP32");
             }
             
-            Debug.Log($"[MuseTalkInference] Using FP32 model: {baseModelPath}");
+            // Debug.Log($"[MuseTalkInference] Using FP32 model: {baseModelPath}");
             return baseModelPath;
         }
     }

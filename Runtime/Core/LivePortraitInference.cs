@@ -823,6 +823,12 @@ namespace MuseTalk.Core
             // Python: pred_info['lmk'] = lmk
             predInfo.Landmarks = lmk;
             
+            // CRITICAL: The calc_driving_ratio section is computed but NEVER USED in ONNX inference
+            // Python: lmk = lmk[None]
+            // Python: c_d_eyes = np.concatenate([calculate_distance_ratio(lmk, 6, 18, 0, 12), calculate_distance_ratio(lmk, 30, 42, 24, 36)], axis=1)
+            // Python: c_d_lip = calculate_distance_ratio(lmk, 90, 102, 48, 66)
+            // These are calculated but never used in the rest of the function!
+            
             // Python: img = cv2.resize(img, (256, 256))
             var img256 = ResizeTexture(img, 256, 256);
             
@@ -872,6 +878,12 @@ namespace MuseTalk.Core
             
             // Python: x_d_new = scale_new * (x_c_s @ R_new + delta_new) + t_new
             var xDNew = CalculateNewKeypoints(xCs, RNew, deltaNew, scaleNew, tNew);
+            
+            // Debug: Check keypoint transformation values
+            Logger.Log($"[Predict] xCs range: [{xCs.Min():F3}, {xCs.Max():F3}]");
+            Logger.Log($"[Predict] xDNew range: [{xDNew.Min():F3}, {xDNew.Max():F3}]");
+            Logger.Log($"[Predict] scaleNew: [{string.Join(", ", scaleNew.Select(x => x.ToString("F3")))}]");
+            Logger.Log($"[Predict] tNew: [{string.Join(", ", tNew.Select(x => x.ToString("F3")))}]");
             
             // Python: x_d_new = stitching(models, x_s, x_d_new)
             xDNew = Stitching(xs, xDNew);
@@ -960,6 +972,11 @@ namespace MuseTalk.Core
             var kpDrivingTensor = new DenseTensor<float>(kpDriving, new[] { 1, kpDriving.Length / 3, 3 });
             
             Logger.Log($"[WarpingSpade] Input shapes - feature3d: {feature3DTensor.Dimensions[0]}x{feature3DTensor.Dimensions[1]}x{feature3DTensor.Dimensions[2]}x{feature3DTensor.Dimensions[3]}x{feature3DTensor.Dimensions[4]}, kpSource: {kpSourceTensor.Dimensions[0]}x{kpSourceTensor.Dimensions[1]}x{kpSourceTensor.Dimensions[2]}, kpDriving: {kpDrivingTensor.Dimensions[0]}x{kpDrivingTensor.Dimensions[1]}x{kpDrivingTensor.Dimensions[2]}");
+            
+            // Debug: Check input value ranges
+            Logger.Log($"[WarpingSpade] Feature3D range: [{feature3d.Min():F3}, {feature3d.Max():F3}]");
+            Logger.Log($"[WarpingSpade] KpSource range: [{kpSource.Min():F3}, {kpSource.Max():F3}]");
+            Logger.Log($"[WarpingSpade] KpDriving range: [{kpDriving.Min():F3}, {kpDriving.Max():F3}]");
             
             // Python: net = models["warping_spade"]
             // Python: output = net.run(None, {"feature_3d": feature_3d, "kp_driving": kp_driving, "kp_source": kp_source})
@@ -1707,6 +1724,11 @@ namespace MuseTalk.Core
             int width = size;
             
             Logger.Log($"[ConvertOutputToTexture] Processing output: {output.Length} elements -> {channels}x{height}x{width}");
+            
+            // Debug: Check output value ranges
+            float minVal = output.Min();
+            float maxVal = output.Max();
+            Logger.Log($"[ConvertOutputToTexture] Output value range: [{minVal:F3}, {maxVal:F3}]");
             
             var texture = new Texture2D(width, height);
             var pixels = new Color[width * height];
