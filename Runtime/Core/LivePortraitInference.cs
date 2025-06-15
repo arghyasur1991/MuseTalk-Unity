@@ -2579,90 +2579,73 @@ namespace MuseTalk.Core
         {
             // Create result texture - MUST use RGB24 format for consistent processing
             var result = new Texture2D(dsize, dsize, TextureFormat.RGB24, false);
-            
+
             // Get source image data as raw pixel array - Unity format is RGBA but we need RGB
             var srcPixels = img.GetPixels32(); // Get as Color32 for better precision
             int srcWidth = img.width;
             int srcHeight = img.height;
-
-            Debug.Log($"[DEBUG_TRANSFORM_IMG_EXACT] src: {srcWidth}x{srcHeight}");
-            Debug.Log($"[DEBUG_TRANSFORM_IMG_EXACT] M: {M[0, 0]}, {M[0, 1]}, {M[0, 2]}, {M[1, 0]}, {M[1, 1]}, {M[1, 2]}");
             
             // Create result pixel array
             var resultPixels = new Color32[dsize * dsize];
-            
+
+            // Invert the transformation matrix M to get the mapping from destination to source
+            float[,] invM = InvertAffineTransform(M);
+
             // CRITICAL: Process exactly like OpenCV cv2.warpAffine
             // OpenCV processes in row-major order with top-left origin (0,0) at top-left
-            var minSrcX = float.MaxValue;
-            var minSrcY = float.MaxValue;
-            var maxSrcX = float.MinValue;
-            var maxSrcY = float.MinValue;
             for (int dstY = 0; dstY < dsize; dstY++)
             {
                 for (int dstX = 0; dstX < dsize; dstX++)
                 {
-                    // Apply transformation matrix to destination coordinates to get source coordinates
-                    // OpenCV: srcX = M[0,0]*dstX + M[0,1]*dstY + M[0,2]
-                    // OpenCV: srcY = M[1,0]*dstX + M[1,1]*dstY + M[1,2]
-                    float srcX = M[0, 0] * dstX + M[0, 1] * dstY + M[0, 2];
-                    float srcY = M[1, 0] * dstX + M[1, 1] * dstY + M[1, 2];
+                    // Apply inverse transformation matrix to find source coordinates
+                    float srcX = invM[0, 0] * dstX + invM[0, 1] * dstY + invM[0, 2];
+                    float srcY = invM[1, 0] * dstX + invM[1, 1] * dstY + invM[1, 2];
 
-                    minSrcX = Mathf.Min(minSrcX, srcX);
-                    minSrcY = Mathf.Min(minSrcY, srcY);
-                    maxSrcX = Mathf.Max(maxSrcX, srcX);
-                    maxSrcY = Mathf.Max(maxSrcY, srcY);
-                    
                     // Get integer and fractional parts for bilinear interpolation
                     int x0 = Mathf.FloorToInt(srcX);
-                    int y0 = Mathf.FloorToInt(srcY); // srcHeight - 1 - Mathf.FloorToInt(srcY);
-                    int x1 = x0 + 1;
-                    int y1 = y0 + 1;
-                    
+                    int y0 = Mathf.FloorToInt(srcY);
+
                     float fx = srcX - x0;
                     float fy = srcY - y0;
-                    
+
                     // Default to black (borderValue=0.0 in OpenCV)
                     byte r = 0, g = 0, b = 0;
-                    
+
                     // Bounds check for bilinear interpolation
-                    if (x0 >= 0 && x1 < srcWidth && y0 >= 0 && y1 < srcHeight)
+                    if (x0 >= 0 && (x0 + 1) < srcWidth && y0 >= 0 && (y0 + 1) < srcHeight)
                     {
                         // CRITICAL: OpenCV uses top-left origin, Unity GetPixels32() uses bottom-left origin
                         // Convert OpenCV coordinates to Unity coordinates for pixel access
-                        int unity_y0 = y0; // Convert OpenCV top-left to Unity bottom-left
-                        int unity_y1 = y1; // Convert OpenCV top-left to Unity bottom-left
-                        
+                        int unity_y0 = srcHeight - 1 - y0;
+                        int unity_y1 = srcHeight - 1 - (y0 + 1);
+
                         // Get the four corner pixels for bilinear interpolation
-                        var c00 = srcPixels[unity_y0 * srcWidth + x0];  // Top-left in OpenCV coords
-                        var c10 = srcPixels[unity_y0 * srcWidth + x1];  // Top-right in OpenCV coords
-                        var c01 = srcPixels[unity_y1 * srcWidth + x0];  // Bottom-left in OpenCV coords
-                        var c11 = srcPixels[unity_y1 * srcWidth + x1];  // Bottom-right in OpenCV coords
-                        
-                        // Bilinear interpolation - OpenCV formula
-                        // result = (1-fx)(1-fy)*c00 + fx(1-fy)*c10 + (1-fx)fy*c01 + fx*fy*c11
+                        var c00 = srcPixels[unity_y0 * srcWidth + x0];
+                        var c10 = srcPixels[unity_y0 * srcWidth + x0 + 1];
+                        var c01 = srcPixels[unity_y1 * srcWidth + x0];
+                        var c11 = srcPixels[unity_y1 * srcWidth + x0 + 1];
+
+                        // Bilinear interpolation
                         float inv_fx = 1.0f - fx;
                         float inv_fy = 1.0f - fy;
                         
                         float r_float = inv_fx * inv_fy * c00.r + fx * inv_fy * c10.r + inv_fx * fy * c01.r + fx * fy * c11.r;
                         float g_float = inv_fx * inv_fy * c00.g + fx * inv_fy * c10.g + inv_fx * fy * c01.g + fx * fy * c11.g;
                         float b_float = inv_fx * inv_fy * c00.b + fx * inv_fy * c10.b + inv_fx * fy * c01.b + fx * fy * c11.b;
-                        
+
                         r = (byte)Mathf.Clamp(r_float, 0f, 255f);
                         g = (byte)Mathf.Clamp(g_float, 0f, 255f);
                         b = (byte)Mathf.Clamp(b_float, 0f, 255f);
                     }
-                    
-                    // Store result pixel
-                    // CRITICAL: Result coordinate system - Unity SetPixels32 expects bottom-left origin
-                    // But we want to match OpenCV output which is conceptually top-left
-                    // So flip the Y coordinate when storing the result
-                    int result_y_flipped = dsize - 1 - dstY; // Flip Y for Unity SetPixels32
-                    resultPixels[result_y_flipped * dsize + dstX] = new Color32(r, g, b, 255);
+
+                    // Store result pixel.
+                    // Unity's SetPixels32 expects a 1D array that's row-major, starting from bottom-left.
+                    // Our outer loop (dstY) iterates from top to bottom, so we write to the array accordingly.
+                    int result_idx = (dsize - 1 - dstY) * dsize + dstX;
+                    resultPixels[result_idx] = new Color32(r, g, b, 255);
                 }
             }
 
-            Debug.Log($"[DEBUG_TRANSFORM_IMG_EXACT] minSrcX: {minSrcX}, minSrcY: {minSrcY}, maxSrcX: {maxSrcX}, maxSrcY: {maxSrcY}");
-            
             result.SetPixels32(resultPixels);
             result.Apply();
             return result;
@@ -2905,21 +2888,22 @@ namespace MuseTalk.Core
             // Create result pixel array
             var resultPixels = new Color32[width * height];
             
+            // Invert the transformation matrix M to get the mapping from destination to source
+            float[,] invM = InvertAffineTransform(M);
+            
             // Process exactly like OpenCV cv2.warpAffine
             for (int dstY = 0; dstY < height; dstY++)
             {
                 for (int dstX = 0; dstX < width; dstX++)
                 {
-                    // Apply transformation matrix
-                    float srcX = M[0, 0] * dstX + M[0, 1] * dstY + M[0, 2];
-                    float srcY = M[1, 0] * dstX + M[1, 1] * dstY + M[1, 2];
+                    // Apply inverse transformation matrix
+                    float srcX = invM[0, 0] * dstX + invM[0, 1] * dstY + invM[0, 2];
+                    float srcY = invM[1, 0] * dstX + invM[1, 1] * dstY + invM[1, 2];
                     
                     // Get integer and fractional parts for bilinear interpolation
                     int x0 = Mathf.FloorToInt(srcX);
                     int y0 = Mathf.FloorToInt(srcY);
-                    int x1 = x0 + 1;
-                    int y1 = y0 + 1;
-                    
+
                     float fx = srcX - x0;
                     float fy = srcY - y0;
                     
@@ -2927,17 +2911,17 @@ namespace MuseTalk.Core
                     byte r = 0, g = 0, b = 0;
                     
                     // Bounds check for bilinear interpolation
-                    if (x0 >= 0 && x1 < srcWidth && y0 >= 0 && y1 < srcHeight)
+                    if (x0 >= 0 && (x0 + 1) < srcWidth && y0 >= 0 && (y0 + 1) < srcHeight)
                     {
                         // Convert OpenCV coordinates to Unity coordinates
                         int unity_y0 = srcHeight - 1 - y0;
-                        int unity_y1 = srcHeight - 1 - y1;
+                        int unity_y1 = srcHeight - 1 - (y0 + 1);
                         
                         // Get the four corner pixels
                         var c00 = srcPixels[unity_y0 * srcWidth + x0];
-                        var c10 = srcPixels[unity_y0 * srcWidth + x1];
+                        var c10 = srcPixels[unity_y0 * srcWidth + x0 + 1];
                         var c01 = srcPixels[unity_y1 * srcWidth + x0];
-                        var c11 = srcPixels[unity_y1 * srcWidth + x1];
+                        var c11 = srcPixels[unity_y1 * srcWidth + x0 + 1];
                         
                         // Bilinear interpolation
                         float inv_fx = 1.0f - fx;
@@ -2952,9 +2936,9 @@ namespace MuseTalk.Core
                         b = (byte)Mathf.Clamp(b_float, 0f, 255f);
                     }
                     
-                    // Store result pixel with Y-flip for Unity
-                    int result_y_flipped = height - 1 - dstY;
-                    resultPixels[result_y_flipped * width + dstX] = new Color32(r, g, b, 255);
+                    // Store result pixel
+                    int result_idx = dstY * width + dstX;
+                    resultPixels[result_idx] = new Color32(r, g, b, 255);
                 }
             }
             
