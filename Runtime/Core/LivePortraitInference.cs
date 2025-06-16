@@ -649,12 +649,6 @@ namespace MuseTalk.Core
             // Python: bbox = face["bbox"]
             var bbox = face.BoundingBox;
             
-            // Convert Unity Rect (x, y, width, height) to Python format [x1, y1, x2, y2] for logging
-            float x1 = bbox.x;
-            float y1 = bbox.y; 
-            float x2 = bbox.x + bbox.width;
-            float y2 = bbox.y + bbox.height;
-            
             // Bbox is already in OpenCV coordinates (top-left origin), use directly
             // Python: w, h = (bbox[2] - bbox[0]), (bbox[3] - bbox[1])
             float w = bbox.width;
