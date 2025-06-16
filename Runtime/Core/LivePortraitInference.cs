@@ -766,7 +766,10 @@ namespace MuseTalk.Core
                 NamedOnnxValue.CreateFromTensor("input", inputTensor)
             };
             
+            var start = Stopwatch.StartNew();
             using var results = _landmarkRunner.Run(inputs);
+            var elapsed = start.ElapsedMilliseconds;
+            Debug.Log($"[LivePortraitInference] LandmarkRunner model took {elapsed}ms");
             var outputs = results.ToArray();
             
             // Python: out_pts = output[2]
@@ -776,7 +779,7 @@ namespace MuseTalk.Core
             var refinedLmk = new Vector2[outPts.Length / 2];
             for (int i = 0; i < refinedLmk.Length; i++)
             {
-                refinedLmk[i] = new Vector2(outPts[i * 2] * 224f, outPts[i * 2 + 1] * 224f);
+                refinedLmk[i] = new Vector2(outPts[i * 2] * cropSize, outPts[i * 2 + 1] * cropSize);
             }
             
             // Python: M = crop_dct["M_c2o"]
@@ -1079,6 +1082,7 @@ namespace MuseTalk.Core
         private (Texture2D, LivePortraitPredInfo) Predict(int frameId, MotionInfo xSInfo, float[,] Rs, Tensor<float> fs, float[] xs, 
             byte[] img, int width, int height, LivePortraitPredInfo predInfo)
         {
+            var start = Stopwatch.StartNew();
             // Python: frame_0 = pred_info['lmk'] is None
             bool frame0 = predInfo.Landmarks == null;
             
@@ -1087,7 +1091,10 @@ namespace MuseTalk.Core
             {
                 // Python: face_analysis = models["face_analysis"]
                 // Python: src_face = face_analysis(img)
+                var start1 = Stopwatch.StartNew();
                 var srcFaces = FaceAnalysis(img, width, height);
+                var elapsed1 = start1.ElapsedMilliseconds;
+                Debug.Log($"[LivePortraitInference] FaceAnalysis in Predict took {elapsed1}ms");
                 if (srcFaces.Count == 0)
                 {
                     throw new InvalidOperationException("No face detected in the frame");
@@ -1104,12 +1111,18 @@ namespace MuseTalk.Core
                 lmk = srcFace.Landmarks106;
                 
                 // Python: lmk = landmark_runner(models, img, lmk)
+                var start2 = Stopwatch.StartNew();
                 lmk = LandmarkRunner(img, width, height, lmk);
+                var elapsed2 = start2.ElapsedMilliseconds;
+                Debug.Log($"[LivePortraitInference] LandmarkRunner in Predict took {elapsed2}ms");
             }
             else
             {
                 // Python: lmk = landmark_runner(models, img, pred_info['lmk'])
+                var start2 = Stopwatch.StartNew();
                 lmk = LandmarkRunner(img, width, height, predInfo.Landmarks);
+                var elapsed2 = start2.ElapsedMilliseconds;
+                Debug.Log($"[LivePortraitInference] LandmarkRunner in Predict took {elapsed2}ms");
             }
             
             // Python: pred_info['lmk'] = lmk
@@ -1125,14 +1138,14 @@ namespace MuseTalk.Core
             // Python: c_d_eyes = c_d_eyes.astype(np.float32)
             // Python: c_d_lip = c_d_lip.astype(np.float32)
             
-            var cDEyes1 = CalculateDistanceRatio(lmk, 6, 18, 0, 12);
-            var cDEyes2 = CalculateDistanceRatio(lmk, 30, 42, 24, 36);
-            // Python concatenates these along axis=1
-            var cDEyes = new float[cDEyes1.Length + cDEyes2.Length];
-            Array.Copy(cDEyes1, 0, cDEyes, 0, cDEyes1.Length);
-            Array.Copy(cDEyes2, 0, cDEyes, cDEyes1.Length, cDEyes2.Length);
+            // var cDEyes1 = CalculateDistanceRatio(lmk, 6, 18, 0, 12);
+            // var cDEyes2 = CalculateDistanceRatio(lmk, 30, 42, 24, 36);
+            // // Python concatenates these along axis=1
+            // var cDEyes = new float[cDEyes1.Length + cDEyes2.Length];
+            // Array.Copy(cDEyes1, 0, cDEyes, 0, cDEyes1.Length);
+            // Array.Copy(cDEyes2, 0, cDEyes, cDEyes1.Length, cDEyes2.Length);
             
-            var cDLip = CalculateDistanceRatio(lmk, 90, 102, 48, 66);
+            // var cDLip = CalculateDistanceRatio(lmk, 90, 102, 48, 66);
             
             // Convert to float32 (already float in C#)
             // Note: These values are computed but never used in ONNX inference, matching Python behavior exactly
@@ -1217,17 +1230,25 @@ namespace MuseTalk.Core
             
             // Debug: Check keypoint transformation values
             
+            var start5 = Stopwatch.StartNew();
             // Python: x_d_new = stitching(models, x_s, x_d_new)
             xDNew = Stitching(xs, xDNew);
+            var elapsed5 = start5.ElapsedMilliseconds;
+            Debug.Log($"[LivePortraitInference] Stitching in Predict took {elapsed5}ms");
             
             // Python: out = warping_spade(models, f_s, x_s, x_d_new)
+            var start6 = Stopwatch.StartNew();
             var output = WarpingSpade(fs, xs, xDNew);
+            var elapsed6 = start6.ElapsedMilliseconds;
+            Debug.Log($"[LivePortraitInference] WarpingSpade in Predict took {elapsed6}ms");
             
             // Python: out = out.transpose(0, 2, 3, 1)  # 1x3xHxW -> 1xHxWx3
             // Python: out = np.clip(out, 0, 1)  # clip to 0~1
             // Python: out = (out * 255).astype(np.uint8)  # 0~1 -> 0~255
             // Python: I_p = out[0]
             var resultTexture = ConvertOutputToTexture(output);
+            var elapsed = start.ElapsedMilliseconds;
+            Debug.Log($"[LivePortraitInference] Predict took {elapsed}ms");
             
             
             // UnityEngine.Object.DestroyImmediate(img256);
