@@ -1374,20 +1374,6 @@ namespace MuseTalk.Core
         }
         
         // Helper methods - all implemented inline for self-sufficiency
-        private Texture2D ResizeTexture(Texture2D source, int width, int height)
-        {
-            var result = new Texture2D(width, height, TextureFormat.RGB24, false);
-            var rt = RenderTexture.GetTemporary(width, height);
-            Graphics.Blit(source, rt);
-            
-            RenderTexture.active = rt;
-            result.ReadPixels(new Rect(0, 0, width, height), 0, 0);
-            result.Apply();
-            RenderTexture.active = null;
-            RenderTexture.ReleaseTemporary(rt);
-            
-            return result;
-        }
         
         private Vector2[] ScaleLandmarks(Vector2[] landmarks, float scale)
         {
@@ -1428,24 +1414,7 @@ namespace MuseTalk.Core
             return cropInfo;
         }
         
-        /// <summary>
-        /// Python: softmax processing for angle predictions - EXACT MATCH
-        /// </summary>
-        private float[] ProcessAngleSoftmax(float[] angleLogits)
-        {
-            // Python: pred = softmax(kp_info["pitch"], axis=1)
-            var softmaxValues = Softmax(angleLogits);
-            
-            // Python: degree = np.sum(pred * np.arange(66), axis=1) * 3 - 97.5
-            float degree = 0f;
-            for (int i = 0; i < softmaxValues.Length; i++)
-            {
-                degree += softmaxValues[i] * i;
-            }
-            degree = degree * 3f - 97.5f;
-            
-            return new float[] { degree };
-        }
+
         
         private float[] Softmax(float[] logits)
         {
@@ -2387,24 +2356,7 @@ namespace MuseTalk.Core
             return PreprocessImageOptimized(img, inputSize, inputSize, 1.0f, 0.0f);
         }
         
-        private Matrix4x4 InvertAffineTransform(Matrix4x4 matrix)
-        {
-            return matrix.inverse;
-        }
-        
-        /// <summary>
-        /// Invert Matrix4x4 using the same method as the 2x3 affine transform for consistency
-        /// </summary>
-        private float[,] InvertAffineTransformToMatrix(Matrix4x4 matrix)
-        {
-            // Extract 2x3 transformation matrix
-            float[,] M = new float[2, 3] {
-                { matrix.m00, matrix.m01, matrix.m03 },
-                { matrix.m10, matrix.m11, matrix.m13 }
-            };
-            
-            return InvertAffineTransform(M);
-        }
+
         
         /// <summary>
         /// Python: cv2.invertAffineTransform(M) - EXACT MATCH
@@ -2439,16 +2391,7 @@ namespace MuseTalk.Core
         
 
         
-        private Vector2[] TransformPoints2D(Vector2[] points, Matrix4x4 transform)
-        {
-            var result = new Vector2[points.Length];
-            for (int i = 0; i < points.Length; i++)
-            {
-                var transformed = transform.MultiplyPoint3x4(new Vector3(points[i].x, points[i].y, 0));
-                result[i] = new Vector2(transformed.x, transformed.y);
-            }
-            return result;
-        }
+
         
         /// <summary>
         /// OPTIMIZED: Landmark runner image preprocessing - matches Python exactly
@@ -2719,41 +2662,7 @@ namespace MuseTalk.Core
             return maskOri;
         }
         
-        /// <summary>
-        /// Python: concat_frame(img_rgb, img_crop_256x256, I_p) - EXACT MATCH
-        /// </summary>
-        private Texture2D ConcatFrame(Texture2D imgRgb, Texture2D imgCrop256x256, Texture2D Ip)
-        {
-            // Python: Concatenate frames horizontally: driving | cropped | generated
-            int width = imgRgb.width + imgCrop256x256.width + Ip.width;
-            int height = Mathf.Max(imgRgb.height, Mathf.Max(imgCrop256x256.height, Ip.height));
-            
-            var result = new Texture2D(width, height, TextureFormat.RGB24, false);
-            var pixels = new Color[width * height];
-            
-            // Fill with black background
-            for (int i = 0; i < pixels.Length; i++)
-            {
-                pixels[i] = Color.black;
-            }
-            
-            result.SetPixels(pixels);
-            
-            // Copy driving image
-            var drivingPixels = imgRgb.GetPixels();
-            result.SetPixels(0, 0, imgRgb.width, imgRgb.height, drivingPixels);
-            
-            // Copy cropped image
-            var croppedPixels = imgCrop256x256.GetPixels();
-            result.SetPixels(imgRgb.width, 0, imgCrop256x256.width, imgCrop256x256.height, croppedPixels);
-            
-            // Copy generated image
-            var generatedPixels = Ip.GetPixels();
-            result.SetPixels(imgRgb.width + imgCrop256x256.width, 0, Ip.width, Ip.height, generatedPixels);
-            
-            result.Apply();
-            return result;
-        }
+
         
         /// <summary>
         /// Python: paste_back(img_crop, M_c2o, img_ori, mask_ori) - EXACT MATCH
@@ -2834,35 +2743,7 @@ namespace MuseTalk.Core
             return BytesToTexture2D(resultBytes, width, height);
         }
         
-        /// <summary>
-        /// Python: calculate_distance_ratio(lmk, idx1, idx2, idx3, idx4, eps=1e-6) - EXACT MATCH
-        /// Calculate the ratio between two distances
-        /// CRITICAL: Python expects lmk with batch dimension: (batch_size, num_landmarks, 2)
-        /// </summary>
-        private float[] CalculateDistanceRatio(Vector2[] lmk, int idx1, int idx2, int idx3, int idx4, float eps = 1e-6f)
-        {
-            // CRITICAL FIX: Python function expects batched landmarks lmk[:, idx1] means lmk[batch_idx, landmark_idx]
-            // Since we have batch_size=1, lmk[:, idx1] becomes lmk[0, idx1] which is just lmk[idx1]
-            // Python: d1 = np.linalg.norm(lmk[:, idx1] - lmk[:, idx2], axis=1, keepdims=True)
-            // Python: d2 = np.linalg.norm(lmk[:, idx3] - lmk[:, idx4], axis=1, keepdims=True)
-            // Python: ratio = d1 / (d2 + eps)
-            
-            // For batch_size=1: lmk[:, idx1] = lmk[0, idx1] = lmk[idx1]
-            Vector2 p1 = lmk[idx1];
-            Vector2 p2 = lmk[idx2];
-            Vector2 p3 = lmk[idx3];
-            Vector2 p4 = lmk[idx4];
-            
-            // np.linalg.norm(p1 - p2, axis=1, keepdims=True) with axis=1 means norm across coordinate dimension
-            // For 2D points, this is just the Euclidean distance
-            float d1 = Vector2.Distance(p1, p2);
-            float d2 = Vector2.Distance(p3, p4);
-            
-            float ratio = d1 / (d2 + eps);
-            
-            // Return as array to match Python's keepdims=True behavior (shape becomes (1,))
-            return new float[] { ratio };
-        }
+
         
         /// <summary>
         /// Ensure array is float32 precision - matches Python's .astype(np.float32)
