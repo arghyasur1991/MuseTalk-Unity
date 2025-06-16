@@ -242,10 +242,10 @@ namespace MuseTalk.Core
                 // Python: mask_ori = prepare_paste_back(self.mask_crop, crop_info["M_c2o"], dsize=(src_img.shape[1], src_img.shape[0]))
                 var maskOri = PreparePasteBack(cropInfo.Transform, srcImgWidth, srcImgHeight);
 
-                var maxFrames = 0;
+                var maxFrames = 17;
 
                 // For debugging, only generate 1 frame - matches Python: if frame_id > 0: break
-                for (int frameId = maxFrames; frameId < Mathf.Min(maxFrames + 50, input.DrivingFrames.Length); frameId++)
+                for (int frameId = maxFrames; frameId < Mathf.Min(maxFrames + 2, input.DrivingFrames.Length); frameId++)
                 {
                     // Python: img_rgb = frame[:, :, ::-1]  # BGR -> RGB (Unity input is already RGB)
                     var imgRgb = input.DrivingFrames[frameId];
@@ -304,23 +304,35 @@ namespace MuseTalk.Core
             }
         }
 
-        private (byte[], int, int) Texture2DToBytes(Texture2D img)
+        private unsafe (byte[], int, int) Texture2DToBytes(Texture2D img)
         {
             int h = img.height;
             int w = img.width;
+            int rowBytes = w * 3; // RGB24 = 3 bytes per pixel
             
             // Get initial image data directly from texture (assumes RGB24 format)
             var pixelData = img.GetPixelData<byte>(0);
             var imageData = new byte[pixelData.Length];
-            // Copy flipped vertically
-            for (int y = 0; y < h; y++)
+            
+            // OPTIMIZED: Use pixelData directly with unsafe pointer - no extra copy needed
+            byte* srcPtr = (byte*)pixelData.GetUnsafeReadOnlyPtr();
+            
+            fixed (byte* dstPtr = imageData)
             {
-                for (int x = 0; x < w; x++)
+                // MAXIMUM PERFORMANCE: Parallel processing across all rows
+                // Each row can be processed independently for perfect parallelization
+                // Capture pointers in local variables to avoid closure issues
+                byte* srcPtrLocal = srcPtr;
+                byte* dstPtrLocal = dstPtr;
+                
+                System.Threading.Tasks.Parallel.For(0, h, y =>
                 {
-                    imageData[y * w * 3 + x * 3 + 0] = pixelData[(h - 1 - y) * w * 3 + x * 3 + 0];
-                    imageData[y * w * 3 + x * 3 + 1] = pixelData[(h - 1 - y) * w * 3 + x * 3 + 1];
-                    imageData[y * w * 3 + x * 3 + 2] = pixelData[(h - 1 - y) * w * 3 + x * 3 + 2];
-                }
+                    byte* srcRowPtr = srcPtrLocal + (h - 1 - y) * rowBytes; // Source row (flipped)
+                    byte* dstRowPtr = dstPtrLocal + y * rowBytes;            // Destination row
+                    
+                    // Bulk copy entire row in one operation (thread-safe per row)
+                    Buffer.MemoryCopy(srcRowPtr, dstRowPtr, rowBytes, rowBytes);
+                });
             }
 
             return (imageData, w, h);
