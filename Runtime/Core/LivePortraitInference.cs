@@ -2696,22 +2696,6 @@ namespace MuseTalk.Core
         }
         
         /// <summary>
-        /// OPTIMIZED: Texture2D transform that delegates to the optimized byte array version
-        /// ~5-10x faster by leveraging unsafe parallelized implementation
-        /// </summary>
-        private byte[] TransformImgExact(Texture2D img, float[,] M, int width, int height)
-        {
-            // OPTIMIZED: Convert texture to byte array using existing optimized method
-            var (sourceBytes, srcWidth, srcHeight) = Texture2DToBytes(img);
-            
-            // OPTIMIZED: Use the highly optimized unsafe byte array transform method
-            var resultBytes = TransformImgExact(sourceBytes, srcWidth, srcHeight, M, width, height);
-            return resultBytes;
-        }
-        
-
-        
-        /// <summary>
         /// Ensure array is float32 precision - matches Python's .astype(np.float32)
         /// </summary>
         private float[] EnsureFloat32Array(float[] array)
