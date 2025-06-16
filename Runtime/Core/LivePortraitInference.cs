@@ -94,7 +94,7 @@ namespace MuseTalk.Core
         // Face analysis (reuse existing InsightFace)
         private InsightFaceHelper _insightFaceHelper;
 
-        private Texture2D _debugImage;
+        private Texture2D _debugImage = null;
         
         // Configuration
         private MuseTalkConfig _config;
@@ -221,8 +221,6 @@ namespace MuseTalk.Core
                 // Python: img_crop_256x256 = crop_info["img_crop_256x256"]
                 // Python: I_s = preprocess(img_crop_256x256)
                 var Is = Preprocess(cropInfo.ImageCrop256x256);
-
-                _debugImage = cropInfo.ImageCrop256x256;
                 
                 // Python: x_s_info = get_kp_info(self.models, I_s)
                 var xSInfo = GetKpInfo(Is);
@@ -267,7 +265,11 @@ namespace MuseTalk.Core
                         drivingImg = PasteBack(Ip, cropInfo.Transform, srcImg, maskOri);
                     }
                     
-                    if (drivingImg != null)
+                    if (_debugImage != null)
+                    {
+                        generatedFrames.Add(_debugImage);
+                    }                    
+                    else if (drivingImg != null)
                     {
                         generatedFrames.Add(drivingImg);
                     }
@@ -391,9 +393,7 @@ namespace MuseTalk.Core
             var lmk = srcFace.Landmarks106;
             
             // Python: crop_info = crop_image(img, lmk, dsize=512, scale=2.3, vy_ratio=-0.125)
-            var cropInfo = CropImage(img, lmk, 512, 2.3f, -0.125f);
-            _debugImage = cropInfo.ImageCrop;
-            
+            var cropInfo = CropImage(img, lmk, 512, 2.3f, -0.125f);            
             
             // Python: lmk = landmark_runner(models, img, lmk)
             lmk = LandmarkRunner(img, lmk);
@@ -2187,24 +2187,9 @@ namespace MuseTalk.Core
                 { m00, m01, m02 },
                 { m10, m11, m12 }
             };
-
             
-            _debugImage = img;
             // Python: cropped = cv2.warpAffine(data, M, (output_size, output_size), borderValue=0.0)
             var cropped = TransformImgExact(img, M, inputSize);
-
-            _debugImage = cropped;
-
-            // Debug the output image range after transformation
-            // var outputPixels = cropped.GetPixels();
-            // float minOutput = float.MaxValue, maxOutput = float.MinValue;
-            // foreach (var pixel in outputPixels)
-            // {
-            //     float pixelMax = Mathf.Max(pixel.r, Mathf.Max(pixel.g, pixel.b));
-            //     float pixelMin = Mathf.Min(pixel.r, Mathf.Min(pixel.g, pixel.b));
-            //     maxOutput = Mathf.Max(maxOutput, pixelMax);
-            //     minOutput = Mathf.Min(minOutput, pixelMin);
-            // }
 
             // Convert to Matrix4x4 for Unity compatibility
             var transform = new Matrix4x4
