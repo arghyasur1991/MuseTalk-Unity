@@ -598,19 +598,27 @@ namespace MuseTalk.Core
                 NamedOnnxValue.CreateFromTensor(inputName, inputTensor)
             };
             
-            
+            var start2 = System.Diagnostics.Stopwatch.StartNew();
             using var results = _detFace.Run(inputs);
+            var elapsed2 = start2.ElapsedMilliseconds;
+            Debug.Log($"[LivePortraitInference] Det face took {elapsed2}ms");
+            
             var outputs = results.ToArray();
             
-            
+            var start3 = System.Diagnostics.Stopwatch.StartNew();
             // Process detection results exactly as in Python
             var faces = ProcessDetectionResults(outputs, detScale);
+            var elapsed3 = start3.ElapsedMilliseconds;
+            Debug.Log($"[LivePortraitInference] Process detection results took {elapsed3}ms");
             
             // Get landmarks for each face
             var finalFaces = new List<FaceDetectionResult>();
             foreach (var face in faces)
             {
+                var start4 = System.Diagnostics.Stopwatch.StartNew();
                 var landmarks = GetLandmark(img, width, height, face);
+                var elapsed4 = start4.ElapsedMilliseconds;
+                Debug.Log($"[LivePortraitInference] Get landmark took {elapsed4}ms");
                 face.Landmarks106 = landmarks;
                 finalFaces.Add(face);
             }
@@ -1993,7 +2001,6 @@ namespace MuseTalk.Core
         
         private List<FaceDetectionResult> ProcessDetectionResults(NamedOnnxValue[] outputs, float detScale)
         {
-            
             // Python: process detection results exactly as in face_analysis function
             var scoresList = new List<float[]>();
             var bboxesList = new List<float[]>();
