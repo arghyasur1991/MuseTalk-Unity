@@ -222,25 +222,44 @@ namespace MuseTalk.Core
                 var cropInfoElapsed = start.ElapsedMilliseconds;
                 Debug.Log($"[LivePortraitInference] CropSrcImage took {cropInfoElapsed - srcImgElapsed}ms");
 
+
+                var start2 = Stopwatch.StartNew();
                 // Python: img_crop_256x256 = crop_info["img_crop_256x256"]
                 // Python: I_s = preprocess(img_crop_256x256)
                 var Is = Preprocess(cropInfo.ImageCrop256x256, 256, 256);
+                var elapsed2 = start2.ElapsedMilliseconds;
+                Debug.Log($"[LivePortraitInference] Preprocess took {elapsed2}ms");
                 
                 // Python: x_s_info = get_kp_info(self.models, I_s)
+                var start3 = Stopwatch.StartNew();
                 var xSInfo = GetKpInfo(Is);
+                var elapsed3 = start3.ElapsedMilliseconds;
+                Debug.Log($"[LivePortraitInference] GetKpInfo took {elapsed3}ms");
                 
                 // Python: R_s = get_rotation_matrix(x_s_info["pitch"], x_s_info["yaw"], x_s_info["roll"])
+                var start4 = Stopwatch.StartNew();
                 var Rs = GetRotationMatrix(xSInfo.Pitch, xSInfo.Yaw, xSInfo.Roll);
+                var elapsed4 = start4.ElapsedMilliseconds;
+                Debug.Log($"[LivePortraitInference] GetRotationMatrix took {elapsed4}ms");
                 
                 // Python: f_s = extract_feature_3d(self.models, I_s)
+                var start5 = Stopwatch.StartNew();
                 var fs = ExtractFeature3d(Is);
+                var elapsed5 = start5.ElapsedMilliseconds;
+                Debug.Log($"[LivePortraitInference] ExtractFeature3d took {elapsed5}ms");
                 
                 // Python: x_s = transform_keypoint(x_s_info)
+                var start6 = Stopwatch.StartNew();
                 var xs = TransformKeypoint(xSInfo);
+                var elapsed6 = start6.ElapsedMilliseconds;
+                Debug.Log($"[LivePortraitInference] TransformKeypoint took {elapsed6}ms");
                 
                 // Python: prepare for pasteback
                 // Python: mask_ori = prepare_paste_back(self.mask_crop, crop_info["M_c2o"], dsize=(src_img.shape[1], src_img.shape[0]))
+                var start7 = Stopwatch.StartNew();
                 var maskOri = PreparePasteBack(cropInfo.Transform, srcImgWidth, srcImgHeight);
+                var elapsed7 = start7.ElapsedMilliseconds;
+                Debug.Log($"[LivePortraitInference] PreparePasteBack took {elapsed7}ms");
 
                 var maxFrames = 17;
 
