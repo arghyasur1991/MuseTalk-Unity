@@ -35,11 +35,6 @@ namespace MuseTalk.API
         /// </summary>
         public int BatchSize { get; set; } = 4;
         
-        /// <summary>
-        /// Whether to use composite output during LivePortrait generation
-        /// </summary>
-        public bool UseComposite { get; set; } = false;
-        
         public LivePortraitMuseTalkInput(Texture2D sourceImage, Texture2D[] drivingFrames, AudioClip audioClip)
         {
             SourceImage = sourceImage ?? throw new ArgumentNullException(nameof(sourceImage));
@@ -175,7 +170,6 @@ namespace MuseTalk.API
                 {
                     SourceImage = input.SourceImage,
                     DrivingFrames = input.DrivingFrames,
-                    UseComposite = input.UseComposite
                 };
                 
                 var livePortraitResult = _livePortrait.Generate(livePortraitInput);
@@ -238,7 +232,7 @@ namespace MuseTalk.API
         /// <summary>
         /// Generate animated textures only using LivePortrait (SYNCHRONOUS)
         /// </summary>
-        public LivePortraitResult GenerateAnimatedTextures(Texture2D sourceImage, Texture2D[] drivingFrames, bool useComposite = false)
+        public LivePortraitResult GenerateAnimatedTextures(Texture2D sourceImage, Texture2D[] drivingFrames)
         {
             if (!_initialized)
                 throw new InvalidOperationException("API not initialized");
@@ -251,8 +245,7 @@ namespace MuseTalk.API
             var input = new LivePortraitInput
             {
                 SourceImage = sourceImage,
-                DrivingFrames = drivingFrames,
-                UseComposite = useComposite
+                DrivingFrames = drivingFrames
             };
             
             return _livePortrait.Generate(input);

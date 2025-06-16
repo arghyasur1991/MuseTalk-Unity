@@ -46,7 +46,6 @@ namespace MuseTalk.Core
     {
         public Texture2D SourceImage { get; set; }
         public Texture2D[] DrivingFrames { get; set; }
-        public bool UseComposite { get; set; } = false;
         public Texture2D MaskTemplate { get; set; } // Python: mask_crop from mask_template.png
     }
 
@@ -104,9 +103,6 @@ namespace MuseTalk.Core
         
         // State management - matches Python self.pred_info
         private LivePortraitPredInfo _predInfo;
-        
-        // Composite flag - matches Python self.flg_composite
-        private bool _flgComposite = false;
         
         // Mask template - matches Python self.mask_crop
         private Texture2D _maskTemplate;
@@ -277,18 +273,8 @@ namespace MuseTalk.Core
                     // Python: if self.flg_composite: driving_img = concat_frame(img_rgb, img_crop_256x256, I_p)
                     // Python: else: driving_img = paste_back(I_p, crop_info["M_c2o"], src_img, mask_ori)
                     Texture2D drivingImg = null;
-                    // generatedFrames.Add(Ip);
-                    
-                    if (_flgComposite)
-                    {
-                        // TODO: Implement ConcatFrame call
-                        // drivingImg = ConcatFrame(imgRgb, cropInfo.ImageCrop256x256, Ip);
-                    }
-                    else
-                    {
-                        var srcImg = BytesToTexture2D(srcImgData, srcImgWidth, srcImgHeight);
-                        drivingImg = PasteBack(Ip, cropInfo.Transform, srcImg, maskOri);
-                    }
+                    var srcImg = BytesToTexture2D(srcImgData, srcImgWidth, srcImgHeight);
+                    drivingImg = PasteBack(Ip, cropInfo.Transform, srcImg, maskOri);
                     
                     if (_debugImage != null)
                     {
