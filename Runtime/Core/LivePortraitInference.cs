@@ -10,6 +10,8 @@ namespace MuseTalk.Core
 {
     using Utils;
     using Models;
+    using System.Diagnostics;
+    using Debug = UnityEngine.Debug;
 
     /// <summary>
     /// LivePortrait prediction state for frame-by-frame inference
@@ -206,6 +208,7 @@ namespace MuseTalk.Core
                 
             try
             {
+                var start = Stopwatch.StartNew();
                 // Generate frames
                 var generatedFrames = new List<Texture2D>();
                 var srcImg = SrcPreprocess(input.SourceImage);
@@ -236,16 +239,11 @@ namespace MuseTalk.Core
                 // Python: prepare for pasteback
                 // Python: mask_ori = prepare_paste_back(self.mask_crop, crop_info["M_c2o"], dsize=(src_img.shape[1], src_img.shape[0]))
                 var maskOri = PreparePasteBack(cropInfo.Transform, srcImg.width, srcImg.height);
-                // _debugImage = maskOri;
-                // generatedFrames.Add(_debugImage);
-                // return new LivePortraitResult
-                // {
-                //     Success = true,
-                //     GeneratedFrames = generatedFrames
-                // };
+
+                var maxFrames = 1;
 
                 // For debugging, only generate 1 frame - matches Python: if frame_id > 0: break
-                for (int frameId = 0; frameId < input.DrivingFrames.Length; frameId++)
+                for (int frameId = 0; frameId < Mathf.Min(maxFrames, input.DrivingFrames.Length); frameId++)
                 {
                     
                     // Python: img_rgb = frame[:, :, ::-1]  # BGR -> RGB (Unity input is already RGB)
@@ -280,6 +278,9 @@ namespace MuseTalk.Core
                     Success = true,
                     GeneratedFrames = generatedFrames
                 };
+
+                var elapsed = start.ElapsedMilliseconds;
+                Debug.Log($"[LivePortraitInference] Generation took {elapsed}ms");
                 
                 return result;
             }
