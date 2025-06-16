@@ -82,7 +82,8 @@ namespace MuseTalk.Utils
             var sessionOptions = CreateSessionOptions(config);
             if (
                 modelName == "1k3d68" ||
-                modelName == "2d106det"
+                modelName == "2d106det" ||
+                modelName == "warping_spade"
             )
             {
                 sessionOptions.AppendExecutionProvider_CoreML();

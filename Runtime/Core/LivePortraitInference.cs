@@ -1152,6 +1152,8 @@ namespace MuseTalk.Core
             
             // Python: prepare_driving_videos
             // Python: img = cv2.resize(img, (256, 256))
+
+            var start3 = Stopwatch.StartNew();
             var img256 = TextureUtils.ResizeTextureToExactSize(img, width, height, 256, 256, TextureUtils.SamplingMode.Bilinear);
             // Python: I_d = preprocess(img)
             var Id = Preprocess(img256, 256, 256);
@@ -1159,7 +1161,10 @@ namespace MuseTalk.Core
             // Python: collect s_d, R_d, δ_d and t_d for inference
             // Python: x_d_info = get_kp_info(models, I_d)
             var xDInfo = GetKpInfo(Id);
-            
+            var elapsed3 = start3.ElapsedMilliseconds;
+            Debug.Log($"[LivePortraitInference] GetKpInfo in Predict took {elapsed3}ms");
+
+            var start4 = Stopwatch.StartNew();
             // Python: R_d = get_rotation_matrix(x_d_info["pitch"], x_d_info["yaw"], x_d_info["roll"])
             var Rd = GetRotationMatrix(xDInfo.Pitch, xDInfo.Yaw, xDInfo.Roll);
             
@@ -1227,6 +1232,9 @@ namespace MuseTalk.Core
             
             // Python: x_d_new = scale_new * (x_c_s @ R_new + delta_new) + t_new
             var xDNew = CalculateNewKeypoints(xCs, RNew, deltaNew, scaleNew, tNew);
+
+            var elapsed4 = start4.ElapsedMilliseconds;
+            Debug.Log($"[LivePortraitInference] CalculateNewKeypoints in Predict took {elapsed4}ms");
             
             // Debug: Check keypoint transformation values
             
@@ -1359,14 +1367,9 @@ namespace MuseTalk.Core
             };
             
             using var results = _warpingSpade.Run(inputs);
-            var outputs = results.ToArray();
-            
-            var outputShape = outputs[0].AsTensor<float>().Dimensions.ToArray();
             
             // Python: return output[0] - take the first output (warped_feature)
-            var output = outputs[0].AsTensor<float>().ToArray();
-            
-            
+            var output = results[0].AsTensor<float>().ToArray();
             return output;
         }
         
