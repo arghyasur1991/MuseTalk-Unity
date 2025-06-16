@@ -222,12 +222,12 @@ namespace MuseTalk.Core
 
                 // _debugImage = BytesToTexture2D(cropInfo.ImageCrop, 512, 512);
 
-                generatedFrames.Add(_debugImage);
-                return new LivePortraitResult
-                {
-                    Success = true,
-                    GeneratedFrames = generatedFrames
-                };
+                // generatedFrames.Add(_debugImage);
+                // return new LivePortraitResult
+                // {
+                //     Success = true,
+                //     GeneratedFrames = generatedFrames
+                // };
                 var cropInfoElapsed = start.ElapsedMilliseconds;
                 Debug.Log($"[LivePortraitInference] CropSrcImage took {cropInfoElapsed - srcImgElapsed}ms");
 
@@ -607,7 +607,7 @@ namespace MuseTalk.Core
             foreach (var face in faces)
             {
                 var landmarks = GetLandmark(img, width, height, face);
-                face.Landmarks106 = landmarks;
+                Debug.Log($"landmarks: {landmarks[0]}, {landmarks[1]}, {landmarks[2]}, {landmarks[3]}, {landmarks[4]}, {landmarks[5]}, {landmarks[6]}, {landmarks[7]}, {landmarks[8]}, {landmarks[9]}, {landmarks[10]}");                face.Landmarks106 = landmarks;
                 finalFaces.Add(face);
             }
             
@@ -642,6 +642,8 @@ namespace MuseTalk.Core
             float y1 = bbox.y; 
             float x2 = bbox.x + bbox.width;
             float y2 = bbox.y + bbox.height;
+
+            Debug.Log($"bbox: {x1}, {y1}, {x2}, {y2}");
             
             // Bbox is already in OpenCV coordinates (top-left origin), use directly
             // Python: w, h = (bbox[2] - bbox[0]), (bbox[3] - bbox[1])
@@ -659,7 +661,6 @@ namespace MuseTalk.Core
             
             // Python: aimg, M = face_align(img, center, input_size, _scale, rotate)
             var (alignedImg, transformMatrix) = FaceAlign(img, width, height, center, inputSize, scale, rotate);
-            _debugImage = BytesToTexture2D(alignedImg, inputSize, inputSize);
             
             // Format transform matrix to match Python exactly
             
@@ -667,8 +668,9 @@ namespace MuseTalk.Core
             // Python: aimg = np.expand_dims(aimg, axis=0)
             // Python: aimg = aimg.astype(np.float32)
             var inputTensor = PreprocessLandmarkImage(alignedImg, inputSize);
-            var tensorData = inputTensor.ToArray();
-            // Print the first 10 values of the tensor
+
+            var t = inputTensor.ToArray();
+            Debug.Log($"inputTensor: {t[0]}, {t[1]}, {t[2]}, {t[3]}, {t[4]}, {t[5]}, {t[6]}, {t[7]}, {t[8]}, {t[9]}, {t[10]}");
             
             // Python: output = landmark.run(None, {"data": aimg})
             var inputs = new List<NamedOnnxValue>
@@ -2301,12 +2303,8 @@ namespace MuseTalk.Core
                 {
                     for (int w = 0; w < inputSize; w++) // Width
                     {
-                        // CRITICAL: Unity GetPixels() is bottom-left origin, flip Y for ONNX (top-left)
-                        int unityY = inputSize - 1 - h; // Flip Y coordinate for ONNX coordinate system
-                        int pixelIdx = unityY * inputSize + w;
-                        float pixelValue = c == 0 ? pixels[pixelIdx * 3 + 0] : 
-                                          c == 1 ? pixels[pixelIdx * 3 + 1] : 
-                                                   pixels[pixelIdx * 3 + 2];
+                        int pixelIdx = h * inputSize + w;
+                        float pixelValue = pixels[pixelIdx * 3 + c];
                         // CRITICAL FIX: Python does NOT normalize to [0,1] for landmark detection!
                         // Keep pixel values in [0,255] range to match Python exactly
                         tensorData[idx++] = pixelValue; // Convert from [0,1] to [0,255]
