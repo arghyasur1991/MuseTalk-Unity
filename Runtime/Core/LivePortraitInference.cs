@@ -1646,59 +1646,6 @@ namespace MuseTalk.Core
         }
         
         /// <summary>
-        /// Python: distance2bbox() - EXACT MATCH
-        /// </summary>
-        private float[] Distance2Bbox(float[,] points, float[] distance)
-        {
-            int numPoints = points.GetLength(0);
-            var result = new float[numPoints * 4];
-            
-            for (int i = 0; i < numPoints; i++)
-            {
-                float x = points[i, 0];
-                float y = points[i, 1];
-                
-                // Python: x1 = points[:, 0] - distance[:, 0]
-                // Python: y1 = points[:, 1] - distance[:, 1]
-                // Python: x2 = points[:, 0] + distance[:, 2]
-                // Python: y2 = points[:, 1] + distance[:, 3]
-                result[i * 4 + 0] = x - distance[i * 4 + 0];  // x1
-                result[i * 4 + 1] = y - distance[i * 4 + 1];  // y1
-                result[i * 4 + 2] = x + distance[i * 4 + 2];  // x2
-                result[i * 4 + 3] = y + distance[i * 4 + 3];  // y2
-            }
-            
-            return result;
-        }
-        
-        /// <summary>
-        /// Python: distance2kps() - EXACT MATCH
-        /// </summary>
-        private float[] Distance2Kps(float[,] points, float[] distance)
-        {
-            int numPoints = points.GetLength(0);
-            var result = new float[numPoints * 10]; // 5 keypoints * 2 coords
-            
-            for (int i = 0; i < numPoints; i++)
-            {
-                float x = points[i, 0];
-                float y = points[i, 1];
-                
-                // Python: for i in range(0, distance.shape[1], 2):
-                //             px = points[:, i % 2] + distance[:, i]
-                //             py = points[:, i % 2 + 1] + distance[:, i + 1]
-                for (int kp = 0; kp < 5; kp++) // 5 keypoints
-                {
-                    int distIdx = kp * 2;
-                    result[i * 10 + kp * 2 + 0] = x + distance[i * 10 + distIdx + 0];     // px
-                    result[i * 10 + kp * 2 + 1] = y + distance[i * 10 + distIdx + 1];     // py
-                }
-            }
-            
-            return result;
-        }
-        
-        /// <summary>
         /// Invert 3x3 matrix - EXACT MATCH with numpy.linalg.inv
         /// </summary>
         private float[,] InvertMatrix3x3(float[,] matrix)
