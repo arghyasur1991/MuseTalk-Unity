@@ -129,7 +129,6 @@ namespace MuseTalk.Core
             _maskTemplate = ModelUtils.LoadMaskTemplate(_config);
             
             _initialized = true;
-            // Debug.Log("[LivePortraitInference] Successfully initialized");
         }
         catch (Exception e)
         {
@@ -140,8 +139,6 @@ namespace MuseTalk.Core
         
         private void InitializeModels()
         {
-            // Debug.Log("[LivePortraitInference] Initializing LivePortrait models...");
-            
             // Load all ONNX models exactly as in Python
             _detFace = ModelUtils.LoadModel(_config, "det_10g");
             _landmark2d106 = ModelUtils.LoadModel(_config, "2d106det");
@@ -178,8 +175,6 @@ namespace MuseTalk.Core
                 
                 throw new InvalidOperationException($"Failed to initialize models: {string.Join(", ", failedModels)}");
             }
-            
-            // Debug.Log("[LivePortraitInference] All models initialized successfully");
         }
         
         /// <summary>
@@ -199,11 +194,10 @@ namespace MuseTalk.Core
             if (input.MaskTemplate != null)
             {
                 _maskTemplate = input.MaskTemplate;
-                Debug.Log("[LivePortraitInference] Using mask template from input");
             }
             else if (_maskTemplate != null)
             {
-                Debug.Log("[LivePortraitInference] Using mask template loaded during initialization");
+                // Using mask template loaded during initialization
             }
             else
             {
@@ -212,69 +206,32 @@ namespace MuseTalk.Core
                 
             try
             {
-                // Debug.Log($"[LivePortraitInference] === STARTING LIVEPORTRAIT GENERATION ===");
-                // Debug.Log($"[LivePortraitInference] Source: {input.SourceImage.width}x{input.SourceImage.height}, Driving frames: {input.DrivingFrames.Length}");
-                
-                // Python: img = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
-                // Python: img = img[:, :, ::-1]  # BGR -> RGB
-                // Python: src_img = src_preprocess(img)
-                
                 // Generate frames
                 var generatedFrames = new List<Texture2D>();
                 var srcImg = SrcPreprocess(input.SourceImage);
                 
-                // generatedFrames.Add(srcImg);
-                // return new LivePortraitResult
-                // {
-                //     Success = true,
-                //     GeneratedFrames = generatedFrames
-                // };
-                // Debug.Log("[LivePortraitInference] Source preprocessed");
-                
                 // CRITICAL FIX: Keep reference to preprocessed source image for pasteback
                 // In Python, src_img is used for pasteback - make sure it's valid
-                Debug.Log($"[DEBUG_SRCIMG] Preprocessed source image: {srcImg.width}x{srcImg.height}, format: {srcImg.format}");
-                
-                // Debug source image pixel values to ensure it's not black
-                // var srcPixels = srcImg.GetPixels();
-                // float srcMin = srcPixels.Min(p => Mathf.Min(p.r, Mathf.Min(p.g, p.b)));
-                // float srcMax = srcPixels.Max(p => Mathf.Max(p.r, Mathf.Max(p.g, p.b)));
-                // Debug.Log($"[DEBUG_SRCIMG] Source image pixel range: [{srcMin:F3}, {srcMax:F3}]");
                 
                 // Python: crop_info = crop_src_image(self.models, src_img)
                 var cropInfo = CropSrcImage(srcImg);
-                // generatedFrames.Add(cropInfo.ImageCrop);
-                
-                // Debug.Log("[LivePortraitInference] Source cropped");
-                
                 // Python: img_crop_256x256 = crop_info["img_crop_256x256"]
                 // Python: I_s = preprocess(img_crop_256x256)
                 var Is = Preprocess(cropInfo.ImageCrop256x256);
 
                 _debugImage = cropInfo.ImageCrop256x256;
-                // generatedFrames.Add(_debugImage);
-                // return new LivePortraitResult
-                // {
-                //     Success = true,
-                //     GeneratedFrames = generatedFrames
-                // };
-                // Debug.Log("[LivePortraitInference] Source image prepared for inference");
                 
                 // Python: x_s_info = get_kp_info(self.models, I_s)
                 var xSInfo = GetKpInfo(Is);
-                // Debug.Log("[LivePortraitInference] Source keypoint info extracted");
                 
                 // Python: R_s = get_rotation_matrix(x_s_info["pitch"], x_s_info["yaw"], x_s_info["roll"])
                 var Rs = GetRotationMatrix(xSInfo.Pitch, xSInfo.Yaw, xSInfo.Roll);
-                // Debug.Log("[LivePortraitInference] Source rotation matrix calculated");
                 
                 // Python: f_s = extract_feature_3d(self.models, I_s)
                 var fs = ExtractFeature3d(Is);
-                // Debug.Log("[LivePortraitInference] Source 3D features extracted");
                 
                 // Python: x_s = transform_keypoint(x_s_info)
                 var xs = TransformKeypoint(xSInfo);
-                // Debug.Log("[LivePortraitInference] Source keypoints transformed");
                 
                 // Python: prepare for pasteback
                 // Python: mask_ori = prepare_paste_back(self.mask_crop, crop_info["M_c2o"], dsize=(src_img.shape[1], src_img.shape[0]))
@@ -290,7 +247,6 @@ namespace MuseTalk.Core
                 // For debugging, only generate 1 frame - matches Python: if frame_id > 0: break
                 for (int frameId = 0; frameId < input.DrivingFrames.Length; frameId++)
                 {
-                    // Debug.Log($"[LivePortraitInference] Processing frame {frameId + 1}/{input.DrivingFrames.Length}");
                     
                     // Python: img_rgb = frame[:, :, ::-1]  # BGR -> RGB (Unity input is already RGB)
                     var imgRgb = input.DrivingFrames[frameId];
@@ -325,7 +281,6 @@ namespace MuseTalk.Core
                     GeneratedFrames = generatedFrames
                 };
                 
-                // Debug.Log($"[LivePortraitInference] === GENERATION COMPLETED - {generatedFrames.Count} frames ===");
                 return result;
             }
             catch (Exception e)
@@ -406,7 +361,6 @@ namespace MuseTalk.Core
         /// </summary>
         private CropInfo CropSrcImage(Texture2D img)
         {
-            Debug.Log($"[DEBUG_CROP_SRC] Input image shape: ({img.height}, {img.width}, 3)");
             
             // Python: face_analysis = models["face_analysis"]
             // Python: src_face = face_analysis(img)
@@ -431,26 +385,17 @@ namespace MuseTalk.Core
             float by1 = srcFace.BoundingBox.y;
             float bx2 = srcFace.BoundingBox.x + srcFace.BoundingBox.width;
             float by2 = srcFace.BoundingBox.y + srcFace.BoundingBox.height;
-            Debug.Log($"[DEBUG_CROP_SRC] Selected face bbox: [{bx1:F5} {by1:F5} {bx2:F5} {by2:F5}]");
-            Debug.Log($"[DEBUG_CROP_SRC] Face detection score: {srcFace.DetectionScore}");
             
             // Python: lmk = src_face["landmark_2d_106"]  # this is the 106 landmarks from insightface
             var lmk = srcFace.Landmarks106;
-            Debug.Log($"[DEBUG_CROP_SRC] Initial landmarks shape: ({lmk.Length}, 2)");
-            Debug.Log($"[DEBUG_CROP_SRC] Initial landmarks range: [{lmk.Min(p => Mathf.Min(p.x, p.y)):F3}, {lmk.Max(p => Mathf.Max(p.x, p.y)):F3}]");
-            Debug.Log($"[DEBUG_CROP_SRC] First 5 landmarks: [[{lmk[0].x:F5} {lmk[0].y:F4}]\n [{lmk[1].x:F5} {lmk[1].y:F5}]\n [{lmk[2].x:F5} {lmk[2].y:F3}]\n [{lmk[3].x:F5} {lmk[3].y:F5}]\n [{lmk[4].x:F5} {lmk[4].y:F5}]]");
             
             // Python: crop_info = crop_image(img, lmk, dsize=512, scale=2.3, vy_ratio=-0.125)
             var cropInfo = CropImage(img, lmk, 512, 2.3f, -0.125f);
             _debugImage = cropInfo.ImageCrop;
             
-            Debug.Log($"[DEBUG_CROP_SRC] Crop info keys: ['M_o2c', 'M_c2o', 'img_crop', 'pt_crop']");
             
             // Python: lmk = landmark_runner(models, img, lmk)
             lmk = LandmarkRunner(img, lmk);
-            Debug.Log($"[DEBUG_CROP_SRC] Refined landmarks shape: ({lmk.Length}, 2)");
-            Debug.Log($"[DEBUG_CROP_SRC] Refined landmarks range: [{lmk.Min(p => Mathf.Min(p.x, p.y)):F3}, {lmk.Max(p => Mathf.Max(p.x, p.y)):F3}]");
-            Debug.Log($"[DEBUG_CROP_SRC] First 5 refined landmarks: [[{lmk[0].x:F5} {lmk[0].y:F5}]\n [{lmk[1].x:F5} {lmk[1].y:F5}]\n [{lmk[2].x:F5} {lmk[2].y:F5}]\n [{lmk[3].x:F5} {lmk[3].y:F5}]\n [{lmk[4].x:F5} {lmk[4].y:F5}]]");
             
             // Python: crop_info["lmk_crop"] = lmk
             cropInfo.LandmarksCrop = lmk;
@@ -460,7 +405,6 @@ namespace MuseTalk.Core
             
             // Python: crop_info["lmk_crop_256x256"] = crop_info["lmk_crop"] * 256 / 512
             cropInfo.LandmarksCrop256x256 = ScaleLandmarks(cropInfo.LandmarksCrop, 256f / 512f);
-            Debug.Log($"[DEBUG_CROP_SRC] Final crop landmarks 256x256 range: [{cropInfo.LandmarksCrop256x256.Min(p => Mathf.Min(p.x, p.y)):F3}, {cropInfo.LandmarksCrop256x256.Max(p => Mathf.Max(p.x, p.y)):F3}]");
             
             return cropInfo;
         }
@@ -471,7 +415,6 @@ namespace MuseTalk.Core
         /// </summary>
         private List<FaceDetectionResult> FaceAnalysis(Texture2D img)
         {
-            Debug.Log($"[FaceAnalysis] Starting face detection on image {img.width}x{img.height}");
             
             // Python: input_size = 512
             const int inputSize = 512;
@@ -484,7 +427,6 @@ namespace MuseTalk.Core
             int pythonHeight = img.height;  // This matches Python's img.shape[0]
             int pythonWidth = img.width;    // This matches Python's img.shape[1]
             
-            Debug.Log($"[FaceAnalysis] Python equivalent dimensions: height={pythonHeight}, width={pythonWidth}");
             
             // Python: im_ratio = float(img.shape[0]) / img.shape[1]
             float imRatio = (float)pythonHeight / pythonWidth;
@@ -547,19 +489,16 @@ namespace MuseTalk.Core
             // Python: output = det_face.run(None, {"input.1": det_img})
             // Use the actual input name from the model metadata
             string inputName = _detFace.InputMetadata.Keys.First();
-            // Debug.Log($"[FaceAnalysis] Using face detection input name: {inputName}");
             
             var inputs = new List<NamedOnnxValue>
             {
                 NamedOnnxValue.CreateFromTensor(inputName, inputTensor)
             };
             
-            // Debug.Log($"[FaceAnalysis] Running ONNX inference with tensor shape: [{inputTensor.Dimensions[0]}x{inputTensor.Dimensions[1]}x{inputTensor.Dimensions[2]}x{inputTensor.Dimensions[3]}]");
             
             using var results = _detFace.Run(inputs);
             var outputs = results.ToArray();
             
-            // Debug.Log($"[FaceAnalysis] Got {outputs.Length} outputs from face detection model");
             
             // Process detection results exactly as in Python
             var faces = ProcessDetectionResults(outputs, detScale);
@@ -584,7 +523,6 @@ namespace MuseTalk.Core
             // UnityEngine.Object.DestroyImmediate(resizedImg);
             // UnityEngine.Object.DestroyImmediate(detImg);
             
-            // Debug.Log($"[FaceAnalysis] Completed face detection: found {finalFaces.Count} faces");
             
             return finalFaces;
         }
@@ -605,7 +543,6 @@ namespace MuseTalk.Core
             float y1 = bbox.y; 
             float x2 = bbox.x + bbox.width;
             float y2 = bbox.y + bbox.height;
-            Debug.Log($"[DEBUG_GET_LANDMARK] Face bbox: [{x1:F5} {y1:F5} {x2:F5} {y2:F5}]");
             
             // Bbox is already in OpenCV coordinates (top-left origin), use directly
             // Python: w, h = (bbox[2] - bbox[0]), (bbox[3] - bbox[1])
@@ -614,31 +551,24 @@ namespace MuseTalk.Core
             
             // Python: center = (bbox[2] + bbox[0]) / 2, (bbox[3] + bbox[1]) / 2
             Vector2 center = new(bbox.x + w * 0.5f, bbox.y + h * 0.5f);
-            Debug.Log($"[DEBUG_GET_LANDMARK] Center: (np.float32({center.x:F5}), np.float32({center.y:F5})), w={w:F3}, h={h:F3}");
             
             // Python: rotate = 0
             float rotate = 0f;
             
             // Python: _scale = input_size / (max(w, h) * 1.5)
             float scale = inputSize / (Mathf.Max(w, h) * 1.5f);
-            Debug.Log($"[DEBUG_GET_LANDMARK] Scale: {scale:F6}");
             
             // Python: aimg, M = face_align(img, center, input_size, _scale, rotate)
             var (alignedImg, transformMatrix) = FaceAlign(img, center, inputSize, scale, rotate);
-            Debug.Log($"[DEBUG_GET_LANDMARK] Aligned image shape: ({alignedImg.height}, {alignedImg.width}, 3)");
             
             // Format transform matrix to match Python exactly
-            Debug.Log($"[DEBUG_GET_LANDMARK] Transform matrix M:\n[[{transformMatrix.m00:F8}  {transformMatrix.m01:F8} {transformMatrix.m03:F8}]\n [{transformMatrix.m10:F8}   {transformMatrix.m11:F8} {transformMatrix.m13:F8}]]");
             
             // Python: aimg = aimg.transpose(2, 0, 1)  # HWC -> CHW
             // Python: aimg = np.expand_dims(aimg, axis=0)
             // Python: aimg = aimg.astype(np.float32)
             var inputTensor = PreprocessLandmarkImage(alignedImg);
             var tensorData = inputTensor.ToArray();
-            Debug.Log($"[DEBUG_GET_LANDMARK] Input size tuple: ({inputSize}, {inputSize})");
-            Debug.Log($"[DEBUG_GET_LANDMARK] Preprocessed tensor shape: (1, 3, {inputSize}, {inputSize}), range: [{tensorData.Min():F3}, {tensorData.Max():F3}], Mean: {tensorData.Average():F3}");
             // Print the first 10 values of the tensor
-            Debug.Log($"[DEBUG_GET_LANDMARK] First 10 values of the tensor: {tensorData[0]}, {tensorData[1]}, {tensorData[2]}, {tensorData[3]}, {tensorData[4]}, {tensorData[5]}, {tensorData[6]}, {tensorData[7]}, {tensorData[8]}, {tensorData[9]}");
             
             // Python: output = landmark.run(None, {"data": aimg})
             var inputs = new List<NamedOnnxValue>
@@ -648,12 +578,10 @@ namespace MuseTalk.Core
             
             using var results = _landmark2d106.Run(inputs);
             var output = results.First().AsTensor<float>().ToArray();
-            Debug.Log($"[DEBUG_GET_LANDMARK] Raw ONNX output shape: ({output.Length},), range: [{output.Min():F3}, {output.Max():F3}]");
             
             // Python: pred = output[0][0]
             // Python: pred = pred.reshape((-1, 2))
             var landmarks = new Vector2[output.Length / 2];
-            Debug.Log($"[DEBUG_GET_LANDMARK] Reshaped pred: ({landmarks.Length}, 2), first 3: [[ {output[0]:F8}  {output[1]:F8}]\n [{output[2]:F8} {output[3]:F8}]\n [{output[4]:F8}  {output[5]:F8}]]");
             
             // Python: pred[:, 0:2] += 1
             // Python: pred[:, 0:2] *= input_size[0] // 2
@@ -665,16 +593,12 @@ namespace MuseTalk.Core
                 y *= inputSize / 2f;
                 landmarks[i] = new Vector2(x, y);
             }
-            Debug.Log($"[DEBUG_GET_LANDMARK] After scaling: first 3: [[ {landmarks[0].x:F6}  {landmarks[0].y:F6}]\n [ {landmarks[1].x:F6}   {landmarks[1].y:F6}]\n [ {landmarks[2].x:F6} {landmarks[2].y:F6}]]");
             
             // Python: IM = cv2.invertAffineTransform(M)
             // Python: pred = trans_points2d(pred, IM)
             var IM = transformMatrix.inverse;// InvertAffineTransformToMatrix(transformMatrix);
-            Debug.Log($"[DEBUG_GET_LANDMARK] Inverse transform matrix IM:\n[[{IM[0,0]:F7}   {IM[0,1]:F7} {IM[0,2]:F6}]\n [{IM[1,0]:F7}          {IM[1,1]:F7} {IM[1,2]:F6}]]");
             
             landmarks = TransPoints2D(landmarks, IM);
-            Debug.Log($"[DEBUG_GET_LANDMARK] Final landmarks: shape=({landmarks.Length}, 2), range=[{landmarks.Min(p => Mathf.Min(p.x, p.y)):F3}, {landmarks.Max(p => Mathf.Max(p.x, p.y)):F3}]");
-            Debug.Log($"[DEBUG_GET_LANDMARK] Final first 3 landmarks: [[{landmarks[0].x:F5} {landmarks[0].y:F4}]\n [{landmarks[1].x:F5} {landmarks[1].y:F5}]\n [{landmarks[2].x:F5} {landmarks[2].y:F3}]]");
             
             // UnityEngine.Object.DestroyImmediate(alignedImg);
             
@@ -736,7 +660,6 @@ namespace MuseTalk.Core
             // Python: img = np.expand_dims(img, axis=0)
             // Python: img = img.astype(np.float32)
             
-            Debug.Log($"[DEBUG_PREPROCESS] Input shape: {img.width}x{img.height}, format: {img.format}");
             
             var pixels = img.GetPixels();
             int height = img.height;
@@ -749,8 +672,6 @@ namespace MuseTalk.Core
                 minVal = Mathf.Min(minVal, Mathf.Min(pixel.r, Mathf.Min(pixel.g, pixel.b)));
                 maxVal = Mathf.Max(maxVal, Mathf.Max(pixel.r, Mathf.Max(pixel.g, pixel.b)));
             }
-            Debug.Log($"[DEBUG_PREPROCESS] Input range: [{minVal:F3}, {maxVal:F3}]");
-            Debug.Log($"[DEBUG_PREPROCESS] After normalize: [0.000, 1.000]"); // Unity pixels are already [0,1]
             
             var data = new float[1 * 3 * height * width];
             
@@ -771,9 +692,7 @@ namespace MuseTalk.Core
                 }
             }
             
-            Debug.Log($"[DEBUG_PREPROCESS] Final tensor shape: 1x3x{height}x{width}");
             float dataMin = data.Min(), dataMax = data.Max();
-            Debug.Log($"[DEBUG_PREPROCESS] Final tensor range: [{dataMin:F3}, {dataMax:F3}]");
             
             return data;
         }
@@ -783,9 +702,7 @@ namespace MuseTalk.Core
         /// </summary>
         private MotionInfo GetKpInfo(float[] preprocessedData)
         {
-            Debug.Log($"[DEBUG_GET_KP_INFO] Input tensor shape: 1x3x256x256");
             float dataMin = preprocessedData.Min(), dataMax = preprocessedData.Max();
-            Debug.Log($"[DEBUG_GET_KP_INFO] Input tensor range: [{dataMin:F3}, {dataMax:F3}]");
             
             // Convert to tensor
             var inputTensor = new DenseTensor<float>(preprocessedData, new[] { 1, 3, 256, 256 });
@@ -794,7 +711,6 @@ namespace MuseTalk.Core
             // Python: output = net.run(None, {"img": x})
             // Use the actual input name from the model metadata
             string inputName = _motionExtractor.InputMetadata.Keys.First();
-            // Debug.Log($"[GetKpInfo] Using motion extractor input name: {inputName}");
             
             var inputs = new List<NamedOnnxValue>
             {
@@ -813,8 +729,6 @@ namespace MuseTalk.Core
             var scale = outputs[5].AsTensor<float>().ToArray();
             var kp = outputs[6].AsTensor<float>().ToArray();
             
-            Debug.Log($"[DEBUG_GET_KP_INFO] Raw outputs - pitch: {outputs[0].AsTensor<float>().Dimensions.ToArray().Length}D, yaw: {outputs[1].AsTensor<float>().Dimensions.ToArray().Length}D, roll: {outputs[2].AsTensor<float>().Dimensions.ToArray().Length}D");
-            Debug.Log($"[DEBUG_GET_KP_INFO] Raw outputs - t: {outputs[3].AsTensor<float>().Dimensions.ToArray().Length}D, exp: {outputs[4].AsTensor<float>().Dimensions.ToArray().Length}D, scale: {outputs[5].AsTensor<float>().Dimensions.ToArray().Length}D, kp: {outputs[6].AsTensor<float>().Dimensions.ToArray().Length}D");
             
             // Python: pred = softmax(kp_info["pitch"], axis=1)
             // Python: degree = np.sum(pred * np.arange(66), axis=1) * 3 - 97.5
@@ -823,11 +737,6 @@ namespace MuseTalk.Core
             var processedYaw = ProcessAngleSoftmax(yaw);
             var processedRoll = ProcessAngleSoftmax(roll);
             
-            Debug.Log($"[DEBUG_GET_KP_INFO] Processed - pitch: [{string.Join(", ", processedPitch.Select(x => x.ToString("F3")))}], yaw: [{string.Join(", ", processedYaw.Select(x => x.ToString("F3")))}], roll: [{string.Join(", ", processedRoll.Select(x => x.ToString("F3")))}]");
-            Debug.Log($"[DEBUG_GET_KP_INFO] Processed - t: [{string.Join(", ", t.Select(x => x.ToString("F3")))}], scale: [{string.Join(", ", scale.Select(x => x.ToString("F3")))}]");
-            Debug.Log($"[DEBUG_GET_KP_INFO] Processed - kp shape: 1x{kp.Length/3}x3, exp shape: 1x{exp.Length/3}x3");
-            Debug.Log($"[DEBUG_GET_KP_INFO] Processed - kp range: [{kp.Min():F3}, {kp.Max():F3}]");
-            Debug.Log($"[DEBUG_GET_KP_INFO] Processed - exp range: [{exp.Min():F3}, {exp.Max():F3}]");
             
             // Python: bs = kp_info["kp"].shape[0]
             // Python: kp_info["kp"] = kp_info["kp"].reshape(bs, -1, 3)  # BxNx3
@@ -850,9 +759,7 @@ namespace MuseTalk.Core
         /// </summary>
         private float[] ExtractFeature3d(float[] preprocessedData)
         {
-            Debug.Log($"[DEBUG_EXTRACT_FEATURE_3D] Input tensor shape: 1x3x256x256");
             float dataMin = preprocessedData.Min(), dataMax = preprocessedData.Max();
-            Debug.Log($"[DEBUG_EXTRACT_FEATURE_3D] Input tensor range: [{dataMin:F3}, {dataMax:F3}]");
             
             var inputTensor = new DenseTensor<float>(preprocessedData, new[] { 1, 3, 256, 256 });
             
@@ -860,7 +767,6 @@ namespace MuseTalk.Core
             // Python: output = net.run(None, {"img": x})
             // Use the actual input name from the model metadata
             string inputName = _appearanceFeatureExtractor.InputMetadata.Keys.First();
-            // Debug.Log($"[ExtractFeature3d] Using appearance extractor input name: {inputName}");
             
             var inputs = new List<NamedOnnxValue>
             {
@@ -872,9 +778,7 @@ namespace MuseTalk.Core
             
             var outputTensor = results.First().AsTensor<float>();
             var outputShape = outputTensor.Dimensions.ToArray();
-            Debug.Log($"[DEBUG_EXTRACT_FEATURE_3D] Output shape: {string.Join("x", outputShape)}");
             float outputMin = output.Min(), outputMax = output.Max();
-            Debug.Log($"[DEBUG_EXTRACT_FEATURE_3D] Output range: [{outputMin:F3}, {outputMax:F3}]");
             
             // Python: f_s = output[0]
             // Python: f_s = f_s.astype(np.float32)
@@ -969,7 +873,6 @@ namespace MuseTalk.Core
         private (Texture2D, LivePortraitPredInfo) Predict(int frameId, MotionInfo xSInfo, float[,] Rs, float[] fs, float[] xs, 
             Texture2D img, LivePortraitPredInfo predInfo)
         {
-            // Debug.Log($"[DEBUG] === PREDICT FRAME {frameId} START ===");
             
             // Python: frame_0 = pred_info['lmk'] is None
             bool frame0 = predInfo.Landmarks == null;
@@ -1109,10 +1012,6 @@ namespace MuseTalk.Core
             var xDNew = CalculateNewKeypoints(xCs, RNew, deltaNew, scaleNew, tNew);
             
             // Debug: Check keypoint transformation values
-            Debug.Log($"[DEBUG_PREDICT] xCs range: [{xCs.Min():F3}, {xCs.Max():F3}]");
-            Debug.Log($"[DEBUG_PREDICT] xDNew range: [{xDNew.Min():F3}, {xDNew.Max():F3}]");
-            Debug.Log($"[DEBUG_PREDICT] scaleNew: [{string.Join(", ", scaleNew.Select(x => x.ToString("F3")))}]");
-            Debug.Log($"[DEBUG_PREDICT] tNew: [{string.Join(", ", tNew.Select(x => x.ToString("F3")))}]");
             
             // Python: x_d_new = stitching(models, x_s, x_d_new)
             xDNew = Stitching(xs, xDNew);
@@ -1120,9 +1019,7 @@ namespace MuseTalk.Core
             // Python: out = warping_spade(models, f_s, x_s, x_d_new)
             var output = WarpingSpade(fs, xs, xDNew);
             
-            Debug.Log($"[DEBUG_PREDICT] Raw warping output shape: 1x3x512x512");
             float outputMin = output.Min(), outputMax = output.Max();
-            Debug.Log($"[DEBUG_PREDICT] Raw warping output range: [{outputMin:F3}, {outputMax:F3}]");
             
             // Python: out = out.transpose(0, 2, 3, 1)  # 1x3xHxW -> 1xHxWx3
             // Python: out = np.clip(out, 0, 1)  # clip to 0~1
@@ -1130,8 +1027,6 @@ namespace MuseTalk.Core
             // Python: I_p = out[0]
             var resultTexture = ConvertOutputToTexture(output);
             
-            Debug.Log($"[DEBUG_PREDICT] Final output shape: {resultTexture.width}x{resultTexture.height}");
-            Debug.Log($"[DEBUG_PREDICT] Final output range: [0, 255]"); // After conversion to texture
             
             // UnityEngine.Object.DestroyImmediate(img256);
             
@@ -1162,7 +1057,6 @@ namespace MuseTalk.Core
             // Python: output = net.run(None, {"input": feat})
             // Use actual input name from model metadata
             string inputName = _stitching.InputMetadata.Keys.First();
-            // Debug.Log($"[Stitching] Using stitching input name: {inputName}");
             
             var inputs = new List<NamedOnnxValue>
             {
@@ -1208,7 +1102,6 @@ namespace MuseTalk.Core
             // Python: kp_source shape should be (1, 21, 3) = 63 elements  
             // Python: kp_driving shape should be (1, 21, 3) = 63 elements
             
-            Debug.Log($"[DEBUG_WARPING_SPADE] Input array sizes - feature3d: {feature3d.Length}, kpSource: {kpSource.Length}, kpDriving: {kpDriving.Length}");
             
             // Verify expected sizes
             int expectedFeature3DSize = 1 * 32 * 16 * 64 * 64; // 2,097,152
@@ -1229,16 +1122,11 @@ namespace MuseTalk.Core
             var kpSourceTensor = new DenseTensor<float>(kpSource, new[] { 1, kpSource.Length / 3, 3 });
             var kpDrivingTensor = new DenseTensor<float>(kpDriving, new[] { 1, kpDriving.Length / 3, 3 });
             
-            Debug.Log($"[DEBUG_WARPING_SPADE] Input shapes - feature_3d: {feature3DTensor.Dimensions[0]}x{feature3DTensor.Dimensions[1]}x{feature3DTensor.Dimensions[2]}x{feature3DTensor.Dimensions[3]}x{feature3DTensor.Dimensions[4]}, kp_source: {kpSourceTensor.Dimensions[0]}x{kpSourceTensor.Dimensions[1]}x{kpSourceTensor.Dimensions[2]}, kp_driving: {kpDrivingTensor.Dimensions[0]}x{kpDrivingTensor.Dimensions[1]}x{kpDrivingTensor.Dimensions[2]}");
-            Debug.Log($"[DEBUG_WARPING_SPADE] Feature3D range: [{feature3d.Min():F3}, {feature3d.Max():F3}]");
-            Debug.Log($"[DEBUG_WARPING_SPADE] KpSource range: [{kpSource.Min():F3}, {kpSource.Max():F3}]");
-            Debug.Log($"[DEBUG_WARPING_SPADE] KpDriving range: [{kpDriving.Min():F3}, {kpDriving.Max():F3}]");
             
             // Python: net = models["warping_spade"]
             // Python: output = net.run(None, {"feature_3d": feature_3d, "kp_driving": kp_driving, "kp_source": kp_source})
             // Use actual input names from model metadata
             var inputNames = _warpingSpade.InputMetadata.Keys.ToArray();
-            // Debug.Log($"[WarpingSpade] Available input names: {string.Join(", ", inputNames)}");
             
             var inputs = new List<NamedOnnxValue>
             {
@@ -1250,14 +1138,11 @@ namespace MuseTalk.Core
             using var results = _warpingSpade.Run(inputs);
             var outputs = results.ToArray();
             
-            // Debug.Log($"[WarpingSpade] Got {outputs.Length} outputs from warping_spade model");
             var outputShape = outputs[0].AsTensor<float>().Dimensions.ToArray();
-            Debug.Log($"[DEBUG_WARPING_SPADE] Output shape: {string.Join("x", outputShape)}");
             
             // Python: return output[0] - take the first output (warped_feature)
             var output = outputs[0].AsTensor<float>().ToArray();
             
-            Debug.Log($"[DEBUG_WARPING_SPADE] Output range: [{output.Min():F3}, {output.Max():F3}]");
             
             return output;
         }
@@ -1292,7 +1177,6 @@ namespace MuseTalk.Core
         {
             for (int i = 0; i < lmk.Length; i++)
             {
-                // Debug.Log($"[DEBUG_CROP_IMAGE] lmk[{i}]: {lmk[i]}");
                 // proved correct
             }
             // Python: crop_image(img, pts: np.ndarray, dsize=224, scale=1.5, vy_ratio=-0.1) - EXACT MATCH
@@ -1439,7 +1323,6 @@ namespace MuseTalk.Core
                 pt2 = new Vector2[] { ptLeftEye, ptRightEye };
             }
             
-            Debug.Log($"[DEBUG_PARSE_PT2_FROM_PT106] pt2: {pt2[0]}, {pt2[1]}");
             return pt2;
         }
         
@@ -1459,7 +1342,6 @@ namespace MuseTalk.Core
                 pt2[1] = new Vector2(pt2[0].x - v.y, pt2[0].y + v.x);
             }
             
-            Debug.Log($"[DEBUG_PARSE_PT2_FROM_PT_X] pt2: {pt2[0]}, {pt2[1]}");
             return pt2;
         }
         
@@ -1488,7 +1370,6 @@ namespace MuseTalk.Core
             // Python: ux = np.array((uy[1], -uy[0]), dtype=np.float32)
             Vector2 ux = new(uy.y, -uy.x);
 
-            Debug.Log($"[DEBUG_PARSE_RECT_FROM_LANDMARK] ux: {ux}, uy: {uy}");
             
             // Python: angle = acos(ux[0])
             // Python: if ux[1] < 0: angle = -angle
@@ -1498,7 +1379,6 @@ namespace MuseTalk.Core
             {
                 angle = -angle;
             }
-            Debug.Log($"[DEBUG_PARSE_RECT_FROM_LANDMARK] angle: {angle}");
             
             // Python: M = np.array([ux, uy])
             float[,] M = new float[,] { { ux.x, ux.y }, { uy.x, uy.y } };
@@ -1575,12 +1455,10 @@ namespace MuseTalk.Core
         {
             var (center, size, angle) = ParseRectFromLandmark(pts, scale, true, vxRatio, vyRatio, false);
 
-            Debug.Log($"[DEBUG_ESTIMATE_SIMILAR_TRANSFORM_FROM_PTS] center: {center}, size: {size}, angle: {angle}");
             
             float s = dsize / size.x;  // Python: s = dsize / size[0]
             Vector2 tgtCenter = new(dsize / 2f, dsize / 2f);  // Python: tgt_center = np.array([dsize / 2, dsize / 2])
             
-            Debug.Log($"[DEBUG_ESTIMATE_SIMILAR_TRANSFORM_FROM_PTS] s: {s}, tgtCenter: {tgtCenter}, flagDoRot: {flagDoRot}");
             float[,] MInv;
             
             if (flagDoRot)
@@ -1588,7 +1466,6 @@ namespace MuseTalk.Core
                 // Python: costheta, sintheta = cos(angle), sin(angle)
                 float costheta = Mathf.Cos(angle);
                 float sintheta = Mathf.Sin(angle);
-                Debug.Log($"[DEBUG_ESTIMATE_SIMILAR_TRANSFORM_FROM_PTS] costheta: {costheta}, sintheta: {sintheta}");
                 float cx = center.x, cy = center.y;  // Python: cx, cy = center[0], center[1]
                 float tcx = tgtCenter.x, tcy = tgtCenter.y;  // Python: tcx, tcy = tgt_center[0], tgt_center[1]
                 
@@ -1623,8 +1500,6 @@ namespace MuseTalk.Core
                 { M[1, 0], M[1, 1], M[1, 2] }
             };
 
-            Debug.Log($"[DEBUG_ESTIMATE_SIMILAR_TRANSFORM_FROM_PTS] M: {M[0, 0]}, {M[0, 1]}, {M[0, 2]}, {M[1, 0]}, {M[1, 1]}, {M[1, 2]}");
-            Debug.Log($"[DEBUG_ESTIMATE_SIMILAR_TRANSFORM_FROM_PTS] MInv: {MInv[0, 0]}, {MInv[0, 1]}, {MInv[0, 2]}, {MInv[1, 0]}, {MInv[1, 1]}, {MInv[1, 2]}");
             // Python: return M_INV, M[:2, ...]
             return (MInv, M2x3);
         }
@@ -1957,12 +1832,10 @@ namespace MuseTalk.Core
             int height = size;
             int width = size;
             
-            Debug.Log($"[ConvertOutputToTexture] Processing output: {output.Length} elements -> {channels}x{height}x{width}");
             
             // Debug: Check output value ranges
             float minVal = output.Min();
             float maxVal = output.Max();
-            Debug.Log($"[ConvertOutputToTexture] Output value range: [{minVal:F3}, {maxVal:F3}]");
             
             var texture = new Texture2D(width, height, TextureFormat.RGB24, false);
             var pixels = new Color[width * height];
@@ -2029,7 +1902,6 @@ namespace MuseTalk.Core
         
         private List<FaceDetectionResult> ProcessDetectionResults(NamedOnnxValue[] outputs, float detScale)
         {
-            // Debug.Log($"[ProcessDetectionResults] Processing {outputs.Length} outputs, detScale={detScale}");
             
             // Python: process detection results exactly as in face_analysis function
             var scoresList = new List<float[]>();
@@ -2057,8 +1929,6 @@ namespace MuseTalk.Core
                 var bboxPredsTensor = outputs[idx + fmc].AsTensor<float>();
                 var bboxPreds = bboxPredsTensor.ToArray();
 
-                Debug.Log($"[DEBUG_PROCESS_DETECTION_RESULTS] bboxPreds: {bboxPreds[0]}, {bboxPreds[1]}, {bboxPreds[2]}, {bboxPreds[3]}");
-                Debug.Log($"[DEBUG_PROCESS_DETECTION_RESULTS] bboxPreds.Length: {bboxPreds.Length}");
                 // Python: bbox_preds = bbox_preds * stride
                 for (int i = 0; i < bboxPreds.Length; i++)
                 {
@@ -2129,10 +1999,8 @@ namespace MuseTalk.Core
                     }
                 }
                 
-                // Debug.Log($"[ProcessDetectionResults] Stride {stride}: {scores.Length} scores, {posInds.Count} above threshold {detThresh}");
                 // if (scores.Length > 0)
                 // {
-                //     Debug.Log($"[ProcessDetectionResults] Stride {stride}: Score range [{scores.Min():F3}, {scores.Max():F3}]");
                 // }
                 
                 if (posInds.Count > 0)
@@ -2196,7 +2064,6 @@ namespace MuseTalk.Core
             
             foreach (var bboxes in bboxesList)
             {
-                Debug.Log($"[DEBUG_PROCESS_DETECTION_RESULTS] bboxes: {bboxes[0]}, {bboxes[1]}, {bboxes[2]}, {bboxes[3]}");
                 allBboxes.AddRange(bboxes);
             }
             
@@ -2320,7 +2187,6 @@ namespace MuseTalk.Core
                 { m10, m11, m12 }
             };
 
-            Debug.Log($"[DEBUG_FACE_ALIGN] M: {M[0, 0]}, {M[0, 1]}, {M[0, 2]}, {M[1, 0]}, {M[1, 1]}, {M[1, 2]}");
             
             _debugImage = img;
             // Python: cropped = cv2.warpAffine(data, M, (output_size, output_size), borderValue=0.0)
@@ -2338,7 +2204,6 @@ namespace MuseTalk.Core
             //     maxOutput = Mathf.Max(maxOutput, pixelMax);
             //     minOutput = Mathf.Min(minOutput, pixelMin);
             // }
-            // Debug.Log($"[DEBUG_FACE_ALIGN] Output image pixel range: [{minOutput * 255f:F3}, {maxOutput * 255f:F3}]");
 
             // Convert to Matrix4x4 for Unity compatibility
             var transform = new Matrix4x4
@@ -2642,7 +2507,6 @@ namespace MuseTalk.Core
                 }
                 
                 _disposed = true;
-                // Debug.Log("[LivePortraitInference] Disposed successfully");
             }
             catch (Exception e)
             {
@@ -2676,7 +2540,6 @@ namespace MuseTalk.Core
             // The Python script does not convert to grayscale, so we remove the manual pixel loop.
             // The warped 3-channel mask is returned directly.
             
-            Debug.Log($"[PreparePasteBack] Transformed mask template: {_maskTemplate.width}x{_maskTemplate.height} -> {width}x{height}");
             
             return maskOri;
         }
@@ -2728,7 +2591,6 @@ namespace MuseTalk.Core
             maskOri.SetPixels(pixels);
             maskOri.Apply();
             
-            Debug.Log($"[PreparePasteBack] Created default mask: {width}x{height}, center=({center.x:F1},{center.y:F1}), radii=({radiusX:F1},{radiusY:F1})");
             
             return maskOri;
         }
@@ -2774,7 +2636,6 @@ namespace MuseTalk.Core
         /// </summary>
         private Texture2D PasteBack(Texture2D imgCrop, Matrix4x4 Mc2o, Texture2D imgOri, Texture2D maskOri)
         {
-            Debug.Log($"[DEBUG_PASTEBACK] Input dimensions - imgCrop: {imgCrop.width}x{imgCrop.height}, imgOri: {imgOri.width}x{imgOri.height}, maskOri: {maskOri.width}x{maskOri.height}");
             
             // Python: dsize = (img_ori.shape[1], img_ori.shape[0])
             int dsize_w = imgOri.width;
@@ -2784,7 +2645,6 @@ namespace MuseTalk.Core
             var oriPixelsDebug = imgOri.GetPixels();
             float oriMin = oriPixelsDebug.Min(p => Mathf.Min(p.r, Mathf.Min(p.g, p.b)));
             float oriMax = oriPixelsDebug.Max(p => Mathf.Max(p.r, Mathf.Max(p.g, p.b)));
-            Debug.Log($"[DEBUG_PASTEBACK] Original image pixel range: [{oriMin:F3}, {oriMax:F3}]");
             
             // Python: result = cv2.warpAffine(img_crop, M_c2o[:2, :], dsize=dsize, flags=cv2.INTER_LINEAR)
             float[,] M = new float[,] {
@@ -2797,7 +2657,6 @@ namespace MuseTalk.Core
             var warpedPixelsDebug = warped.GetPixels();
             float warpedMin = warpedPixelsDebug.Min(p => Mathf.Min(p.r, Mathf.Min(p.g, p.b)));
             float warpedMax = warpedPixelsDebug.Max(p => Mathf.Max(p.r, Mathf.Max(p.g, p.b)));
-            Debug.Log($"[DEBUG_PASTEBACK] Warped image pixel range: [{warpedMin:F3}, {warpedMax:F3}]");
             
             // Python: result = np.clip(mask_ori * result + (1 - mask_ori) * img_ori, 0, 255).astype(np.uint8)
             var result = new Texture2D(dsize_w, dsize_h, TextureFormat.RGB24, false);
@@ -2834,7 +2693,6 @@ namespace MuseTalk.Core
             var resultPixelsDebug = result.GetPixels();
             float resultMin = resultPixelsDebug.Min(p => Mathf.Min(p.r, Mathf.Min(p.g, p.b)));
             float resultMax = resultPixelsDebug.Max(p => Mathf.Max(p.r, Mathf.Max(p.g, p.b)));
-            Debug.Log($"[DEBUG_PASTEBACK] Final result pixel range: [{resultMin:F3}, {resultMax:F3}]");
             
             // UnityEngine.Object.DestroyImmediate(warped);
             
