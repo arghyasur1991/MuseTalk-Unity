@@ -5,6 +5,7 @@ using System.Threading.Tasks;
 using UnityEngine;
 using Microsoft.ML.OnnxRuntime;
 using Microsoft.ML.OnnxRuntime.Tensors;
+using Unity.Collections.LowLevel.Unsafe;
 
 namespace MuseTalk.Core
 {
@@ -305,14 +306,17 @@ namespace MuseTalk.Core
         /// <summary>
         /// Python: src_preprocess(img) - EXACT MATCH
         /// Returns (byte[] imageData, int width, int height) in RGB24 format
+        /// OPTIMIZED: Uses direct pixel data access and parallelization for maximum performance
         /// </summary>
-        private (byte[], int, int) SrcPreprocess(Texture2D img)
+        private unsafe (byte[], int, int) SrcPreprocess(Texture2D img)
         {
             int h = img.height;
             int w = img.width;
             
-            // Get initial image data as byte array (RGB24 format)
-            byte[] imageData = GetTextureAsRgb24Bytes(img);
+            // Get initial image data directly from texture (assumes RGB24 format)
+            var pixelData = img.GetPixelData<byte>(0);
+            var imageData = new byte[pixelData.Length];
+            pixelData.CopyTo(imageData);
             int currentWidth = w;
             int currentHeight = h;
             
@@ -336,7 +340,7 @@ namespace MuseTalk.Core
                 }
                 
                 // Python: img = cv2.resize(img, (new_w, new_h))
-                imageData = ResizeImageBytes(imageData, currentWidth, currentHeight, newWidth, newHeight);
+                imageData = ResizeImageBytesUnsafe(imageData, currentWidth, currentHeight, newWidth, newHeight);
                 currentWidth = newWidth;
                 currentHeight = newHeight;
             }
@@ -358,95 +362,100 @@ namespace MuseTalk.Core
             if (finalHeight != currentHeight || finalWidth != currentWidth)
             {
                 // Python crops from top-left: img[:new_h, :new_w]
-                imageData = CropImageBytes(imageData, currentWidth, currentHeight, finalWidth, finalHeight);
+                imageData = CropImageBytesUnsafe(imageData, currentWidth, currentHeight, finalWidth, finalHeight);
                 return (imageData, finalWidth, finalHeight);
             }
             
             return (imageData, currentWidth, currentHeight);
         }
         
+
         /// <summary>
-        /// Convert Texture2D to RGB24 byte array
+        /// Resize RGB24 byte array using optimized bilinear interpolation
+        /// OPTIMIZED: Uses parallelization and optimized interpolation for maximum performance
         /// </summary>
-        private byte[] GetTextureAsRgb24Bytes(Texture2D texture)
-        {
-            var colors = texture.GetPixels();
-            var bytes = new byte[colors.Length * 3]; // RGB24 = 3 bytes per pixel
-            
-            for (int i = 0; i < colors.Length; i++)
-            {
-                bytes[i * 3] = (byte)(colors[i].r * 255f);     // R
-                bytes[i * 3 + 1] = (byte)(colors[i].g * 255f); // G  
-                bytes[i * 3 + 2] = (byte)(colors[i].b * 255f); // B
-            }
-            
-            return bytes;
-        }
-        
-        /// <summary>
-        /// Resize RGB24 byte array image data using bilinear interpolation
-        /// </summary>
-        private byte[] ResizeImageBytes(byte[] sourceData, int sourceWidth, int sourceHeight, int targetWidth, int targetHeight)
+        private unsafe byte[] ResizeImageBytesUnsafe(byte[] sourceData, int sourceWidth, int sourceHeight, int targetWidth, int targetHeight)
         {
             var targetData = new byte[targetWidth * targetHeight * 3];
             
+            // Pre-calculate scaling ratios
             float xRatio = (float)sourceWidth / targetWidth;
             float yRatio = (float)sourceHeight / targetHeight;
             
-            for (int y = 0; y < targetHeight; y++)
+            // OPTIMIZED: Parallel processing across all target pixels
+            int totalPixels = targetWidth * targetHeight;
+            System.Threading.Tasks.Parallel.For(0, totalPixels, pixelIndex =>
             {
-                for (int x = 0; x < targetWidth; x++)
-                {
-                    float srcX = x * xRatio;
-                    float srcY = y * yRatio;
-                    
-                    int x1 = Mathf.FloorToInt(srcX);
-                    int y1 = Mathf.FloorToInt(srcY);
-                    int x2 = Mathf.Min(x1 + 1, sourceWidth - 1);
-                    int y2 = Mathf.Min(y1 + 1, sourceHeight - 1);
-                    
-                    float fx = srcX - x1;
-                    float fy = srcY - y1;
-                    
-                    for (int c = 0; c < 3; c++) // RGB channels
-                    {
-                        int src1 = (y1 * sourceWidth + x1) * 3 + c;
-                        int src2 = (y1 * sourceWidth + x2) * 3 + c;
-                        int src3 = (y2 * sourceWidth + x1) * 3 + c;
-                        int src4 = (y2 * sourceWidth + x2) * 3 + c;
-                        
-                        float val1 = sourceData[src1] * (1 - fx) + sourceData[src2] * fx;
-                        float val2 = sourceData[src3] * (1 - fx) + sourceData[src4] * fx;
-                        float finalVal = val1 * (1 - fy) + val2 * fy;
-                        
-                        int targetIdx = (y * targetWidth + x) * 3 + c;
-                        targetData[targetIdx] = (byte)Mathf.Clamp(finalVal, 0, 255);
-                    }
-                }
-            }
+                // Calculate x, y coordinates from linear pixel index using optimized arithmetic
+                int y = pixelIndex / targetWidth;
+                int x = pixelIndex % targetWidth;
+                
+                // Map target pixel to source coordinates
+                float srcX = x * xRatio;
+                float srcY = y * yRatio;
+                
+                // Get integer and fractional parts for bilinear interpolation
+                int x1 = (int)srcX;
+                int y1 = (int)srcY;
+                int x2 = (x1 + 1 < sourceWidth) ? x1 + 1 : x1;
+                int y2 = (y1 + 1 < sourceHeight) ? y1 + 1 : y1;
+                
+                float fx = srcX - x1;
+                float fy = srcY - y1;
+                float invFx = 1.0f - fx;
+                float invFy = 1.0f - fy;
+                
+                // Calculate source pixel indices using stride arithmetic
+                int c1Idx = (y1 * sourceWidth + x1) * 3; // Top-left
+                int c2Idx = (y1 * sourceWidth + x2) * 3; // Top-right
+                int c3Idx = (y2 * sourceWidth + x1) * 3; // Bottom-left
+                int c4Idx = (y2 * sourceWidth + x2) * 3; // Bottom-right
+                
+                // Pre-calculate bilinear interpolation weights
+                float w1 = invFx * invFy; // Top-left weight
+                float w2 = fx * invFy;    // Top-right weight
+                float w3 = invFx * fy;    // Bottom-left weight
+                float w4 = fx * fy;       // Bottom-right weight
+                
+                // Calculate target pixel index
+                int targetPixelIdx = (y * targetWidth + x) * 3;
+                
+                // OPTIMIZED: Direct byte interpolation with unrolled RGB channels
+                // R channel
+                float r = sourceData[c1Idx] * w1 + sourceData[c2Idx] * w2 + sourceData[c3Idx] * w3 + sourceData[c4Idx] * w4;
+                targetData[targetPixelIdx] = (byte)Mathf.Clamp(r, 0f, 255f);
+                
+                // G channel
+                float g = sourceData[c1Idx + 1] * w1 + sourceData[c2Idx + 1] * w2 + sourceData[c3Idx + 1] * w3 + sourceData[c4Idx + 1] * w4;
+                targetData[targetPixelIdx + 1] = (byte)Mathf.Clamp(g, 0f, 255f);
+                
+                // B channel
+                float b = sourceData[c1Idx + 2] * w1 + sourceData[c2Idx + 2] * w2 + sourceData[c3Idx + 2] * w3 + sourceData[c4Idx + 2] * w4;
+                targetData[targetPixelIdx + 2] = (byte)Mathf.Clamp(b, 0f, 255f);
+            });
             
             return targetData;
         }
         
         /// <summary>
-        /// Crop RGB24 byte array from top-left corner (Python-style cropping)
+        /// Crop RGB24 byte array using optimized bulk memory operations
+        /// OPTIMIZED: Uses parallelization and bulk copying for maximum performance
         /// </summary>
-        private byte[] CropImageBytes(byte[] sourceData, int sourceWidth, int sourceHeight, int cropWidth, int cropHeight)
+        private unsafe byte[] CropImageBytesUnsafe(byte[] sourceData, int sourceWidth, int sourceHeight, int cropWidth, int cropHeight)
         {
             var croppedData = new byte[cropWidth * cropHeight * 3];
             
-            for (int y = 0; y < cropHeight; y++)
+            // OPTIMIZED: Parallel row-wise processing
+            System.Threading.Tasks.Parallel.For(0, cropHeight, y =>
             {
-                for (int x = 0; x < cropWidth; x++)
-                {
-                    int srcIdx = (y * sourceWidth + x) * 3;
-                    int dstIdx = (y * cropWidth + x) * 3;
-                    
-                    croppedData[dstIdx] = sourceData[srcIdx];         // R
-                    croppedData[dstIdx + 1] = sourceData[srcIdx + 1]; // G
-                    croppedData[dstIdx + 2] = sourceData[srcIdx + 2]; // B
-                }
-            }
+                // Calculate source and destination indices for this row
+                int sourceRowStart = y * sourceWidth * 3;
+                int croppedRowStart = y * cropWidth * 3;
+                int bytesToCopy = cropWidth * 3;
+                
+                // Use Array.Copy for efficient bulk copy (faster than manual loop)
+                Array.Copy(sourceData, sourceRowStart, croppedData, croppedRowStart, bytesToCopy);
+            });
             
             return croppedData;
         }
