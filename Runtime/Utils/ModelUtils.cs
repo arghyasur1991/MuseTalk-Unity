@@ -81,7 +81,8 @@ namespace MuseTalk.Utils
                 throw new FileNotFoundException($"{modelName} model not found: {modelPath}");
             var sessionOptions = CreateSessionOptions(config);
             if (
-                modelName == "1k3d68"
+                modelName == "1k3d68" ||
+                modelName == "2d106det"
             )
             {
                 sessionOptions.AppendExecutionProvider_CoreML();

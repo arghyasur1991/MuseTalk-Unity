@@ -679,7 +679,10 @@ namespace MuseTalk.Core
                 NamedOnnxValue.CreateFromTensor("data", inputTensor)
             };
             
+            var start2 = System.Diagnostics.Stopwatch.StartNew();
             using var results = _landmark2d106.Run(inputs);
+            var elapsed2 = start2.ElapsedMilliseconds;
+            Debug.Log($"[LivePortraitInference] Landmark 2d 106 took {elapsed2}ms");
             var output = results.First().AsTensor<float>().ToArray();
             
             // Python: pred = output[0][0]
@@ -1950,12 +1953,13 @@ namespace MuseTalk.Core
         
         // Face detection and landmark processing methods - SIMPLIFIED FOR NOW
         /// <summary>
-        /// OPTIMIZED: Uses unsafe pointers and parallelization for maximum performance
+        /// OPTIMIZED: Common image preprocessing with unsafe pointers and parallelization for maximum performance
+        /// Supports different normalization modes via multiplier and offset constants
         /// </summary>
-        private unsafe DenseTensor<float> PreprocessDetectionImage(byte[] img, int inputSize)
+        private unsafe DenseTensor<float> PreprocessImageOptimized(byte[] img, int width, int height, float multiplier, float offset)
         {
-            var tensorData = new float[1 * 3 * inputSize * inputSize];
-            int imageSize = inputSize * inputSize;
+            var tensorData = new float[1 * 3 * height * width];
+            int imageSize = height * width;
             
             // OPTIMIZED: Use unsafe pointers for direct memory access
             fixed (byte* imgPtrFixed = img)
@@ -1964,11 +1968,6 @@ namespace MuseTalk.Core
                 // Capture pointers in local variables to avoid lambda closure issues
                 byte* imgPtrLocal = imgPtrFixed;
                 float* tensorPtrLocal = tensorPtrFixed;
-                
-                // Python: det_img = (det_img - 127.5) / 128
-                // Python: det_img = det_img.transpose(2, 0, 1)  # HWC -> CHW
-                // Python: det_img = np.expand_dims(det_img, axis=0)
-                // Python: det_img = det_img.astype(np.float32)
                 
                 // MAXIMUM PERFORMANCE: Parallel processing across all pixels for maximum parallelism
                 // Process each pixel independently across all available CPU cores
@@ -1983,14 +1982,23 @@ namespace MuseTalk.Core
                         // Calculate output position in CHW format: [channel][pixel]
                         float* outputPtr = tensorPtrLocal + c * imageSize + pixelIdx;
                         
-                        // OPTIMIZED: Direct normalization with fast math
-                        // Python: (pixelValue - 127.5) / 128 = pixelValue * (1/128) - 127.5/128
-                        *outputPtr = pixelValue * 0.0078125f - 0.99609375f; // Pre-calculated constants
+                        // OPTIMIZED: Configurable normalization with fast math
+                        *outputPtr = pixelValue * multiplier + offset;
                     }
                 });
             }
             
-            return new DenseTensor<float>(tensorData, new[] { 1, 3, inputSize, inputSize });
+            return new DenseTensor<float>(tensorData, new[] { 1, 3, height, width });
+        }
+
+        /// <summary>
+        /// OPTIMIZED: Detection image preprocessing - matches Python exactly
+        /// Python: (det_img - 127.5) / 128 = pixelValue * (1/128) - 127.5/128
+        /// </summary>
+        private DenseTensor<float> PreprocessDetectionImage(byte[] img, int inputSize)
+        {
+            // Pre-calculated constants: (pixelValue - 127.5) / 128 = pixelValue * 0.0078125 - 0.99609375
+            return PreprocessImageOptimized(img, inputSize, inputSize, 0.0078125f, -0.99609375f);
         }
         
         private List<FaceDetectionResult> ProcessDetectionResults(NamedOnnxValue[] outputs, float detScale)
@@ -2306,32 +2314,14 @@ namespace MuseTalk.Core
             return (cropped, transform);
         }
         
+        /// <summary>
+        /// OPTIMIZED: Landmark image preprocessing - matches Python exactly
+        /// Python does NOT normalize for landmark detection - keep pixel values in [0,255] range
+        /// </summary>
         private DenseTensor<float> PreprocessLandmarkImage(byte[] img, int inputSize)
         {
-            var pixels = img;
-            var tensorData = new float[1 * 3 * inputSize * inputSize];
-            
-            int idx = 0;
-            // The following loops perform the equivalent of numpy's transpose(2, 0, 1)
-            // to convert from HWC (height, width, channel) to CHW (channel, height, width).
-            for (int c = 0; c < 3; c++) // Channel
-            {
-                for (int h = 0; h < inputSize; h++) // Height
-                {
-                    for (int w = 0; w < inputSize; w++) // Width
-                    {
-                        int pixelIdx = h * inputSize + w;
-                        float pixelValue = pixels[pixelIdx * 3 + c];
-                        // CRITICAL FIX: Python does NOT normalize to [0,1] for landmark detection!
-                        // Keep pixel values in [0,255] range to match Python exactly
-                        tensorData[idx++] = pixelValue; // Convert from [0,1] to [0,255]
-                    }
-                }
-            }
-            
-            // The DenseTensor is created with a shape that includes the batch dimension (1),
-            // which is equivalent to numpy's expand_dims(axis=0).
-            return new DenseTensor<float>(tensorData, new[] { 1, 3, inputSize, inputSize });
+            // No normalization: pixelValue = pixelValue * 1.0 + 0.0
+            return PreprocessImageOptimized(img, inputSize, inputSize, 1.0f, 0.0f);
         }
         
         private Matrix4x4 InvertAffineTransform(Matrix4x4 matrix)
@@ -2397,27 +2387,14 @@ namespace MuseTalk.Core
             return result;
         }
         
+        /// <summary>
+        /// OPTIMIZED: Landmark runner image preprocessing - matches Python exactly
+        /// Python: img_crop = img_crop / 255 = pixelValue * (1/255) + 0
+        /// </summary>
         private DenseTensor<float> PreprocessLandmarkRunnerImage(byte[] img, int width, int height)
         {
-            var pixels = img;
-            var tensorData = new float[1 * 3 * height * width];
-            
-            int idx = 0;
-            // Python: img_crop = img_crop / 255
-            for (int c = 0; c < 3; c++)
-            {
-                for (int h = 0; h < height; h++)
-                {
-                    for (int w = 0; w < width; w++)
-                    {
-                        int pixelIdx = h * width + w;
-                        float pixelValue = pixels[pixelIdx * 3 + c];
-                        tensorData[idx++] = pixelValue / 255f; // Already normalized [0,1]
-                    }
-                }
-            }
-            
-            return new DenseTensor<float>(tensorData, new[] { 1, 3, height, width });
+            // Normalize to [0,1]: pixelValue / 255 = pixelValue * 0.00392157 + 0
+            return PreprocessImageOptimized(img, width, height, 0.00392157f, 0.0f);  // 1/255 = 0.00392157
         }
         
         private Vector2[] TransformLandmarksWithMatrix(Vector2[] landmarks, Matrix4x4 transform)
