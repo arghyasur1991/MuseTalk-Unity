@@ -212,6 +212,8 @@ namespace MuseTalk.Core
                 // Generate frames
                 var generatedFrames = new List<Texture2D>();
                 var (srcImgData, srcImgWidth, srcImgHeight) = SrcPreprocess(input.SourceImage);
+                var srcImgElapsed = start.ElapsedMilliseconds;
+                Debug.Log($"[LivePortraitInference] SrcPreprocess took {srcImgElapsed}ms");
                 
                 // CRITICAL FIX: Keep reference to preprocessed source image for pasteback
                 // In Python, src_img is used for pasteback - make sure it's valid
