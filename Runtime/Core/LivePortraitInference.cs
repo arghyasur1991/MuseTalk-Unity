@@ -340,7 +340,9 @@ namespace MuseTalk.Core
                 }
                 
                 // Python: img = cv2.resize(img, (new_w, new_h))
-                imageData = ResizeImageBytesUnsafe(imageData, currentWidth, currentHeight, newWidth, newHeight);
+                // Use TextureUtils for optimized byte array resizing (no texture conversion needed)
+                imageData = TextureUtils.ResizeTextureToExactSize(imageData, currentWidth, currentHeight, newWidth, newHeight, TextureUtils.SamplingMode.Bilinear);
+                
                 currentWidth = newWidth;
                 currentHeight = newHeight;
             }
@@ -370,72 +372,7 @@ namespace MuseTalk.Core
         }
         
 
-        /// <summary>
-        /// Resize RGB24 byte array using optimized bilinear interpolation
-        /// OPTIMIZED: Uses parallelization and optimized interpolation for maximum performance
-        /// </summary>
-        private unsafe byte[] ResizeImageBytesUnsafe(byte[] sourceData, int sourceWidth, int sourceHeight, int targetWidth, int targetHeight)
-        {
-            var targetData = new byte[targetWidth * targetHeight * 3];
-            
-            // Pre-calculate scaling ratios
-            float xRatio = (float)sourceWidth / targetWidth;
-            float yRatio = (float)sourceHeight / targetHeight;
-            
-            // OPTIMIZED: Parallel processing across all target pixels
-            int totalPixels = targetWidth * targetHeight;
-            System.Threading.Tasks.Parallel.For(0, totalPixels, pixelIndex =>
-            {
-                // Calculate x, y coordinates from linear pixel index using optimized arithmetic
-                int y = pixelIndex / targetWidth;
-                int x = pixelIndex % targetWidth;
-                
-                // Map target pixel to source coordinates
-                float srcX = x * xRatio;
-                float srcY = y * yRatio;
-                
-                // Get integer and fractional parts for bilinear interpolation
-                int x1 = (int)srcX;
-                int y1 = (int)srcY;
-                int x2 = (x1 + 1 < sourceWidth) ? x1 + 1 : x1;
-                int y2 = (y1 + 1 < sourceHeight) ? y1 + 1 : y1;
-                
-                float fx = srcX - x1;
-                float fy = srcY - y1;
-                float invFx = 1.0f - fx;
-                float invFy = 1.0f - fy;
-                
-                // Calculate source pixel indices using stride arithmetic
-                int c1Idx = (y1 * sourceWidth + x1) * 3; // Top-left
-                int c2Idx = (y1 * sourceWidth + x2) * 3; // Top-right
-                int c3Idx = (y2 * sourceWidth + x1) * 3; // Bottom-left
-                int c4Idx = (y2 * sourceWidth + x2) * 3; // Bottom-right
-                
-                // Pre-calculate bilinear interpolation weights
-                float w1 = invFx * invFy; // Top-left weight
-                float w2 = fx * invFy;    // Top-right weight
-                float w3 = invFx * fy;    // Bottom-left weight
-                float w4 = fx * fy;       // Bottom-right weight
-                
-                // Calculate target pixel index
-                int targetPixelIdx = (y * targetWidth + x) * 3;
-                
-                // OPTIMIZED: Direct byte interpolation with unrolled RGB channels
-                // R channel
-                float r = sourceData[c1Idx] * w1 + sourceData[c2Idx] * w2 + sourceData[c3Idx] * w3 + sourceData[c4Idx] * w4;
-                targetData[targetPixelIdx] = (byte)Mathf.Clamp(r, 0f, 255f);
-                
-                // G channel
-                float g = sourceData[c1Idx + 1] * w1 + sourceData[c2Idx + 1] * w2 + sourceData[c3Idx + 1] * w3 + sourceData[c4Idx + 1] * w4;
-                targetData[targetPixelIdx + 1] = (byte)Mathf.Clamp(g, 0f, 255f);
-                
-                // B channel
-                float b = sourceData[c1Idx + 2] * w1 + sourceData[c2Idx + 2] * w2 + sourceData[c3Idx + 2] * w3 + sourceData[c4Idx + 2] * w4;
-                targetData[targetPixelIdx + 2] = (byte)Mathf.Clamp(b, 0f, 255f);
-            });
-            
-            return targetData;
-        }
+
         
         /// <summary>
         /// Crop RGB24 byte array using optimized bulk memory operations
