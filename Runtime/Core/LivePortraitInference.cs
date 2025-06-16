@@ -545,33 +545,43 @@ namespace MuseTalk.Core
             float detScale = (float)newHeight / pythonHeight;
             
             // Python: resized_img = cv2.resize(img, (new_width, new_height))
+            var start = System.Diagnostics.Stopwatch.StartNew();
             var resizedImg = TextureUtils.ResizeTextureToExactSize(img, width, height, newWidth, newHeight, TextureUtils.SamplingMode.Bilinear);
             // Python: det_img = np.zeros((input_size, input_size, 3), dtype=np.uint8)
             // Python: det_img[:new_height, :new_width, :] = resized_img
             var detImg = new byte[inputSize * inputSize * 3];
             var resizedPixels = resizedImg;
             
-            // Fill with zeros (black)
-            for (int i = 0; i < detImg.Length; i++)
-            {
-                detImg[i] = 0;
-            }
+            // OPTIMIZED: Fill with zeros using Array.Clear (faster than manual loop)
+            Array.Clear(detImg, 0, detImg.Length);
             
-            // Copy resized image to top-left
-            for (int y = 0; y < newHeight; y++)
+            // OPTIMIZED: Copy resized image to top-left with unsafe pointers and parallelization
+            unsafe
             {
-                for (int x = 0; x < newWidth; x++)
+                fixed (byte* srcPtrFixed = resizedPixels)
+                fixed (byte* dstPtrFixed = detImg)
                 {
-                    int srcIdx = y * newWidth + x;
-                    int dstIdx = y * inputSize + x; // Direct copy, no flipping
-                    if (srcIdx < resizedPixels.Length)
+                    // Capture pointers in local variables to avoid lambda closure issues
+                    byte* srcPtrLocal = srcPtrFixed;
+                    byte* dstPtrLocal = dstPtrFixed;
+                    
+                    // MAXIMUM PERFORMANCE: Parallel row copying with bulk memory operations
+                    // Each row can be processed independently for perfect parallelization
+                    System.Threading.Tasks.Parallel.For(0, newHeight, y =>
                     {
-                        detImg[dstIdx * 3 + 0] = resizedPixels[srcIdx * 3 + 0];
-                        detImg[dstIdx * 3 + 1] = resizedPixels[srcIdx * 3 + 1];
-                        detImg[dstIdx * 3 + 2] = resizedPixels[srcIdx * 3 + 2];
-                    }
+                        // Calculate source and destination row pointers
+                        byte* srcRowPtr = srcPtrLocal + y * newWidth * 3;        // Source row (RGB24)
+                        byte* dstRowPtr = dstPtrLocal + y * inputSize * 3;       // Destination row (RGB24)
+                        
+                        // Bulk copy entire row in one operation (much faster than pixel-by-pixel)
+                        int rowBytes = newWidth * 3; // RGB24 = 3 bytes per pixel
+                        Buffer.MemoryCopy(srcRowPtr, dstRowPtr, rowBytes, rowBytes);
+                    });
                 }
             }
+            var elapsed = start.ElapsedMilliseconds;
+            Debug.Log($"[LivePortraitInference] Resize image took {elapsed}ms");
+            
             
             // Python: det_img = (det_img - 127.5) / 128
             // Python: det_img = det_img.transpose(2, 0, 1)  # HWC -> CHW
