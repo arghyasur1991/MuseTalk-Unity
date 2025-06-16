@@ -46,7 +46,6 @@ namespace MuseTalk.Core
     {
         public Texture2D SourceImage { get; set; }
         public Texture2D[] DrivingFrames { get; set; }
-        public Texture2D MaskTemplate { get; set; } // Python: mask_crop from mask_template.png
     }
 
     /// <summary>
@@ -2694,7 +2693,7 @@ namespace MuseTalk.Core
             }
             return result;
         }
-        
+
         /// <summary>
         /// Ensure array is float32 precision - matches Python's .astype(np.float32)
         /// </summary>
