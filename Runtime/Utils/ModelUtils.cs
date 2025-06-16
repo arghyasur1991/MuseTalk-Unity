@@ -162,6 +162,18 @@ namespace MuseTalk.Utils
                 if (maskTexture != null)
                 {
                     Debug.Log("[ModelUtils] Loaded mask template from Resources");
+
+                    if (maskTexture.format != TextureFormat.RGB24)
+                    {
+                        var convertedTexture = new Texture2D(maskTexture.width, maskTexture.height, TextureFormat.RGB24, false);
+                        convertedTexture.name = maskTexture.name;
+                        convertedTexture.SetPixels(maskTexture.GetPixels());
+                        convertedTexture.Apply();
+                        
+                        // Destroy the original texture and use the converted one
+                        // UnityEngine.Object.DestroyImmediate(maskTexture);
+                        maskTexture = convertedTexture;
+                    }
                     return maskTexture;
                 }
                 
@@ -172,7 +184,7 @@ namespace MuseTalk.Utils
                     byte[] fileData = System.IO.File.ReadAllBytes(maskPath);
                     var texture = new Texture2D(2, 2);
                     if (texture.LoadImage(fileData))
-                    {
+                    {                        
                         Debug.Log("[ModelUtils] Loaded mask template from StreamingAssets");
                         return texture;
                     }
