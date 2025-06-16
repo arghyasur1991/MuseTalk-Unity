@@ -127,8 +127,7 @@ namespace MuseTalk.Core
                 };
                 
                 // Load mask template - matches Python self.mask_crop = cv2.imread('mask_template.png')
-                var maskTemplate = ModelUtils.LoadMaskTemplate(_config);
-                var (maskTemplateData, maskTemplateWidth, maskTemplateHeight) = Texture2DToBytes(maskTemplate);
+                var (maskTemplateData, maskTemplateWidth, maskTemplateHeight) = ModelUtils.LoadMaskTemplate(_config);
                 _maskTemplate = maskTemplateData;
                 _maskTemplateWidth = maskTemplateWidth;
                 _maskTemplateHeight = maskTemplateHeight;
@@ -258,7 +257,7 @@ namespace MuseTalk.Core
                 {
                     // Python: img_rgb = frame[:, :, ::-1]  # BGR -> RGB (Unity input is already RGB)
                     var imgRgb = input.DrivingFrames[frameId];
-                    var (imgRgbData, w, h) = Texture2DToBytes(imgRgb);
+                    var (imgRgbData, w, h) = TextureUtils.Texture2DToBytes(imgRgb);
                     
                     // Python: I_p, self.pred_info = predict(frame_id, self.models, x_s_info, R_s, f_s, x_s, img_rgb, self.pred_info)
                     var (Ip, updatedPredInfo) = Predict(xSInfo, Rs, fs, xs, imgRgbData, imgRgb.width, imgRgb.height, _predInfo);
@@ -274,7 +273,7 @@ namespace MuseTalk.Core
                     }                    
                     else if (drivingImg != null)
                     {
-                        var drivingImgTexture = BytesToTexture2D(drivingImg, srcImgWidth, srcImgHeight);
+                        var drivingImgTexture = TextureUtils.BytesToTexture2D(drivingImg, srcImgWidth, srcImgHeight);
                         generatedFrames.Add(drivingImgTexture);
                     }
                 }
@@ -301,40 +300,6 @@ namespace MuseTalk.Core
                 };
             }
         }
-
-        private unsafe (byte[], int, int) Texture2DToBytes(Texture2D img)
-        {
-            int h = img.height;
-            int w = img.width;
-            int rowBytes = w * 3; // RGB24 = 3 bytes per pixel
-            
-            // Get initial image data directly from texture (assumes RGB24 format)
-            var pixelData = img.GetPixelData<byte>(0);
-            var imageData = new byte[pixelData.Length];
-            
-            // OPTIMIZED: Use pixelData directly with unsafe pointer - no extra copy needed
-            byte* srcPtr = (byte*)pixelData.GetUnsafeReadOnlyPtr();
-            
-            fixed (byte* dstPtr = imageData)
-            {
-                // MAXIMUM PERFORMANCE: Parallel processing across all rows
-                // Each row can be processed independently for perfect parallelization
-                // Capture pointers in local variables to avoid closure issues
-                byte* srcPtrLocal = srcPtr;
-                byte* dstPtrLocal = dstPtr;
-                
-                System.Threading.Tasks.Parallel.For(0, h, y =>
-                {
-                    byte* srcRowPtr = srcPtrLocal + (h - 1 - y) * rowBytes; // Source row (flipped)
-                    byte* dstRowPtr = dstPtrLocal + y * rowBytes;            // Destination row
-                    
-                    // Bulk copy entire row in one operation (thread-safe per row)
-                    Buffer.MemoryCopy(srcRowPtr, dstRowPtr, rowBytes, rowBytes);
-                });
-            }
-
-            return (imageData, w, h);
-        }
         
         /// <summary>
         /// Python: src_preprocess(img) - EXACT MATCH
@@ -343,7 +308,7 @@ namespace MuseTalk.Core
         /// </summary>
         private unsafe (byte[], int, int) SrcPreprocess(Texture2D img)
         {
-            var (imageData, w, h) = Texture2DToBytes(img);
+            var (imageData, w, h) = TextureUtils.Texture2DToBytes(img);
             int currentWidth = w;
             int currentHeight = h;
             
@@ -423,47 +388,7 @@ namespace MuseTalk.Core
             
             return croppedData;
         }
-        
-        /// <summary>
-        /// OPTIMIZED: Convert RGB24 byte array back to Texture2D using unsafe pointers and parallelization
-        /// ~3-5x faster than original through direct memory access and bulk operations
-        /// </summary>
-        private unsafe Texture2D BytesToTexture2D(byte[] imageData, int width, int height)
-        {
-            var texture = new Texture2D(width, height, TextureFormat.RGB24, false);
-            
-            // OPTIMIZED: Get direct access to texture pixel data for maximum performance
-            var pixelData = texture.GetPixelData<byte>(0);
-            byte* texturePtr = (byte*)pixelData.GetUnsafePtr();
-            
-            // OPTIMIZED: Process with unsafe pointers and parallelization
-            fixed (byte* imagePtrFixed = imageData)
-            {
-                // Capture pointer in local variable to avoid lambda closure issues
-                byte* imagePtrLocal = imagePtrFixed;
-                
-                // MAXIMUM PERFORMANCE: Parallel row processing with coordinate flipping
-                // Each row can be processed independently for perfect parallelization
-                System.Threading.Tasks.Parallel.For(0, height, y =>
-                {
-                    // Calculate Unity texture coordinate (bottom-left origin) from image coordinate (top-left origin)
-                    int unityY = height - 1 - y; // Flip Y coordinate for Unity coordinate system
-                    
-                    // Calculate row pointers using direct pointer arithmetic
-                    byte* srcRowPtr = imagePtrLocal + y * width * 3;        // Source row (top-left origin)
-                    byte* dstRowPtr = texturePtr + unityY * width * 3;      // Destination row (bottom-left origin)
-                    
-                    // OPTIMIZED: Bulk copy entire row in one operation (much faster than pixel-by-pixel)
-                    int rowBytes = width * 3; // RGB24 = 3 bytes per pixel
-                    Buffer.MemoryCopy(srcRowPtr, dstRowPtr, rowBytes, rowBytes);
-                });
-            }
-            
-            // Apply changes to texture (no need for SetPixels since we wrote directly to pixel data)
-            texture.Apply();
-            return texture;
-        }
-        
+
         /// <summary>
         /// Python: crop_src_image(models, img) - EXACT MATCH
         /// </summary>

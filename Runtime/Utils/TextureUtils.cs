@@ -621,6 +621,87 @@ namespace MuseTalk.Utils
                 return null;
             }
         }
+
+        public static Texture2D ConvertTexture2DToRGB24(Texture2D texture)
+        {
+            if (texture.format != TextureFormat.RGB24)
+            {
+                var convertedTexture = new Texture2D(texture.width, texture.height, TextureFormat.RGB24, false)
+                {
+                    name = texture.name
+                };
+                convertedTexture.SetPixels(texture.GetPixels());
+                convertedTexture.Apply();
+                return convertedTexture;
+            }
+            return texture;
+        }
+
+        /// <summary>
+        /// Convert Texture2D to byte array (RGB24 format)
+        /// </summary>
+        public static unsafe (byte[], int, int) Texture2DToBytes(Texture2D img)
+        {
+            int h = img.height;
+            int w = img.width;
+            int rowBytes = w * 3; // RGB24 = 3 bytes per pixel
+            
+            // Get initial image data directly from texture (assumes RGB24 format)
+            var pixelData = img.GetPixelData<byte>(0);
+            var imageData = new byte[pixelData.Length];
+            
+            byte* srcPtr = (byte*)pixelData.GetUnsafeReadOnlyPtr();
+            
+            fixed (byte* dstPtr = imageData)
+            {
+                byte* srcPtrLocal = srcPtr;
+                byte* dstPtrLocal = dstPtr;
+                
+                System.Threading.Tasks.Parallel.For(0, h, y =>
+                {
+                    byte* srcRowPtr = srcPtrLocal + (h - 1 - y) * rowBytes; // Source row (flipped)
+                    byte* dstRowPtr = dstPtrLocal + y * rowBytes;            // Destination row
+                    Buffer.MemoryCopy(srcRowPtr, dstRowPtr, rowBytes, rowBytes);
+                });
+            }
+
+            return (imageData, w, h);
+        }
+        
+        /// <summary>
+        /// Convert RGB24 byte array back to Texture2D using unsafe pointers and parallelization
+        /// </summary>
+        public static unsafe Texture2D BytesToTexture2D(byte[] imageData, int width, int height)
+        {
+            var texture = new Texture2D(width, height, TextureFormat.RGB24, false);
+            
+            var pixelData = texture.GetPixelData<byte>(0);
+            byte* texturePtr = (byte*)pixelData.GetUnsafePtr();
+            
+            // OPTIMIZED: Process with unsafe pointers and parallelization
+            fixed (byte* imagePtrFixed = imageData)
+            {
+                // Capture pointer in local variable to avoid lambda closure issues
+                byte* imagePtrLocal = imagePtrFixed;
+                
+                System.Threading.Tasks.Parallel.For(0, height, y =>
+                {
+                    // Calculate Unity texture coordinate (bottom-left origin) from image coordinate (top-left origin)
+                    int unityY = height - 1 - y; // Flip Y coordinate for Unity coordinate system
+                    
+                    // Calculate row pointers using direct pointer arithmetic
+                    byte* srcRowPtr = imagePtrLocal + y * width * 3;        // Source row (top-left origin)
+                    byte* dstRowPtr = texturePtr + unityY * width * 3;      // Destination row (bottom-left origin)
+                    
+                    int rowBytes = width * 3; // RGB24 = 3 bytes per pixel
+                    Buffer.MemoryCopy(srcRowPtr, dstRowPtr, rowBytes, rowBytes);
+                });
+            }
+            
+            // Apply changes to texture (no need for SetPixels since we wrote directly to pixel data)
+            texture.Apply();
+            return texture;
+        }
         
         /// <summary>
         /// Unsafe optimized Gaussian blur implementation using raw pointers
