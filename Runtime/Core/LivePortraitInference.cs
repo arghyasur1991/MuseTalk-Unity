@@ -458,10 +458,12 @@ namespace MuseTalk.Core
         /// </summary>
         private CropInfo CropSrcImage(byte[] img, int width, int height)
         {
-            
+            var start = System.Diagnostics.Stopwatch.StartNew();
             // Python: face_analysis = models["face_analysis"]
             // Python: src_face = face_analysis(img)
             var srcFaces = FaceAnalysis(img, width, height);
+            var elapsed = start.ElapsedMilliseconds;
+            Debug.Log($"[LivePortraitInference] Face analysis took {elapsed}ms");
             
             // Python: if len(src_face) == 0: print("No face detected in the source image."); return None
             if (srcFaces.Count == 0)
@@ -477,13 +479,6 @@ namespace MuseTalk.Core
             
             // Python: src_face = src_face[0]
             var srcFace = srcFaces[0];
-            // Convert Unity Rect to Python format [x1, y1, x2, y2] for logging
-            float bx1 = srcFace.BoundingBox.x;
-            float by1 = srcFace.BoundingBox.y;
-            float bx2 = srcFace.BoundingBox.x + srcFace.BoundingBox.width;
-            float by2 = srcFace.BoundingBox.y + srcFace.BoundingBox.height;
-
-            Debug.Log($"srcFace bbox: {bx1}, {by1}, {bx2}, {by2}");
             
             // Python: lmk = src_face["landmark_2d_106"]  # this is the 106 landmarks from insightface
             var lmk = srcFace.Landmarks106;
@@ -491,6 +486,9 @@ namespace MuseTalk.Core
             // Python: crop_info = crop_image(img, lmk, dsize=512, scale=2.3, vy_ratio=-0.125)
             var cropSize = 512;
             var cropInfo = CropImage(img, width, height, lmk, cropSize, 2.3f, -0.125f);
+
+            var elapsed2 = start.ElapsedMilliseconds;
+            Debug.Log($"[LivePortraitInference] Crop image took {elapsed2 - elapsed}ms");
             
             // Python: lmk = landmark_runner(models, img, lmk)
             lmk = LandmarkRunner(img, width, height, lmk);
