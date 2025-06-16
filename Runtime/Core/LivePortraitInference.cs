@@ -211,13 +211,15 @@ namespace MuseTalk.Core
                 var start = Stopwatch.StartNew();
                 // Generate frames
                 var generatedFrames = new List<Texture2D>();
-                var srcImg = SrcPreprocess(input.SourceImage);
+                var (srcImgData, srcImgWidth, srcImgHeight) = SrcPreprocess(input.SourceImage);
                 
                 // CRITICAL FIX: Keep reference to preprocessed source image for pasteback
                 // In Python, src_img is used for pasteback - make sure it's valid
+                // TODO: Convert CropSrcImage to work with byte arrays
+                var srcImgTexture = BytesToTexture2D(srcImgData, srcImgWidth, srcImgHeight);
                 
                 // Python: crop_info = crop_src_image(self.models, src_img)
-                var cropInfo = CropSrcImage(srcImg);
+                var cropInfo = CropSrcImage(srcImgTexture);
                 // Python: img_crop_256x256 = crop_info["img_crop_256x256"]
                 // Python: I_s = preprocess(img_crop_256x256)
                 var Is = Preprocess(cropInfo.ImageCrop256x256);
@@ -236,7 +238,7 @@ namespace MuseTalk.Core
                 
                 // Python: prepare for pasteback
                 // Python: mask_ori = prepare_paste_back(self.mask_crop, crop_info["M_c2o"], dsize=(src_img.shape[1], src_img.shape[0]))
-                var maskOri = PreparePasteBack(cropInfo.Transform, srcImg.width, srcImg.height);
+                var maskOri = PreparePasteBack(cropInfo.Transform, srcImgWidth, srcImgHeight);
 
                 var maxFrames = 1;
 
@@ -262,7 +264,7 @@ namespace MuseTalk.Core
                     }
                     else
                     {
-                        drivingImg = PasteBack(Ip, cropInfo.Transform, srcImg, maskOri);
+                        drivingImg = PasteBack(Ip, cropInfo.Transform, srcImgTexture, maskOri);
                     }
                     
                     if (_debugImage != null)
@@ -300,11 +302,17 @@ namespace MuseTalk.Core
         
         /// <summary>
         /// Python: src_preprocess(img) - EXACT MATCH
+        /// Returns (byte[] imageData, int width, int height) in RGB24 format
         /// </summary>
-        private Texture2D SrcPreprocess(Texture2D img)
+        private (byte[], int, int) SrcPreprocess(Texture2D img)
         {
             int h = img.height;
             int w = img.width;
+            
+            // Get initial image data as byte array (RGB24 format)
+            byte[] imageData = GetTextureAsRgb24Bytes(img);
+            int currentWidth = w;
+            int currentHeight = h;
             
             // Python: max_dim = 1280
             // Python: if max(h, w) > max_dim:
@@ -326,37 +334,142 @@ namespace MuseTalk.Core
                 }
                 
                 // Python: img = cv2.resize(img, (new_w, new_h))
-                img = ResizeTexture(img, newWidth, newHeight);
-                h = newHeight;
-                w = newWidth;
+                imageData = ResizeImageBytes(imageData, currentWidth, currentHeight, newWidth, newHeight);
+                currentWidth = newWidth;
+                currentHeight = newHeight;
             }
             
             // Python: division = 2
             // Python: new_h = img.shape[0] - (img.shape[0] % division)
             // Python: new_w = img.shape[1] - (img.shape[1] % division)
             const int division = 2;
-            int finalHeight = h - (h % division);
-            int finalWidth = w - (w % division);
+            int finalHeight = currentHeight - (currentHeight % division);
+            int finalWidth = currentWidth - (currentWidth % division);
             
             // Python: if new_h == 0 or new_w == 0: return img
             if (finalHeight == 0 || finalWidth == 0)
             {
-                return img;
+                return (imageData, currentWidth, currentHeight);
             }
             
             // Python: if new_h != img.shape[0] or new_w != img.shape[1]: img = img[:new_h, :new_w]
-            if (finalHeight != h || finalWidth != w)
+            if (finalHeight != currentHeight || finalWidth != currentWidth)
             {
-                var cropped = new Texture2D(finalWidth, finalHeight, TextureFormat.RGB24, false);
                 // Python crops from top-left: img[:new_h, :new_w]
-                // Unity GetPixels origin is bottom-left, so we need to crop from top by using (0, h - finalHeight)
-                var pixels = img.GetPixels(0, h - finalHeight, finalWidth, finalHeight);
-                cropped.SetPixels(pixels);
-                cropped.Apply();
-                return cropped;
+                imageData = CropImageBytes(imageData, currentWidth, currentHeight, finalWidth, finalHeight);
+                return (imageData, finalWidth, finalHeight);
             }
             
-            return img;
+            return (imageData, currentWidth, currentHeight);
+        }
+        
+        /// <summary>
+        /// Convert Texture2D to RGB24 byte array
+        /// </summary>
+        private byte[] GetTextureAsRgb24Bytes(Texture2D texture)
+        {
+            var colors = texture.GetPixels();
+            var bytes = new byte[colors.Length * 3]; // RGB24 = 3 bytes per pixel
+            
+            for (int i = 0; i < colors.Length; i++)
+            {
+                bytes[i * 3] = (byte)(colors[i].r * 255f);     // R
+                bytes[i * 3 + 1] = (byte)(colors[i].g * 255f); // G  
+                bytes[i * 3 + 2] = (byte)(colors[i].b * 255f); // B
+            }
+            
+            return bytes;
+        }
+        
+        /// <summary>
+        /// Resize RGB24 byte array image data using bilinear interpolation
+        /// </summary>
+        private byte[] ResizeImageBytes(byte[] sourceData, int sourceWidth, int sourceHeight, int targetWidth, int targetHeight)
+        {
+            var targetData = new byte[targetWidth * targetHeight * 3];
+            
+            float xRatio = (float)sourceWidth / targetWidth;
+            float yRatio = (float)sourceHeight / targetHeight;
+            
+            for (int y = 0; y < targetHeight; y++)
+            {
+                for (int x = 0; x < targetWidth; x++)
+                {
+                    float srcX = x * xRatio;
+                    float srcY = y * yRatio;
+                    
+                    int x1 = Mathf.FloorToInt(srcX);
+                    int y1 = Mathf.FloorToInt(srcY);
+                    int x2 = Mathf.Min(x1 + 1, sourceWidth - 1);
+                    int y2 = Mathf.Min(y1 + 1, sourceHeight - 1);
+                    
+                    float fx = srcX - x1;
+                    float fy = srcY - y1;
+                    
+                    for (int c = 0; c < 3; c++) // RGB channels
+                    {
+                        int src1 = (y1 * sourceWidth + x1) * 3 + c;
+                        int src2 = (y1 * sourceWidth + x2) * 3 + c;
+                        int src3 = (y2 * sourceWidth + x1) * 3 + c;
+                        int src4 = (y2 * sourceWidth + x2) * 3 + c;
+                        
+                        float val1 = sourceData[src1] * (1 - fx) + sourceData[src2] * fx;
+                        float val2 = sourceData[src3] * (1 - fx) + sourceData[src4] * fx;
+                        float finalVal = val1 * (1 - fy) + val2 * fy;
+                        
+                        int targetIdx = (y * targetWidth + x) * 3 + c;
+                        targetData[targetIdx] = (byte)Mathf.Clamp(finalVal, 0, 255);
+                    }
+                }
+            }
+            
+            return targetData;
+        }
+        
+        /// <summary>
+        /// Crop RGB24 byte array from top-left corner (Python-style cropping)
+        /// </summary>
+        private byte[] CropImageBytes(byte[] sourceData, int sourceWidth, int sourceHeight, int cropWidth, int cropHeight)
+        {
+            var croppedData = new byte[cropWidth * cropHeight * 3];
+            
+            for (int y = 0; y < cropHeight; y++)
+            {
+                for (int x = 0; x < cropWidth; x++)
+                {
+                    int srcIdx = (y * sourceWidth + x) * 3;
+                    int dstIdx = (y * cropWidth + x) * 3;
+                    
+                    croppedData[dstIdx] = sourceData[srcIdx];         // R
+                    croppedData[dstIdx + 1] = sourceData[srcIdx + 1]; // G
+                    croppedData[dstIdx + 2] = sourceData[srcIdx + 2]; // B
+                }
+            }
+            
+            return croppedData;
+        }
+        
+        /// <summary>
+        /// Temporary utility: Convert RGB24 byte array back to Texture2D
+        /// TODO: Remove once all methods are converted to work with byte arrays
+        /// </summary>
+        private Texture2D BytesToTexture2D(byte[] imageData, int width, int height)
+        {
+            var texture = new Texture2D(width, height, TextureFormat.RGB24, false);
+            var colors = new Color[width * height];
+            
+            for (int i = 0; i < colors.Length; i++)
+            {
+                colors[i] = new Color(
+                    imageData[i * 3] / 255f,     // R
+                    imageData[i * 3 + 1] / 255f, // G
+                    imageData[i * 3 + 2] / 255f  // B
+                );
+            }
+            
+            texture.SetPixels(colors);
+            texture.Apply();
+            return texture;
         }
         
         /// <summary>
