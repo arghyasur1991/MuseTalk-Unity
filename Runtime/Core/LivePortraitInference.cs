@@ -220,13 +220,14 @@ namespace MuseTalk.Core
                 // Python: crop_info = crop_src_image(self.models, src_img)
                 var cropInfo = CropSrcImage(srcImgData, srcImgWidth, srcImgHeight);
 
+                // _debugImage = BytesToTexture2D(cropInfo.ImageCrop, 512, 512);
 
-                // generatedFrames.Add(_debugImage);
-                // return new LivePortraitResult
-                // {
-                //     Success = true,
-                //     GeneratedFrames = generatedFrames
-                // };
+                generatedFrames.Add(_debugImage);
+                return new LivePortraitResult
+                {
+                    Success = true,
+                    GeneratedFrames = generatedFrames
+                };
                 var cropInfoElapsed = start.ElapsedMilliseconds;
                 Debug.Log($"[LivePortraitInference] CropSrcImage took {cropInfoElapsed - srcImgElapsed}ms");
 
@@ -576,7 +577,7 @@ namespace MuseTalk.Core
                 }
             }
 
-            // _debugImage = BytesToTexture2D(detImg, inputSize, inputSize);
+            _debugImage = BytesToTexture2D(detImg, inputSize, inputSize);
             
             // Python: det_img = (det_img - 127.5) / 128
             // Python: det_img = det_img.transpose(2, 0, 1)  # HWC -> CHW
