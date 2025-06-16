@@ -579,8 +579,6 @@ namespace MuseTalk.Core
                     });
                 }
             }
-            var elapsed = start.ElapsedMilliseconds;
-            Debug.Log($"[LivePortraitInference] Resize image took {elapsed}ms");
             
             
             // Python: det_img = (det_img - 127.5) / 128
@@ -588,6 +586,8 @@ namespace MuseTalk.Core
             // Python: det_img = np.expand_dims(det_img, axis=0)
             // Python: det_img = det_img.astype(np.float32)
             var inputTensor = PreprocessDetectionImage(detImg, inputSize);
+            var elapsed = start.ElapsedMilliseconds;
+            Debug.Log($"[LivePortraitInference] Resize image took {elapsed}ms");
             
             // Python: output = det_face.run(None, {"input.1": det_img})
             // Use the actual input name from the model metadata
@@ -1947,27 +1947,45 @@ namespace MuseTalk.Core
         }
         
         // Face detection and landmark processing methods - SIMPLIFIED FOR NOW
-        private DenseTensor<float> PreprocessDetectionImage(byte[] img, int inputSize)
+        /// <summary>
+        /// OPTIMIZED: Uses unsafe pointers and parallelization for maximum performance
+        /// </summary>
+        private unsafe DenseTensor<float> PreprocessDetectionImage(byte[] img, int inputSize)
         {
-            var pixels = img;
             var tensorData = new float[1 * 3 * inputSize * inputSize];
+            int imageSize = inputSize * inputSize;
             
-            int idx = 0;
-            // Python: det_img = (det_img - 127.5) / 128
-            // Python: det_img = det_img.transpose(2, 0, 1)  # HWC -> CHW
-            // Python: det_img = np.expand_dims(det_img, axis=0)
-            // Python: det_img = det_img.astype(np.float32)
-            for (int c = 0; c < 3; c++)
+            // OPTIMIZED: Use unsafe pointers for direct memory access
+            fixed (byte* imgPtrFixed = img)
+            fixed (float* tensorPtrFixed = tensorData)
             {
-                for (int h = 0; h < inputSize; h++)
+                // Capture pointers in local variables to avoid lambda closure issues
+                byte* imgPtrLocal = imgPtrFixed;
+                float* tensorPtrLocal = tensorPtrFixed;
+                
+                // Python: det_img = (det_img - 127.5) / 128
+                // Python: det_img = det_img.transpose(2, 0, 1)  # HWC -> CHW
+                // Python: det_img = np.expand_dims(det_img, axis=0)
+                // Python: det_img = det_img.astype(np.float32)
+                
+                // MAXIMUM PERFORMANCE: Parallel processing across all pixels for maximum parallelism
+                // Process each pixel independently across all available CPU cores
+                System.Threading.Tasks.Parallel.For(0, imageSize, pixelIdx =>
                 {
-                    for (int w = 0; w < inputSize; w++)
+                    // Process all 3 RGB channels for this pixel
+                    for (int c = 0; c < 3; c++)
                     {
-                        int pixelIdx = h * inputSize + w;
-                        float pixelValue = pixels[pixelIdx * 3 + c];
-                        tensorData[idx++] = (pixelValue - 127.5f) / 128f;
+                        // Direct pointer access for input pixel (HWC format)
+                        byte pixelValue = imgPtrLocal[pixelIdx * 3 + c];
+                        
+                        // Calculate output position in CHW format: [channel][pixel]
+                        float* outputPtr = tensorPtrLocal + c * imageSize + pixelIdx;
+                        
+                        // OPTIMIZED: Direct normalization with fast math
+                        // Python: (pixelValue - 127.5) / 128 = pixelValue * (1/128) - 127.5/128
+                        *outputPtr = pixelValue * 0.0078125f - 0.99609375f; // Pre-calculated constants
                     }
-                }
+                });
             }
             
             return new DenseTensor<float>(tensorData, new[] { 1, 3, inputSize, inputSize });
