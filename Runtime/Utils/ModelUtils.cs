@@ -81,11 +81,11 @@ namespace MuseTalk.Utils
                 throw new FileNotFoundException($"{modelName} model not found: {modelPath}");
             var sessionOptions = CreateSessionOptions(config);
             if (
-                modelName == "det_10g" || 
-                modelName == "1k3d68"
+                modelName == "1k3d68" ||
+                modelName == "2d106det"
             )
             {
-                // sessionOptions.AppendExecutionProvider_CoreML();
+                sessionOptions.AppendExecutionProvider_CoreML();
             }
             var model = new InferenceSession(modelPath, sessionOptions);
             // Debug.Log($"[MuseTalkInference] Loaded {modelName} from {modelPath}");
