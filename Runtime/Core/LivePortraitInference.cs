@@ -66,8 +66,8 @@ namespace MuseTalk.Core
     /// </summary>
     public class CropInfo
     {
-        public Texture2D ImageCrop { get; set; }
-        public Texture2D ImageCrop256x256 { get; set; }
+        public byte[] ImageCrop { get; set; }
+        public byte[] ImageCrop256x256 { get; set; }
         public Vector2[] LandmarksCrop { get; set; }
         public Vector2[] LandmarksCrop256x256 { get; set; }
         public Matrix4x4 Transform { get; set; }
@@ -213,19 +213,26 @@ namespace MuseTalk.Core
                 // Generate frames
                 var generatedFrames = new List<Texture2D>();
                 var (srcImgData, srcImgWidth, srcImgHeight) = SrcPreprocess(input.SourceImage);
+                // _debugImage = BytesToTexture2D(srcImgData, srcImgWidth, srcImgHeight);
                 var srcImgElapsed = start.ElapsedMilliseconds;
                 Debug.Log($"[LivePortraitInference] SrcPreprocess took {srcImgElapsed}ms");
                 
-                // CRITICAL FIX: Keep reference to preprocessed source image for pasteback
-                // In Python, src_img is used for pasteback - make sure it's valid
-                // TODO: Convert CropSrcImage to work with byte arrays
-                var srcImgTexture = BytesToTexture2D(srcImgData, srcImgWidth, srcImgHeight);
-                
                 // Python: crop_info = crop_src_image(self.models, src_img)
-                var cropInfo = CropSrcImage(srcImgTexture);
+                var cropInfo = CropSrcImage(srcImgData, srcImgWidth, srcImgHeight);
+
+
+                // generatedFrames.Add(_debugImage);
+                // return new LivePortraitResult
+                // {
+                //     Success = true,
+                //     GeneratedFrames = generatedFrames
+                // };
+                var cropInfoElapsed = start.ElapsedMilliseconds;
+                Debug.Log($"[LivePortraitInference] CropSrcImage took {cropInfoElapsed - srcImgElapsed}ms");
+
                 // Python: img_crop_256x256 = crop_info["img_crop_256x256"]
                 // Python: I_s = preprocess(img_crop_256x256)
-                var Is = Preprocess(cropInfo.ImageCrop256x256);
+                var Is = Preprocess(cropInfo.ImageCrop256x256, 256, 256);
                 
                 // Python: x_s_info = get_kp_info(self.models, I_s)
                 var xSInfo = GetKpInfo(Is);
@@ -243,31 +250,34 @@ namespace MuseTalk.Core
                 // Python: mask_ori = prepare_paste_back(self.mask_crop, crop_info["M_c2o"], dsize=(src_img.shape[1], src_img.shape[0]))
                 var maskOri = PreparePasteBack(cropInfo.Transform, srcImgWidth, srcImgHeight);
 
-                var maxFrames = 17;
+                var maxFrames = 0;
 
                 // For debugging, only generate 1 frame - matches Python: if frame_id > 0: break
-                for (int frameId = maxFrames; frameId < Mathf.Min(maxFrames + 2, input.DrivingFrames.Length); frameId++)
+                for (int frameId = maxFrames; frameId < Mathf.Min(maxFrames + 20, input.DrivingFrames.Length); frameId++)
                 {
-                    
                     // Python: img_rgb = frame[:, :, ::-1]  # BGR -> RGB (Unity input is already RGB)
                     var imgRgb = input.DrivingFrames[frameId];
+                    var (imgRgbData, w, h) = Texture2DToBytes(imgRgb);
                     
                     // Python: I_p, self.pred_info = predict(frame_id, self.models, x_s_info, R_s, f_s, x_s, img_rgb, self.pred_info)
-                    var (Ip, updatedPredInfo) = Predict(frameId, xSInfo, Rs, fs, xs, imgRgb, _predInfo);
+                    var (Ip, updatedPredInfo) = Predict(frameId, xSInfo, Rs, fs, xs, imgRgbData, imgRgb.width, imgRgb.height, _predInfo);
                     _predInfo = updatedPredInfo;
+                    // _debugImage = Ip;
                     
                     // Python: if self.flg_composite: driving_img = concat_frame(img_rgb, img_crop_256x256, I_p)
                     // Python: else: driving_img = paste_back(I_p, crop_info["M_c2o"], src_img, mask_ori)
-                    Texture2D drivingImg;
+                    Texture2D drivingImg = null;
                     // generatedFrames.Add(Ip);
                     
                     if (_flgComposite)
                     {
-                        drivingImg = ConcatFrame(imgRgb, cropInfo.ImageCrop256x256, Ip);
+                        // TODO: Implement ConcatFrame call
+                        // drivingImg = ConcatFrame(imgRgb, cropInfo.ImageCrop256x256, Ip);
                     }
                     else
                     {
-                        drivingImg = PasteBack(Ip, cropInfo.Transform, srcImgTexture, maskOri);
+                        var srcImg = BytesToTexture2D(srcImgData, srcImgWidth, srcImgHeight);
+                        drivingImg = PasteBack(Ip, cropInfo.Transform, srcImg, maskOri);
                     }
                     
                     if (_debugImage != null)
@@ -302,6 +312,28 @@ namespace MuseTalk.Core
                 };
             }
         }
+
+        private (byte[], int, int) Texture2DToBytes(Texture2D img)
+        {
+            int h = img.height;
+            int w = img.width;
+            
+            // Get initial image data directly from texture (assumes RGB24 format)
+            var pixelData = img.GetPixelData<byte>(0);
+            var imageData = new byte[pixelData.Length];
+            // Copy flipped vertically
+            for (int y = 0; y < h; y++)
+            {
+                for (int x = 0; x < w; x++)
+                {
+                    imageData[y * w * 3 + x * 3 + 0] = pixelData[(h - 1 - y) * w * 3 + x * 3 + 0];
+                    imageData[y * w * 3 + x * 3 + 1] = pixelData[(h - 1 - y) * w * 3 + x * 3 + 1];
+                    imageData[y * w * 3 + x * 3 + 2] = pixelData[(h - 1 - y) * w * 3 + x * 3 + 2];
+                }
+            }
+
+            return (imageData, w, h);
+        }
         
         /// <summary>
         /// Python: src_preprocess(img) - EXACT MATCH
@@ -310,13 +342,7 @@ namespace MuseTalk.Core
         /// </summary>
         private unsafe (byte[], int, int) SrcPreprocess(Texture2D img)
         {
-            int h = img.height;
-            int w = img.width;
-            
-            // Get initial image data directly from texture (assumes RGB24 format)
-            var pixelData = img.GetPixelData<byte>(0);
-            var imageData = new byte[pixelData.Length];
-            pixelData.CopyTo(imageData);
+            var (imageData, w, h) = Texture2DToBytes(img);
             int currentWidth = w;
             int currentHeight = h;
             
@@ -406,12 +432,16 @@ namespace MuseTalk.Core
             var texture = new Texture2D(width, height, TextureFormat.RGB24, false);
             var colors = new Color[width * height];
             
+            // Copy flipped vertically
             for (int i = 0; i < colors.Length; i++)
             {
+                int y = height - 1 - i / width;
+                int x = i % width;
+                int idx = y * width + x;
                 colors[i] = new Color(
-                    imageData[i * 3] / 255f,     // R
-                    imageData[i * 3 + 1] / 255f, // G
-                    imageData[i * 3 + 2] / 255f  // B
+                    imageData[idx * 3 + 0] / 255f,     // R
+                    imageData[idx * 3 + 1] / 255f, // G
+                    imageData[idx * 3 + 2] / 255f  // B
                 );
             }
             
@@ -423,12 +453,12 @@ namespace MuseTalk.Core
         /// <summary>
         /// Python: crop_src_image(models, img) - EXACT MATCH
         /// </summary>
-        private CropInfo CropSrcImage(Texture2D img)
+        private CropInfo CropSrcImage(byte[] img, int width, int height)
         {
             
             // Python: face_analysis = models["face_analysis"]
             // Python: src_face = face_analysis(img)
-            var srcFaces = FaceAnalysis(img);
+            var srcFaces = FaceAnalysis(img, width, height);
             
             // Python: if len(src_face) == 0: print("No face detected in the source image."); return None
             if (srcFaces.Count == 0)
@@ -449,22 +479,28 @@ namespace MuseTalk.Core
             float by1 = srcFace.BoundingBox.y;
             float bx2 = srcFace.BoundingBox.x + srcFace.BoundingBox.width;
             float by2 = srcFace.BoundingBox.y + srcFace.BoundingBox.height;
+
+            Debug.Log($"srcFace bbox: {bx1}, {by1}, {bx2}, {by2}");
             
             // Python: lmk = src_face["landmark_2d_106"]  # this is the 106 landmarks from insightface
             var lmk = srcFace.Landmarks106;
             
             // Python: crop_info = crop_image(img, lmk, dsize=512, scale=2.3, vy_ratio=-0.125)
-            var cropInfo = CropImage(img, lmk, 512, 2.3f, -0.125f);            
+            var cropSize = 512;
+            var cropInfo = CropImage(img, width, height, lmk, cropSize, 2.3f, -0.125f);
+            // _debugImage = BytesToTexture2D(img, width, height);
+            // _debugImage = BytesToTexture2D(cropInfo.ImageCrop, cropSize, cropSize);
             
             // Python: lmk = landmark_runner(models, img, lmk)
-            lmk = LandmarkRunner(img, lmk);
+            lmk = LandmarkRunner(img, width, height, lmk);
             
             // Python: crop_info["lmk_crop"] = lmk
             cropInfo.LandmarksCrop = lmk;
             
             // Python: crop_info["img_crop_256x256"] = cv2.resize(crop_info["img_crop"], (256, 256), interpolation=cv2.INTER_AREA)
-            cropInfo.ImageCrop256x256 = ResizeTexture(cropInfo.ImageCrop, 256, 256);
+            cropInfo.ImageCrop256x256 = TextureUtils.ResizeTextureToExactSize(cropInfo.ImageCrop, cropSize, cropSize, 256, 256, TextureUtils.SamplingMode.Bilinear);
             
+            // _debugImage = BytesToTexture2D(cropInfo.ImageCrop256x256, 256, 256);
             // Python: crop_info["lmk_crop_256x256"] = crop_info["lmk_crop"] * 256 / 512
             cropInfo.LandmarksCrop256x256 = ScaleLandmarks(cropInfo.LandmarksCrop, 256f / 512f);
             
@@ -475,19 +511,19 @@ namespace MuseTalk.Core
         /// Python: face_analysis(img) - EXACT MATCH
         /// Implements the complete face detection pipeline from Python
         /// </summary>
-        private List<FaceDetectionResult> FaceAnalysis(Texture2D img)
+        private List<FaceDetectionResult> FaceAnalysis(byte[] img, int width, int height)
         {
-            
             // Python: input_size = 512
             const int inputSize = 512;
+            // _debugImage = BytesToTexture2D(img, width, height);
             
             // CRITICAL FIX: Match Python's dimension interpretation
             // Python treats image as (height, width, channels) = (img.shape[0], img.shape[1], img.shape[2])
             // Unity texture2D.width/height corresponds to OpenCV width/height
             // So: Python img.shape[0] = height = Unity img.height
             //     Python img.shape[1] = width = Unity img.width
-            int pythonHeight = img.height;  // This matches Python's img.shape[0]
-            int pythonWidth = img.width;    // This matches Python's img.shape[1]
+            int pythonHeight = height;  // This matches Python's img.shape[0]
+            int pythonWidth = width;    // This matches Python's img.shape[1]
             
             
             // Python: im_ratio = float(img.shape[0]) / img.shape[1]
@@ -511,21 +547,20 @@ namespace MuseTalk.Core
             float detScale = (float)newHeight / pythonHeight;
             
             // Python: resized_img = cv2.resize(img, (new_width, new_height))
-            var resizedImg = ResizeTexture(img, newWidth, newHeight);
-            
+            var resizedImg = TextureUtils.ResizeTextureToExactSize(img, width, height, newWidth, newHeight, TextureUtils.SamplingMode.Bilinear);
+            // _debugImage = BytesToTexture2D(resizedImg, newWidth, newHeight);
             // Python: det_img = np.zeros((input_size, input_size, 3), dtype=np.uint8)
             // Python: det_img[:new_height, :new_width, :] = resized_img
-            var detImg = new Texture2D(inputSize, inputSize, TextureFormat.RGB24, false);
-            var detPixels = new Color[inputSize * inputSize];
-            var resizedPixels = resizedImg.GetPixels();
+            var detImg = new byte[inputSize * inputSize * 3];
+            var resizedPixels = resizedImg;
             
             // Fill with zeros (black)
-            for (int i = 0; i < detPixels.Length; i++)
+            for (int i = 0; i < detImg.Length; i++)
             {
-                detPixels[i] = Color.black;
+                detImg[i] = 0;
             }
             
-            // Copy resized image to top-left - NO coordinate flipping here since we handle it in tensor creation
+            // Copy resized image to top-left
             for (int y = 0; y < newHeight; y++)
             {
                 for (int x = 0; x < newWidth; x++)
@@ -534,13 +569,14 @@ namespace MuseTalk.Core
                     int dstIdx = y * inputSize + x; // Direct copy, no flipping
                     if (srcIdx < resizedPixels.Length)
                     {
-                        detPixels[dstIdx] = resizedPixels[srcIdx];
+                        detImg[dstIdx * 3 + 0] = resizedPixels[srcIdx * 3 + 0];
+                        detImg[dstIdx * 3 + 1] = resizedPixels[srcIdx * 3 + 1];
+                        detImg[dstIdx * 3 + 2] = resizedPixels[srcIdx * 3 + 2];
                     }
                 }
             }
-            
-            detImg.SetPixels(detPixels);
-            detImg.Apply();
+
+            // _debugImage = BytesToTexture2D(detImg, inputSize, inputSize);
             
             // Python: det_img = (det_img - 127.5) / 128
             // Python: det_img = det_img.transpose(2, 0, 1)  # HWC -> CHW
@@ -569,7 +605,7 @@ namespace MuseTalk.Core
             var finalFaces = new List<FaceDetectionResult>();
             foreach (var face in faces)
             {
-                var landmarks = GetLandmark(img, face);
+                var landmarks = GetLandmark(img, width, height, face);
                 face.Landmarks106 = landmarks;
                 finalFaces.Add(face);
             }
@@ -592,7 +628,7 @@ namespace MuseTalk.Core
         /// <summary>
         /// Python: get_landmark(img, face) - EXACT MATCH
         /// </summary>
-        private Vector2[] GetLandmark(Texture2D img, FaceDetectionResult face)
+        private Vector2[] GetLandmark(byte[] img, int width, int height, FaceDetectionResult face)
         {
             // Python: input_size = 192
             const int inputSize = 192;
@@ -621,14 +657,14 @@ namespace MuseTalk.Core
             float scale = inputSize / (Mathf.Max(w, h) * 1.5f);
             
             // Python: aimg, M = face_align(img, center, input_size, _scale, rotate)
-            var (alignedImg, transformMatrix) = FaceAlign(img, center, inputSize, scale, rotate);
+            var (alignedImg, transformMatrix) = FaceAlign(img, width, height, center, inputSize, scale, rotate);
             
             // Format transform matrix to match Python exactly
             
             // Python: aimg = aimg.transpose(2, 0, 1)  # HWC -> CHW
             // Python: aimg = np.expand_dims(aimg, axis=0)
             // Python: aimg = aimg.astype(np.float32)
-            var inputTensor = PreprocessLandmarkImage(alignedImg);
+            var inputTensor = PreprocessLandmarkImage(alignedImg, inputSize);
             var tensorData = inputTensor.ToArray();
             // Print the first 10 values of the tensor
             
@@ -670,17 +706,18 @@ namespace MuseTalk.Core
         /// <summary>
         /// Python: landmark_runner(models, img, lmk) - EXACT MATCH
         /// </summary>
-        private Vector2[] LandmarkRunner(Texture2D img, Vector2[] lmk)
+        private Vector2[] LandmarkRunner(byte[] img, int width, int height, Vector2[] lmk)
         {
             // Python: crop_dct = crop_image(img, lmk, dsize=224, scale=1.5, vy_ratio=-0.1)
-            var cropDct = CropImage(img, lmk, 224, 1.5f, -0.1f);
+            var cropSize = 224;
+            var cropDct = CropImage(img, width, height, lmk, cropSize, 1.5f, -0.1f);
             var imgCrop = cropDct.ImageCrop;
             
             // Python: img_crop = img_crop / 255
             // Python: img_crop = img_crop.transpose(2, 0, 1)  # HWC -> CHW
             // Python: img_crop = np.expand_dims(img_crop, axis=0)
             // Python: img_crop = img_crop.astype(np.float32)
-            var inputTensor = PreprocessLandmarkRunnerImage(imgCrop);
+            var inputTensor = PreprocessLandmarkRunnerImage(imgCrop, cropSize, cropSize);
             
             // Python: net = models["landmark_runner"]
             // Python: output = net.run(None, {"input": img_crop})
@@ -714,27 +751,14 @@ namespace MuseTalk.Core
         /// <summary>
         /// Python: preprocess(img) - EXACT MATCH
         /// </summary>
-        private float[] Preprocess(Texture2D img)
+        private float[] Preprocess(byte[] img, int width, int height)
         {
             // Python: img = img / 255.0
             // Python: img = np.clip(img, 0, 1)  # clip to 0~1
             // Python: img = img.transpose(2, 0, 1)  # HxWx3x1 -> 1x3xHxW
             // Python: img = np.expand_dims(img, axis=0)
             // Python: img = img.astype(np.float32)
-            
-            
-            var pixels = img.GetPixels();
-            int height = img.height;
-            int width = img.width;
-            
-            // Calculate input range
-            float minVal = float.MaxValue, maxVal = float.MinValue;
-            foreach (var pixel in pixels)
-            {
-                minVal = Mathf.Min(minVal, Mathf.Min(pixel.r, Mathf.Min(pixel.g, pixel.b)));
-                maxVal = Mathf.Max(maxVal, Mathf.Max(pixel.r, Mathf.Max(pixel.g, pixel.b)));
-            }
-            
+            var pixels = img;            
             var data = new float[1 * 3 * height * width];
             
             for (int c = 0; c < 3; c++)
@@ -743,18 +767,14 @@ namespace MuseTalk.Core
                 {
                     for (int w = 0; w < width; w++)
                     {
-                        // CRITICAL: Unity GetPixels() is bottom-left origin, flip Y for ONNX (top-left)
-                        int unityY = height - 1 - h; // Flip Y coordinate for ONNX coordinate system
-                        int unityIdx = unityY * width + w;
+                        int unityIdx = h * width + w;
                         int outputIdx = c * height * width + h * width + w;
                         
-                        float value = c == 0 ? pixels[unityIdx].r : c == 1 ? pixels[unityIdx].g : pixels[unityIdx].b;
-                        data[outputIdx] = Mathf.Clamp01(value); // Normalize and clip to [0,1]
+                        float value = c == 0 ? pixels[unityIdx * 3 + 0] : c == 1 ? pixels[unityIdx * 3 + 1] : pixels[unityIdx * 3 + 2];
+                        data[outputIdx] = Mathf.Clamp01(value / 255f); // Normalize and clip to [0,1]
                     }
                 }
             }
-            
-            float dataMin = data.Min(), dataMax = data.Max();
             
             return data;
         }
@@ -933,9 +953,8 @@ namespace MuseTalk.Core
         /// Python: predict(frame_id, models, x_s_info, R_s, f_s, x_s, img, pred_info) - EXACT MATCH
         /// </summary>
         private (Texture2D, LivePortraitPredInfo) Predict(int frameId, MotionInfo xSInfo, float[,] Rs, float[] fs, float[] xs, 
-            Texture2D img, LivePortraitPredInfo predInfo)
+            byte[] img, int width, int height, LivePortraitPredInfo predInfo)
         {
-            
             // Python: frame_0 = pred_info['lmk'] is None
             bool frame0 = predInfo.Landmarks == null;
             
@@ -944,7 +963,7 @@ namespace MuseTalk.Core
             {
                 // Python: face_analysis = models["face_analysis"]
                 // Python: src_face = face_analysis(img)
-                var srcFaces = FaceAnalysis(img);
+                var srcFaces = FaceAnalysis(img, width, height);
                 if (srcFaces.Count == 0)
                 {
                     throw new InvalidOperationException("No face detected in the frame");
@@ -961,12 +980,12 @@ namespace MuseTalk.Core
                 lmk = srcFace.Landmarks106;
                 
                 // Python: lmk = landmark_runner(models, img, lmk)
-                lmk = LandmarkRunner(img, lmk);
+                lmk = LandmarkRunner(img, width, height, lmk);
             }
             else
             {
                 // Python: lmk = landmark_runner(models, img, pred_info['lmk'])
-                lmk = LandmarkRunner(img, predInfo.Landmarks);
+                lmk = LandmarkRunner(img, width, height, predInfo.Landmarks);
             }
             
             // Python: pred_info['lmk'] = lmk
@@ -996,10 +1015,10 @@ namespace MuseTalk.Core
             
             // Python: prepare_driving_videos
             // Python: img = cv2.resize(img, (256, 256))
-            var img256 = ResizeTexture(img, 256, 256);
-            
+            var img256 = TextureUtils.ResizeTextureToExactSize(img, width, height, 256, 256, TextureUtils.SamplingMode.Bilinear);
+            // _debugImage = BytesToTexture2D(img256, 256, 256);
             // Python: I_d = preprocess(img)
-            var Id = Preprocess(img256);
+            var Id = Preprocess(img256, 256, 256);
             
             // Python: collect s_d, R_d, δ_d and t_d for inference
             // Python: x_d_info = get_kp_info(models, I_d)
@@ -1081,14 +1100,12 @@ namespace MuseTalk.Core
             // Python: out = warping_spade(models, f_s, x_s, x_d_new)
             var output = WarpingSpade(fs, xs, xDNew);
             
-            float outputMin = output.Min(), outputMax = output.Max();
-            
             // Python: out = out.transpose(0, 2, 3, 1)  # 1x3xHxW -> 1xHxWx3
             // Python: out = np.clip(out, 0, 1)  # clip to 0~1
             // Python: out = (out * 255).astype(np.uint8)  # 0~1 -> 0~255
             // Python: I_p = out[0]
             var resultTexture = ConvertOutputToTexture(output);
-            
+            // _debugImage = resultTexture;
             
             // UnityEngine.Object.DestroyImmediate(img256);
             
@@ -1235,16 +1252,12 @@ namespace MuseTalk.Core
             return result;
         }
         
-        private CropInfo CropImage(Texture2D img, Vector2[] lmk, int dsize, float scale, float vyRatio)
+        private CropInfo CropImage(byte[] img, int width, int height, Vector2[] lmk, int dsize, float scale, float vyRatio)
         {
-            for (int i = 0; i < lmk.Length; i++)
-            {
-                // proved correct
-            }
             // Python: crop_image(img, pts: np.ndarray, dsize=224, scale=1.5, vy_ratio=-0.1) - EXACT MATCH
             var (MInv, _) = EstimateSimilarTransformFromPts(lmk, dsize, scale, 0f, vyRatio, true);
             
-            var imgCrop = TransformImgExact(img, MInv, dsize);
+            var imgCrop = TransformImgExact(img, width, height, MInv, dsize);
             var ptCrop = TransformPts(lmk, MInv);
             
             // Python: M_o2c = np.vstack([M_INV, np.array([0, 0, 1], dtype=np.float32)])
@@ -1932,9 +1945,9 @@ namespace MuseTalk.Core
         }
         
         // Face detection and landmark processing methods - SIMPLIFIED FOR NOW
-        private DenseTensor<float> PreprocessDetectionImage(Texture2D img, int inputSize)
+        private DenseTensor<float> PreprocessDetectionImage(byte[] img, int inputSize)
         {
-            var pixels = img.GetPixels();
+            var pixels = img;
             var tensorData = new float[1 * 3 * inputSize * inputSize];
             
             int idx = 0;
@@ -1948,13 +1961,11 @@ namespace MuseTalk.Core
                 {
                     for (int w = 0; w < inputSize; w++)
                     {
-                        // CRITICAL: Unity GetPixels() is bottom-left origin, flip Y for ONNX (top-left)
-                        int unityY = inputSize - 1 - h; // Flip Y coordinate for ONNX coordinate system
-                        int pixelIdx = unityY * inputSize + w;
-                        float pixelValue = c == 0 ? pixels[pixelIdx].r : 
-                                          c == 1 ? pixels[pixelIdx].g : 
-                                                   pixels[pixelIdx].b;
-                        tensorData[idx++] = (pixelValue * 255f - 127.5f) / 128f;
+                        int pixelIdx = h * inputSize + w;
+                        float pixelValue = c == 0 ? pixels[pixelIdx * 3 + 0] : 
+                                          c == 1 ? pixels[pixelIdx * 3 + 1] : 
+                                                   pixels[pixelIdx * 3 + 2];
+                        tensorData[idx++] = (pixelValue - 127.5f) / 128f;
                     }
                 }
             }
@@ -2219,7 +2230,7 @@ namespace MuseTalk.Core
         /// <summary>
         /// Python: face_align(data, center, output_size, scale, rotation) - EXACT MATCH
         /// </summary>
-        private (Texture2D, Matrix4x4) FaceAlign(Texture2D img, Vector2 center, int inputSize, float scale, float rotate)
+        private (byte[], Matrix4x4) FaceAlign(byte[] img, int width, int height, Vector2 center, int inputSize, float scale, float rotate)
         {
             // Python: scale_ratio = scale
             float scaleRatio = scale;
@@ -2250,7 +2261,7 @@ namespace MuseTalk.Core
             };
             
             // Python: cropped = cv2.warpAffine(data, M, (output_size, output_size), borderValue=0.0)
-            var cropped = TransformImgExact(img, M, inputSize);
+            var cropped = TransformImgExact(img, width, height, M, inputSize);
 
             // Convert to Matrix4x4 for Unity compatibility
             var transform = new Matrix4x4
@@ -2276,9 +2287,9 @@ namespace MuseTalk.Core
             return (cropped, transform);
         }
         
-        private DenseTensor<float> PreprocessLandmarkImage(Texture2D img, int inputSize = 192)
+        private DenseTensor<float> PreprocessLandmarkImage(byte[] img, int inputSize)
         {
-            var pixels = img.GetPixels32();
+            var pixels = img;
             var tensorData = new float[1 * 3 * inputSize * inputSize];
             
             int idx = 0;
@@ -2293,9 +2304,9 @@ namespace MuseTalk.Core
                         // CRITICAL: Unity GetPixels() is bottom-left origin, flip Y for ONNX (top-left)
                         int unityY = inputSize - 1 - h; // Flip Y coordinate for ONNX coordinate system
                         int pixelIdx = unityY * inputSize + w;
-                        float pixelValue = c == 0 ? pixels[pixelIdx].r : 
-                                          c == 1 ? pixels[pixelIdx].g : 
-                                                   pixels[pixelIdx].b;
+                        float pixelValue = c == 0 ? pixels[pixelIdx * 3 + 0] : 
+                                          c == 1 ? pixels[pixelIdx * 3 + 1] : 
+                                                   pixels[pixelIdx * 3 + 2];
                         // CRITICAL FIX: Python does NOT normalize to [0,1] for landmark detection!
                         // Keep pixel values in [0,255] range to match Python exactly
                         tensorData[idx++] = pixelValue; // Convert from [0,1] to [0,255]
@@ -2371,31 +2382,31 @@ namespace MuseTalk.Core
             return result;
         }
         
-        private DenseTensor<float> PreprocessLandmarkRunnerImage(Texture2D img)
+        private DenseTensor<float> PreprocessLandmarkRunnerImage(byte[] img, int width, int height)
         {
-            var pixels = img.GetPixels();
-            var tensorData = new float[1 * 3 * 224 * 224];
+            var pixels = img;
+            var tensorData = new float[1 * 3 * height * width];
             
             int idx = 0;
             // Python: img_crop = img_crop / 255
             for (int c = 0; c < 3; c++)
             {
-                for (int h = 0; h < 224; h++)
+                for (int h = 0; h < height; h++)
                 {
-                    for (int w = 0; w < 224; w++)
+                    for (int w = 0; w < width; w++)
                     {
                         // CRITICAL: Unity GetPixels() is bottom-left origin, flip Y for ONNX (top-left)
-                        int unityY = 224 - 1 - h; // Flip Y coordinate for ONNX coordinate system
-                        int pixelIdx = unityY * 224 + w;
-                        float pixelValue = c == 0 ? pixels[pixelIdx].r : 
-                                          c == 1 ? pixels[pixelIdx].g : 
-                                                   pixels[pixelIdx].b;
+                        int unityY = height - 1 - h; // Flip Y coordinate for ONNX coordinate system
+                        int pixelIdx = unityY * width + w;
+                        float pixelValue = c == 0 ? pixels[pixelIdx * 3 + 0] : 
+                                          c == 1 ? pixels[pixelIdx * 3 + 1] : 
+                                                   pixels[pixelIdx * 3 + 2];
                         tensorData[idx++] = pixelValue; // Already normalized [0,1]
                     }
                 }
             }
             
-            return new DenseTensor<float>(tensorData, new[] { 1, 3, 224, 224 });
+            return new DenseTensor<float>(tensorData, new[] { 1, 3, height, width });
         }
         
         private Vector2[] TransformLandmarksWithMatrix(Vector2[] landmarks, Matrix4x4 transform)
@@ -2456,18 +2467,15 @@ namespace MuseTalk.Core
         /// This is the corrected version that matches OpenCV's warpAffine exactly
         /// CRITICAL: Handles coordinate systems correctly
         /// </summary>
-        private Texture2D TransformImgExact(Texture2D img, float[,] M, int dsize)
+        private byte[] TransformImgExact(byte[] img, int width, int height, float[,] M, int dsize)
         {
             // Create result texture - MUST use RGB24 format for consistent processing
-            var result = new Texture2D(dsize, dsize, TextureFormat.RGB24, false);
+            var result = new byte[dsize * dsize * 3];
 
             // Get source image data as raw pixel array - Unity format is RGBA but we need RGB
-            var srcPixels = img.GetPixels32(); // Get as Color32 for better precision
-            int srcWidth = img.width;
-            int srcHeight = img.height;
-            
-            // Create result pixel array
-            var resultPixels = new Color32[dsize * dsize];
+            var srcPixels = img; // Get as Color32 for better precision
+            int srcWidth = width;
+            int srcHeight = height;
 
             // Invert the transformation matrix M to get the mapping from destination to source
             float[,] invM = InvertAffineTransform(M);
@@ -2495,24 +2503,19 @@ namespace MuseTalk.Core
                     // Bounds check for bilinear interpolation
                     if (x0 >= 0 && (x0 + 1) < srcWidth && y0 >= 0 && (y0 + 1) < srcHeight)
                     {
-                        // CRITICAL: OpenCV uses top-left origin, Unity GetPixels32() uses bottom-left origin
-                        // Convert OpenCV coordinates to Unity coordinates for pixel access
-                        int unity_y0 = srcHeight - 1 - y0;
-                        int unity_y1 = srcHeight - 1 - (y0 + 1);
-
                         // Get the four corner pixels for bilinear interpolation
-                        var c00 = srcPixels[unity_y0 * srcWidth + x0];
-                        var c10 = srcPixels[unity_y0 * srcWidth + x0 + 1];
-                        var c01 = srcPixels[unity_y1 * srcWidth + x0];
-                        var c11 = srcPixels[unity_y1 * srcWidth + x0 + 1];
+                        var c00 = y0 * srcWidth + x0;
+                        var c10 = y0 * srcWidth + x0 + 1;
+                        var c01 = (y0 + 1) * srcWidth + x0;
+                        var c11 = (y0 + 1) * srcWidth + x0 + 1;
 
                         // Bilinear interpolation
                         float inv_fx = 1.0f - fx;
                         float inv_fy = 1.0f - fy;
                         
-                        float r_float = inv_fx * inv_fy * c00.r + fx * inv_fy * c10.r + inv_fx * fy * c01.r + fx * fy * c11.r;
-                        float g_float = inv_fx * inv_fy * c00.g + fx * inv_fy * c10.g + inv_fx * fy * c01.g + fx * fy * c11.g;
-                        float b_float = inv_fx * inv_fy * c00.b + fx * inv_fy * c10.b + inv_fx * fy * c01.b + fx * fy * c11.b;
+                        float r_float = inv_fx * inv_fy * srcPixels[c00 * 3 + 0] + fx * inv_fy * srcPixels[c10 * 3 + 0] + inv_fx * fy * srcPixels[c01 * 3 + 0] + fx * fy * srcPixels[c11 * 3 + 0];
+                        float g_float = inv_fx * inv_fy * srcPixels[c00 * 3 + 1] + fx * inv_fy * srcPixels[c10 * 3 + 1] + inv_fx * fy * srcPixels[c01 * 3 + 1] + fx * fy * srcPixels[c11 * 3 + 1];
+                        float b_float = inv_fx * inv_fy * srcPixels[c00 * 3 + 2] + fx * inv_fy * srcPixels[c10 * 3 + 2] + inv_fx * fy * srcPixels[c01 * 3 + 2] + fx * fy * srcPixels[c11 * 3 + 2];
 
                         r = (byte)Mathf.Clamp(r_float, 0f, 255f);
                         g = (byte)Mathf.Clamp(g_float, 0f, 255f);
@@ -2520,15 +2523,13 @@ namespace MuseTalk.Core
                     }
 
                     // Store result pixel.
-                    // Unity's SetPixels32 expects a 1D array that's row-major, starting from bottom-left.
-                    // Our outer loop (dstY) iterates from top to bottom, so we write to the array accordingly.
-                    int result_idx = (dsize - 1 - dstY) * dsize + dstX;
-                    resultPixels[result_idx] = new Color32(r, g, b, 255);
+                    int result_idx = dstY * dsize + dstX;
+                    result[result_idx * 3 + 0] = r;
+                    result[result_idx * 3 + 1] = g;
+                    result[result_idx * 3 + 2] = b;
                 }
             }
 
-            result.SetPixels32(resultPixels);
-            result.Apply();
             return result;
         }
         
@@ -2735,11 +2736,6 @@ namespace MuseTalk.Core
             
             result.SetPixels(resultPixels);
             result.Apply();
-            
-            // Debug final result pixel values
-            var resultPixelsDebug = result.GetPixels();
-            float resultMin = resultPixelsDebug.Min(p => Mathf.Min(p.r, Mathf.Min(p.g, p.b)));
-            float resultMax = resultPixelsDebug.Max(p => Mathf.Max(p.r, Mathf.Max(p.g, p.b)));
             
             // UnityEngine.Object.DestroyImmediate(warped);
             
