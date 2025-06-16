@@ -799,9 +799,7 @@ namespace MuseTalk.Core
         /// Python: get_kp_info(models, x) - EXACT MATCH
         /// </summary>
         private MotionInfo GetKpInfo(DenseTensor<float> preprocessedData)
-        {
-            float dataMin = preprocessedData.Min(), dataMax = preprocessedData.Max();
-            
+        {            
             // Convert to tensor
             var inputTensor = preprocessedData;
             
