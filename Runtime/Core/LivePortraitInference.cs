@@ -577,7 +577,7 @@ namespace MuseTalk.Core
                 }
             }
 
-            _debugImage = BytesToTexture2D(detImg, inputSize, inputSize);
+            // _debugImage = BytesToTexture2D(detImg, inputSize, inputSize);
             
             // Python: det_img = (det_img - 127.5) / 128
             // Python: det_img = det_img.transpose(2, 0, 1)  # HWC -> CHW
@@ -659,6 +659,7 @@ namespace MuseTalk.Core
             
             // Python: aimg, M = face_align(img, center, input_size, _scale, rotate)
             var (alignedImg, transformMatrix) = FaceAlign(img, width, height, center, inputSize, scale, rotate);
+            _debugImage = BytesToTexture2D(alignedImg, inputSize, inputSize);
             
             // Format transform matrix to match Python exactly
             
@@ -1963,9 +1964,7 @@ namespace MuseTalk.Core
                     for (int w = 0; w < inputSize; w++)
                     {
                         int pixelIdx = h * inputSize + w;
-                        float pixelValue = c == 0 ? pixels[pixelIdx * 3 + 0] : 
-                                          c == 1 ? pixels[pixelIdx * 3 + 1] : 
-                                                   pixels[pixelIdx * 3 + 2];
+                        float pixelValue = pixels[pixelIdx * 3 + c];
                         tensorData[idx++] = (pixelValue - 127.5f) / 128f;
                     }
                 }
