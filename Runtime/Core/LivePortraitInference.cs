@@ -243,10 +243,10 @@ namespace MuseTalk.Core
                 // Python: mask_ori = prepare_paste_back(self.mask_crop, crop_info["M_c2o"], dsize=(src_img.shape[1], src_img.shape[0]))
                 var maskOri = PreparePasteBack(cropInfo.Transform, srcImgWidth, srcImgHeight);
 
-                var maxFrames = 1;
+                var maxFrames = 17;
 
                 // For debugging, only generate 1 frame - matches Python: if frame_id > 0: break
-                for (int frameId = 0; frameId < Mathf.Min(maxFrames, input.DrivingFrames.Length); frameId++)
+                for (int frameId = maxFrames; frameId < Mathf.Min(maxFrames + 2, input.DrivingFrames.Length); frameId++)
                 {
                     
                     // Python: img_rgb = frame[:, :, ::-1]  # BGR -> RGB (Unity input is already RGB)
