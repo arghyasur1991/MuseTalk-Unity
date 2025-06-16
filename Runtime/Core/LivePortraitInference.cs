@@ -759,43 +759,32 @@ namespace MuseTalk.Core
         /// <summary>
         /// Python: preprocess(img) - EXACT MATCH
         /// </summary>
-        private float[] Preprocess(byte[] img, int width, int height)
+        /// <summary>
+        /// OPTIMIZED: Preprocess using the common PreprocessImageOptimized method
+        /// Python: img = img / 255.0 and transpose to CHW format
+        /// </summary>
+        private DenseTensor<float> Preprocess(byte[] img, int width, int height)
         {
             // Python: img = img / 255.0
-            // Python: img = np.clip(img, 0, 1)  # clip to 0~1
+            // Python: img = np.clip(img, 0, 1)  # clip to 0~1 (automatic with byte/255)
             // Python: img = img.transpose(2, 0, 1)  # HxWx3x1 -> 1x3xHxW
             // Python: img = np.expand_dims(img, axis=0)
             // Python: img = img.astype(np.float32)
-            var pixels = img;            
-            var data = new float[1 * 3 * height * width];
             
-            for (int c = 0; c < 3; c++)
-            {
-                for (int h = 0; h < height; h++)
-                {
-                    for (int w = 0; w < width; w++)
-                    {
-                        int unityIdx = h * width + w;
-                        int outputIdx = c * height * width + h * width + w;
-                        
-                        float value = c == 0 ? pixels[unityIdx * 3 + 0] : c == 1 ? pixels[unityIdx * 3 + 1] : pixels[unityIdx * 3 + 2];
-                        data[outputIdx] = Mathf.Clamp01(value / 255f); // Normalize and clip to [0,1]
-                    }
-                }
-            }
-            
-            return data;
+            // Use the common optimized method: pixelValue / 255.0 = pixelValue * (1/255) + 0
+            var tensor = PreprocessImageOptimized(img, width, height, 1.0f / 255.0f, 0.0f);
+            return tensor;
         }
         
         /// <summary>
         /// Python: get_kp_info(models, x) - EXACT MATCH
         /// </summary>
-        private MotionInfo GetKpInfo(float[] preprocessedData)
+        private MotionInfo GetKpInfo(DenseTensor<float> preprocessedData)
         {
             float dataMin = preprocessedData.Min(), dataMax = preprocessedData.Max();
             
             // Convert to tensor
-            var inputTensor = new DenseTensor<float>(preprocessedData, new[] { 1, 3, 256, 256 });
+            var inputTensor = preprocessedData;
             
             // Python: net = models["motion_extractor"]
             // Python: output = net.run(None, {"img": x})
@@ -847,11 +836,9 @@ namespace MuseTalk.Core
         /// <summary>
         /// Python: extract_feature_3d(models, x) - EXACT MATCH
         /// </summary>
-        private float[] ExtractFeature3d(float[] preprocessedData)
-        {
-            float dataMin = preprocessedData.Min(), dataMax = preprocessedData.Max();
-            
-            var inputTensor = new DenseTensor<float>(preprocessedData, new[] { 1, 3, 256, 256 });
+        private Tensor<float> ExtractFeature3d(DenseTensor<float> preprocessedData)
+        {            
+            var inputTensor = preprocessedData;
             
             // Python: net = models["appearance_feature_extractor"]
             // Python: output = net.run(None, {"img": x})
@@ -867,12 +854,10 @@ namespace MuseTalk.Core
             var output = results.First().AsTensor<float>().ToArray();
             
             var outputTensor = results.First().AsTensor<float>();
-            var outputShape = outputTensor.Dimensions.ToArray();
-            float outputMin = output.Min(), outputMax = output.Max();
             
             // Python: f_s = output[0]
             // Python: f_s = f_s.astype(np.float32)
-            return output;
+            return outputTensor;
         }
         
         /// <summary>
@@ -960,7 +945,7 @@ namespace MuseTalk.Core
         /// <summary>
         /// Python: predict(frame_id, models, x_s_info, R_s, f_s, x_s, img, pred_info) - EXACT MATCH
         /// </summary>
-        private (Texture2D, LivePortraitPredInfo) Predict(int frameId, MotionInfo xSInfo, float[,] Rs, float[] fs, float[] xs, 
+        private (Texture2D, LivePortraitPredInfo) Predict(int frameId, MotionInfo xSInfo, float[,] Rs, Tensor<float> fs, float[] xs, 
             byte[] img, int width, int height, LivePortraitPredInfo predInfo)
         {
             // Python: frame_0 = pred_info['lmk'] is None
@@ -1181,7 +1166,7 @@ namespace MuseTalk.Core
         /// <summary>
         /// Python: warping_spade(models, feature_3d, kp_source, kp_driving) - EXACT MATCH
         /// </summary>
-        private float[] WarpingSpade(float[] feature3d, float[] kpSource, float[] kpDriving)
+        private float[] WarpingSpade(Tensor<float> feature3d, float[] kpSource, float[] kpDriving)
         {
             // CRITICAL FIX: Verify tensor shapes match Python exactly
             // Python: feature_3d shape should be (1, 32, 16, 64, 64) = 2,097,152 elements
@@ -1204,7 +1189,7 @@ namespace MuseTalk.Core
             }
             
             // Create tensors with proper shapes
-            var feature3DTensor = new DenseTensor<float>(feature3d, new[] { 1, 32, 16, 64, 64 });
+            var feature3DTensor = feature3d;
             var kpSourceTensor = new DenseTensor<float>(kpSource, new[] { 1, kpSource.Length / 3, 3 });
             var kpDrivingTensor = new DenseTensor<float>(kpDriving, new[] { 1, kpDriving.Length / 3, 3 });
             
