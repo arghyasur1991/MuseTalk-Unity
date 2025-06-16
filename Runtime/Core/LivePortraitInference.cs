@@ -114,27 +114,27 @@ namespace MuseTalk.Core
         {
             _config = config ?? throw new ArgumentNullException(nameof(config));
             
-                    try
-        {
-            InitializeModels();
-            
-            // Initialize prediction state - matches Python self.pred_info = {'lmk':None, 'x_d_0_info':None}
-            _predInfo = new LivePortraitPredInfo
+            try
             {
-                Landmarks = null,
-                InitialMotionInfo = null
-            };
-            
-            // Load mask template - matches Python self.mask_crop = cv2.imread('mask_template.png')
-            _maskTemplate = ModelUtils.LoadMaskTemplate(_config);
-            
-            _initialized = true;
-        }
-        catch (Exception e)
-        {
-            Debug.LogError($"[LivePortraitInference] Failed to initialize: {e.Message}");
-            _initialized = false;
-        }
+                InitializeModels();
+                
+                // Initialize prediction state - matches Python self.pred_info = {'lmk':None, 'x_d_0_info':None}
+                _predInfo = new LivePortraitPredInfo
+                {
+                    Landmarks = null,
+                    InitialMotionInfo = null
+                };
+                
+                // Load mask template - matches Python self.mask_crop = cv2.imread('mask_template.png')
+                _maskTemplate = ModelUtils.LoadMaskTemplate(_config);
+                
+                _initialized = true;
+            }
+            catch (Exception e)
+            {
+                Debug.LogError($"[LivePortraitInference] Failed to initialize: {e.Message}");
+                _initialized = false;
+            }
         }
         
         private void InitializeModels()
