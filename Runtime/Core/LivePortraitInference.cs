@@ -449,13 +449,6 @@ namespace MuseTalk.Core
         {
             // Python: input_size = 512
             const int inputSize = 512;
-            // _debugImage = BytesToTexture2D(img, width, height);
-            
-            // CRITICAL FIX: Match Python's dimension interpretation
-            // Python treats image as (height, width, channels) = (img.shape[0], img.shape[1], img.shape[2])
-            // Unity texture2D.width/height corresponds to OpenCV width/height
-            // So: Python img.shape[0] = height = Unity img.height
-            //     Python img.shape[1] = width = Unity img.width
             int pythonHeight = height;  // This matches Python's img.shape[0]
             int pythonWidth = width;    // This matches Python's img.shape[1]
             
@@ -2515,59 +2508,6 @@ namespace MuseTalk.Core
             var maskOri = TransformImgExact(_maskTemplate, _maskTemplateWidth, _maskTemplateHeight, M, width, height);
             return maskOri;
         }
-        
-        /// <summary>
-        /// Create default circular mask when no template is provided
-        /// </summary>
-        private Texture2D CreateDefaultMask(int width, int height)
-        {
-            var maskOri = new Texture2D(width, height, TextureFormat.RGB24, false);
-            var pixels = new Color[width * height];
-            
-            // Create a circular/elliptical mask in the center region
-            Vector2 center = new Vector2(width * 0.5f, height * 0.5f);
-            float radiusX = width * 0.3f;  // Elliptical mask
-            float radiusY = height * 0.4f;
-            
-            for (int y = 0; y < height; y++)
-            {
-                for (int x = 0; x < width; x++)
-                {
-                    int pixelIdx = y * width + x;
-                    
-                    // Calculate distance from center (elliptical)
-                    float dx = (x - center.x) / radiusX;
-                    float dy = (y - center.y) / radiusY;
-                    float distance = Mathf.Sqrt(dx * dx + dy * dy);
-                    
-                    // Smooth falloff from center
-                    float maskValue;
-                    if (distance <= 0.8f)
-                    {
-                        maskValue = 1.0f; // Full mask in center
-                    }
-                    else if (distance <= 1.2f)
-                    {
-                        // Smooth transition
-                        maskValue = Mathf.Lerp(1.0f, 0.0f, (distance - 0.8f) / 0.4f);
-                    }
-                    else
-                    {
-                        maskValue = 0.0f; // No mask at edges
-                    }
-                    
-                    pixels[pixelIdx] = new Color(maskValue, maskValue, maskValue, 1f);
-                }
-            }
-            
-            maskOri.SetPixels(pixels);
-            maskOri.Apply();
-            
-            
-            return maskOri;
-        }
-        
-
         
         /// <summary>
         /// Python: paste_back(img_crop, M_c2o, img_ori, mask_ori) - EXACT MATCH
