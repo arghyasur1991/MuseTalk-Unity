@@ -264,13 +264,10 @@ namespace MuseTalk.Core
                     // Python: I_p, self.pred_info = predict(frame_id, self.models, x_s_info, R_s, f_s, x_s, img_rgb, self.pred_info)
                     var (Ip, updatedPredInfo) = Predict(xSInfo, Rs, fs, xs, imgRgbData, imgRgb.width, imgRgb.height, _predInfo);
                     _predInfo = updatedPredInfo;
-                    // _debugImage = BytesToTexture2D(Ip, 512, 512);
-                    // _debugImage = BytesToTexture2D(srcImgData, srcImgWidth, srcImgHeight);
-                    // _debugImage = BytesToTexture2D(maskOri, srcImgWidth, srcImgHeight);
-                    
+                    var cropSize = 512;
                     // Python: if self.flg_composite: driving_img = concat_frame(img_rgb, img_crop_256x256, I_p)
                     // Python: else: driving_img = paste_back(I_p, crop_info["M_c2o"], src_img, mask_ori)
-                    byte[] drivingImg = PasteBack(Ip, 512, 512, cropInfo.Transform, srcImgData, srcImgWidth, srcImgHeight, maskOri);
+                    byte[] drivingImg = PasteBack(Ip, cropSize, cropSize, cropInfo.Transform, srcImgData, srcImgWidth, srcImgHeight, maskOri);
                     
                     if (_debugImage != null)
                     {
