@@ -130,7 +130,6 @@ namespace MuseTalk.Core
                 
                 // Load mask template - matches Python self.mask_crop = cv2.imread('mask_template.png')
                 _maskTemplate = ModelUtils.LoadMaskTemplate(_config);
-                // _debugImage = _maskTemplate;
                 
                 _initialized = true;
             }
@@ -259,7 +258,6 @@ namespace MuseTalk.Core
                 // Python: mask_ori = prepare_paste_back(self.mask_crop, crop_info["M_c2o"], dsize=(src_img.shape[1], src_img.shape[0]))
                 var start7 = Stopwatch.StartNew();
                 var maskOri = PreparePasteBack(cropInfo.Transform, srcImgWidth, srcImgHeight);
-                _debugImage = maskOri;
                 var elapsed7 = start7.ElapsedMilliseconds;
                 Debug.Log($"[LivePortraitInference] PreparePasteBack took {elapsed7}ms");
 
@@ -1382,7 +1380,7 @@ namespace MuseTalk.Core
             // Python: crop_image(img, pts: np.ndarray, dsize=224, scale=1.5, vy_ratio=-0.1) - EXACT MATCH
             var (MInv, _) = EstimateSimilarTransformFromPts(lmk, dsize, scale, 0f, vyRatio, true);
             
-            var imgCrop = TransformImgExact(img, width, height, MInv, dsize);
+            var imgCrop = TransformImgExact(img, width, height, MInv, dsize, dsize);
             var ptCrop = TransformPts(lmk, MInv);
             
             // Python: M_o2c = np.vstack([M_INV, np.array([0, 0, 1], dtype=np.float32)])
@@ -2329,7 +2327,7 @@ namespace MuseTalk.Core
             };
             
             // Python: cropped = cv2.warpAffine(data, M, (output_size, output_size), borderValue=0.0)
-            var cropped = TransformImgExact(img, width, height, M, inputSize);
+            var cropped = TransformImgExact(img, width, height, M, inputSize, inputSize);
 
             // Convert to Matrix4x4 for Unity compatibility
             var transform = new Matrix4x4
@@ -2497,10 +2495,10 @@ namespace MuseTalk.Core
         /// CRITICAL: Handles coordinate systems correctly
         /// OPTIMIZED: Uses unsafe pointers and parallelization for maximum performance
         /// </summary>
-        private unsafe byte[] TransformImgExact(byte[] img, int width, int height, float[,] M, int dsize)
+        private unsafe byte[] TransformImgExact(byte[] img, int width, int height, float[,] M, int dstWidth, int dstHeight)
         {
             // Create result texture - MUST use RGB24 format for consistent processing
-            var result = new byte[dsize * dsize * 3];
+            var result = new byte[dstWidth * dstHeight * 3];
 
             int srcWidth = width;
             int srcHeight = height;
@@ -2520,7 +2518,7 @@ namespace MuseTalk.Core
                 {
                     // MAXIMUM PERFORMANCE: Parallel processing across all destination pixels
                     // Each pixel can be processed independently for perfect parallelization
-                    int totalPixels = dsize * dsize;
+                    int totalPixels = dstWidth * dstHeight;
                     
                     // Capture pointers in local variables to avoid lambda closure issues
                     byte* srcPtrLocal = srcPtrFixed;
@@ -2529,8 +2527,8 @@ namespace MuseTalk.Core
                     System.Threading.Tasks.Parallel.For(0, totalPixels, pixelIndex =>
                     {
                         // Calculate x, y coordinates from linear pixel index
-                        int dstY = pixelIndex / dsize;
-                        int dstX = pixelIndex % dsize;
+                        int dstY = pixelIndex / dstWidth;
+                        int dstX = pixelIndex % dstWidth;
 
                         // Apply inverse transformation matrix to find source coordinates
                         // OPTIMIZED: Use pre-calculated matrix elements
@@ -2806,7 +2804,7 @@ namespace MuseTalk.Core
             var (sourceBytes, srcWidth, srcHeight) = Texture2DToBytes(img);
             
             // OPTIMIZED: Use the highly optimized unsafe byte array transform method
-            var resultBytes = TransformImgExact(sourceBytes, srcWidth, srcHeight, M, width);
+            var resultBytes = TransformImgExact(sourceBytes, srcWidth, srcHeight, M, width, height);
             
             // OPTIMIZED: Convert result back to texture using existing method
             return BytesToTexture2D(resultBytes, width, height);
