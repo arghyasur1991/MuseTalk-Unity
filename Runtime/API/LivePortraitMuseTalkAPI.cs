@@ -144,16 +144,13 @@ namespace MuseTalk.API
         /// Step 1: LivePortrait generates animated textures from source image + driving frames
         /// Step 2: MuseTalk applies lip sync to animated textures using audio
         /// </summary>
-        public LivePortraitMuseTalkResult Generate(LivePortraitMuseTalkInput input)
+        public IEnumerator<Texture2D> GenerateAsync(LivePortraitMuseTalkInput input)
         {
             if (!_initialized)
                 throw new InvalidOperationException("API not initialized");
                 
             if (input?.SourceImage == null || input.DrivingFrames == null || input.AudioClip == null)
                 throw new ArgumentException("Invalid input: source image, driving frames, and audio are required");
-                
-            var result = new LivePortraitMuseTalkResult();
-            var startTime = Time.realtimeSinceStartup;
             
             try
             {
@@ -172,22 +169,9 @@ namespace MuseTalk.API
                     DrivingFrames = input.DrivingFrames,
                 };
                 
-                var livePortraitResult = _livePortrait.Generate(livePortraitInput);
-                var livePortraitEndTime = Time.realtimeSinceStartup;
-                
-                if (!livePortraitResult.Success)
-                {
-                    result.Success = false;
-                    result.ErrorMessage = $"LivePortrait generation failed: {livePortraitResult.ErrorMessage}";
-                    return result;
-                }
-                
-                result.AnimatedTextures = livePortraitResult.GeneratedFrames;
-                result.Metrics.LivePortraitDurationSeconds = livePortraitEndTime - livePortraitStartTime;
-                result.Metrics.GeneratedAnimatedFrames = livePortraitResult.GeneratedFrames.Count;
-                
-                Logger.Log($"[LivePortraitMuseTalkAPI] Stage 1 completed - Generated {result.AnimatedTextures.Count} animated textures in {result.Metrics.LivePortraitDurationSeconds:F2}s");
-                
+                return _livePortrait.GenerateAsync(livePortraitInput);
+
+                /*
                 // STAGE 2: Apply lip sync using MuseTalk (SYNCHRONOUS)
                 Logger.Log("[LivePortraitMuseTalkAPI] STAGE 2: Applying lip sync with MuseTalk...");
                 var museTalkStartTime = Time.realtimeSinceStartup;
@@ -219,20 +203,19 @@ namespace MuseTalk.API
                 
                 result.Success = true;
                 return result;
+                */
             }
             catch (Exception e)
             {
                 Logger.LogError($"[LivePortraitMuseTalkAPI] Workflow failed: {e.Message}\n{e.StackTrace}");
-                result.Success = false;
-                result.ErrorMessage = e.Message;
-                return result;
+                throw;
             }
         }
 
         /// <summary>
         /// Generate animated textures only using LivePortrait (SYNCHRONOUS)
         /// </summary>
-        public LivePortraitResult GenerateAnimatedTextures(Texture2D sourceImage, Texture2D[] drivingFrames)
+        public IEnumerator<Texture2D> GenerateAnimatedTexturesAsync(Texture2D sourceImage, Texture2D[] drivingFrames)
         {
             if (!_initialized)
                 throw new InvalidOperationException("API not initialized");
@@ -248,15 +231,7 @@ namespace MuseTalk.API
                 DrivingFrames = drivingFrames
             };
             
-            return _livePortrait.Generate(input);
-        }
-
-        /// <summary>
-        /// Generate talking head animation using the integrated LivePortrait + MuseTalk workflow (ASYNC - LEGACY)
-        /// </summary>
-        public async Task<LivePortraitMuseTalkResult> GenerateAsync(LivePortraitMuseTalkInput input)
-        {
-            return await Task.Run(() => Generate(input));
+            return _livePortrait.GenerateAsync(input);
         }
         
         /// <summary>

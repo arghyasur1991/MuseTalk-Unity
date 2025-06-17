@@ -72,6 +72,19 @@ namespace MuseTalk.Core
         public Matrix4x4 InverseTransform { get; set; }
     }
 
+    public class ProcessSourceImageResult
+    {
+        public CropInfo CropInfo { get; set; }
+        public byte[] SrcImgData { get; set; }
+        public int SrcImgWidth { get; set; }
+        public int SrcImgHeight { get; set; }
+        public byte[] MaskOri { get; set; }
+        public MotionInfo XsInfo { get; set; }
+        public float[,] Rs { get; set; }
+        public Tensor<float> Fs { get; set; }
+        public float[] Xs { get; set; }
+    }
+
     /// <summary>
     /// Core LivePortrait inference engine that matches onnx_inference.py EXACTLY
     /// ALL OPERATIONS ON MAIN THREAD FOR CORRECTNESS FIRST
@@ -180,28 +193,12 @@ namespace MuseTalk.Core
                 throw new InvalidOperationException($"Failed to initialize models: {string.Join(", ", failedModels)}");
             }
         }
-        
-        /// <summary>
-        /// Generate talking head animation - matches Python LivePortraitWrapper.execute
-        /// MAIN THREAD ONLY for correctness
-        /// </summary>
-        public LivePortraitResult Generate(LivePortraitInput input)
+
+        private async Task<ProcessSourceImageResult> ProcessSourceImageAsync(byte[] srcImg, int srcWidth, int srcHeight)
         {
-            if (!_initialized)
-                throw new InvalidOperationException("LivePortrait inference not initialized");
-                
-            if (input?.SourceImage == null || input.DrivingFrames == null || input.DrivingFrames.Length == 0)
-                throw new ArgumentException("Invalid input: source image and driving frames are required");
-            
-            if (_maskTemplate == null)
-                throw new Exception("[LivePortraitInference] No mask template available");
-                
-            try
-            {
+            return await Task.Run(() => {
                 var start = Stopwatch.StartNew();
-                // Generate frames
-                var generatedFrames = new List<Texture2D>();
-                var (srcImgData, srcImgWidth, srcImgHeight) = SrcPreprocess(input.SourceImage);
+                var (srcImgData, srcImgWidth, srcImgHeight) = SrcPreprocess(srcImg, srcWidth, srcHeight);
                 var srcImgElapsed = start.ElapsedMilliseconds;
                 Debug.Log($"[LivePortraitInference] SrcPreprocess took {srcImgElapsed}ms");
                 
@@ -250,54 +247,70 @@ namespace MuseTalk.Core
                 var elapsed7 = start7.ElapsedMilliseconds;
                 Debug.Log($"[LivePortraitInference] PreparePasteBack took {elapsed7}ms");
 
-                var maxFrames = 17;
-
-                // For debugging, only generate 1 frame - matches Python: if frame_id > 0: break
-                for (int frameId = maxFrames; frameId < Mathf.Min(maxFrames + 2, input.DrivingFrames.Length); frameId++)
+                return new ProcessSourceImageResult
                 {
-                    // Python: img_rgb = frame[:, :, ::-1]  # BGR -> RGB (Unity input is already RGB)
-                    var imgRgb = input.DrivingFrames[frameId];
-                    var (imgRgbData, w, h) = TextureUtils.Texture2DToBytes(imgRgb);
-                    
-                    // Python: I_p, self.pred_info = predict(frame_id, self.models, x_s_info, R_s, f_s, x_s, img_rgb, self.pred_info)
-                    var (Ip, updatedPredInfo) = Predict(xSInfo, Rs, fs, xs, imgRgbData, imgRgb.width, imgRgb.height, _predInfo);
-                    _predInfo = updatedPredInfo;
-                    var cropSize = 512;
-                    // Python: if self.flg_composite: driving_img = concat_frame(img_rgb, img_crop_256x256, I_p)
-                    // Python: else: driving_img = paste_back(I_p, crop_info["M_c2o"], src_img, mask_ori)
-                    byte[] drivingImg = PasteBack(Ip, cropSize, cropSize, cropInfo.Transform, srcImgData, srcImgWidth, srcImgHeight, maskOri);
-                    
-                    if (_debugImage != null)
-                    {
-                        generatedFrames.Add(_debugImage);
-                    }                    
-                    else if (drivingImg != null)
-                    {
-                        var drivingImgTexture = TextureUtils.BytesToTexture2D(drivingImg, srcImgWidth, srcImgHeight);
-                        generatedFrames.Add(drivingImgTexture);
-                    }
-                }
-                
-                var result = new LivePortraitResult
-                {
-                    Success = true,
-                    GeneratedFrames = generatedFrames
+                    CropInfo = cropInfo,
+                    SrcImgData = srcImgData,
+                    SrcImgWidth = srcImgWidth,
+                    SrcImgHeight = srcImgHeight,
+                    MaskOri = maskOri,
+                    XsInfo = xSInfo,
+                    Rs = Rs,
+                    Fs = fs,
+                    Xs = xs
                 };
-
-                var elapsed = start.ElapsedMilliseconds;
-                Debug.Log($"[LivePortraitInference] Generation took {elapsed}ms");
+            });
+        }
+        
+        /// <summary>
+        /// Generate talking head animation - matches Python LivePortraitWrapper.execute
+        /// MAIN THREAD ONLY for correctness
+        /// </summary>
+        public IEnumerator<Texture2D> GenerateAsync(LivePortraitInput input)
+        {
+            if (!_initialized)
+                throw new InvalidOperationException("LivePortrait inference not initialized");
                 
-                return result;
-            }
-            catch (Exception e)
+            if (input?.SourceImage == null || input.DrivingFrames == null || input.DrivingFrames.Length == 0)
+                throw new ArgumentException("Invalid input: source image and driving frames are required");
+            
+            if (_maskTemplate == null)
+                throw new Exception("[LivePortraitInference] No mask template available");
+            
+            var (srcImg, srcWidth, srcHeight) = TextureUtils.Texture2DToBytes(input.SourceImage);
+            var processSrcTask = ProcessSourceImageAsync(srcImg, srcWidth, srcHeight);
+            while (!processSrcTask.IsCompleted)
             {
-                Debug.LogError($"[LivePortraitInference] Generation failed: {e.Message}\n{e.StackTrace}");
-                return new LivePortraitResult
+                yield return null;
+            }
+            var processResult = processSrcTask.Result;
+
+            var maxFrames = 17;
+
+            // For debugging, only generate 1 frame - matches Python: if frame_id > 0: break
+            for (int frameId = maxFrames; frameId < Mathf.Min(maxFrames + 2, input.DrivingFrames.Length); frameId++)
+            {
+                // Python: img_rgb = frame[:, :, ::-1]  # BGR -> RGB (Unity input is already RGB)
+                var imgRgb = input.DrivingFrames[frameId];
+                var (imgRgbData, w, h) = TextureUtils.Texture2DToBytes(imgRgb);
+                
+                var predictTask = ProcessNextFrameAsync(processResult, _predInfo, imgRgbData, w, h);
+                while (!predictTask.IsCompleted)
                 {
-                    Success = false,
-                    ErrorMessage = e.Message,
-                    GeneratedFrames = new List<Texture2D>()
-                };
+                    yield return null;
+                }
+                var (drivingImg, updatedPredInfo) = predictTask.Result;
+                _predInfo = updatedPredInfo;
+                
+                if (_debugImage != null)
+                {
+                    yield return _debugImage;
+                }
+                else if (drivingImg != null)
+                {
+                    var drivingImgTexture = TextureUtils.BytesToTexture2D(drivingImg, processResult.SrcImgWidth, processResult.SrcImgHeight);
+                    yield return drivingImgTexture;
+                }
             }
         }
         
@@ -306,9 +319,9 @@ namespace MuseTalk.Core
         /// Returns (byte[] imageData, int width, int height) in RGB24 format
         /// OPTIMIZED: Uses direct pixel data access and parallelization for maximum performance
         /// </summary>
-        private unsafe (byte[], int, int) SrcPreprocess(Texture2D img)
+        private unsafe (byte[], int, int) SrcPreprocess(byte[] img, int width, int height)
         {
-            var (imageData, w, h) = TextureUtils.Texture2DToBytes(img);
+            var (imageData, w, h) = (img, width, height);
             int currentWidth = w;
             int currentHeight = h;
             
@@ -972,11 +985,47 @@ namespace MuseTalk.Core
             
             return kpTransformed;
         }
+
+        private async Task<(byte[], LivePortraitPredInfo)> ProcessNextFrameAsync(
+            ProcessSourceImageResult processResult,
+            LivePortraitPredInfo predInfo,
+            byte[] drivingFrame, 
+            int drivingFrameWidth, 
+            int drivingFrameHeight)
+        {
+            return await Task.Run(() => 
+            {
+                var (Ip, updatedPredInfo) = Predict(
+                    processResult.XsInfo, 
+                    processResult.Rs, 
+                    processResult.Fs, 
+                    processResult.Xs, 
+                    drivingFrame, 
+                    drivingFrameWidth, 
+                    drivingFrameHeight, 
+                    predInfo);
+
+                var cropSize = 512;
+                // Python: if self.flg_composite: driving_img = concat_frame(img_rgb, img_crop_256x256, I_p)
+                // Python: else: driving_img = paste_back(I_p, crop_info["M_c2o"], src_img, mask_ori)
+                byte[] drivingImg = PasteBack(
+                    Ip, 
+                    cropSize, 
+                    cropSize, 
+                    processResult.CropInfo.Transform, 
+                    processResult.SrcImgData, 
+                    processResult.SrcImgWidth, 
+                    processResult.SrcImgHeight, 
+                    processResult.MaskOri);
+                return (drivingImg, updatedPredInfo);
+            });
+        }
         
         /// <summary>
         /// Python: predict(frame_id, models, x_s_info, R_s, f_s, x_s, img, pred_info) - EXACT MATCH
         /// </summary>
-        private (byte[], LivePortraitPredInfo) Predict(MotionInfo xSInfo, float[,] Rs, Tensor<float> fs, float[] xs, 
+        private (byte[], LivePortraitPredInfo) Predict(
+            MotionInfo xSInfo, float[,] Rs, Tensor<float> fs, float[] xs, 
             byte[] img, int width, int height, LivePortraitPredInfo predInfo)
         {
             var start = Stopwatch.StartNew();
