@@ -83,6 +83,13 @@ namespace MuseTalk.API
 
     public sealed class LivePortaitStream
     {
+        public int TotalExpectedFrames { get; set; }
+
+        public LivePortaitStream(int totalExpectedFrames)
+        {
+            TotalExpectedFrames = totalExpectedFrames;
+        }
+
         internal readonly ConcurrentQueue<Texture2D> queue = new();
         internal CancellationTokenSource cts = new();
 
@@ -178,11 +185,17 @@ namespace MuseTalk.API
                 _initialized = false;
             }
         }
+        
+        public LivePortaitStream GenerateAnimatedTexturesAsync(Texture2D sourceImage, string drivingFramesPath)
+        {
+            var drivingFrames = FileUtils.LoadFramesFromFolder(drivingFramesPath);
+            return GenerateAnimatedTexturesAsync(sourceImage, drivingFrames);
+        }
 
         /// <summary>
         /// Generate animated textures only using LivePortrait (SYNCHRONOUS)
         /// </summary>
-        public LivePortaitStream GenerateAnimatedTexturesAsync(Texture2D sourceImage, Texture2D[] drivingFrames)
+        public LivePortaitStream GenerateAnimatedTexturesAsync(Texture2D sourceImage, List<Texture2D> drivingFrames)
         {
             if (!_initialized)
                 throw new InvalidOperationException("API not initialized");
@@ -190,7 +203,7 @@ namespace MuseTalk.API
             if (sourceImage == null || drivingFrames == null)
                 throw new ArgumentException("Invalid input: source image and driving frames are required");
                 
-            Logger.Log($"[LivePortraitMuseTalkAPI] Generating animated textures (SYNC): {drivingFrames.Length} driving frames");
+            Logger.Log($"[LivePortraitMuseTalkAPI] Generating animated textures (SYNC): {drivingFrames.Count} driving frames");
             
             var input = new LivePortraitInput
             {
@@ -198,7 +211,7 @@ namespace MuseTalk.API
                 DrivingFrames = drivingFrames
             };
 
-            var stream = new LivePortaitStream();
+            var stream = new LivePortaitStream(drivingFrames.Count);
             _avatarController.StartCoroutine(_livePortrait.GenerateAsync(input, stream));
             return stream;
         }

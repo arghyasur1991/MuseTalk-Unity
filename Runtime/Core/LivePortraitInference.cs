@@ -31,7 +31,7 @@ namespace MuseTalk.Core
     public class LivePortraitInput
     {
         public Texture2D SourceImage { get; set; }
-        public Texture2D[] DrivingFrames { get; set; }
+        public List<Texture2D> DrivingFrames { get; set; }
     }
 
     /// <summary>
@@ -257,7 +257,7 @@ namespace MuseTalk.Core
             if (!_initialized)
                 throw new InvalidOperationException("LivePortrait inference not initialized");
                 
-            if (input?.SourceImage == null || input.DrivingFrames == null || input.DrivingFrames.Length == 0)
+            if (input?.SourceImage == null || input.DrivingFrames == null || input.DrivingFrames.Count == 0)
                 throw new ArgumentException("Invalid input: source image and driving frames are required");
             
             if (_maskTemplate == null)
@@ -271,7 +271,7 @@ namespace MuseTalk.Core
             var maxFrames = 0;
 
             // For debugging, only generate 1 frame - matches Python: if frame_id > 0: break
-            for (int frameId = maxFrames; frameId < Mathf.Min(maxFrames + 25, input.DrivingFrames.Length); frameId++)
+            for (int frameId = maxFrames; frameId < Mathf.Min(maxFrames + 25, input.DrivingFrames.Count); frameId++)
             {
                 // Python: img_rgb = frame[:, :, ::-1]  # BGR -> RGB (Unity input is already RGB)
                 var imgRgb = input.DrivingFrames[frameId];
