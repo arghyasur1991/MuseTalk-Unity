@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Threading;
 using System.Threading.Tasks;
 using UnityEngine;
 
@@ -79,6 +81,43 @@ namespace MuseTalk.API
         public int GeneratedTalkingFrames { get; set; }
     }
 
+    public sealed class LivePortaitStream
+    {
+        internal readonly ConcurrentQueue<Texture2D> queue = new();
+        internal CancellationTokenSource cts = new();
+
+        public bool Finished { get; internal set; }
+
+        /// Non-blocking poll. Returns false if no frame is ready yet.
+        public bool TryGetNext(out Texture2D tex) => queue.TryDequeue(out tex);
+
+        /// Yield instruction that waits until the *next* frame exists,
+        /// then exposes it through the .Texture property.
+        public FrameAwaiter WaitForNext() => new(queue);
+    }
+
+    /// Custom yield instruction that delivers one Texture2D.
+    public sealed class FrameAwaiter : CustomYieldInstruction
+    {
+        private readonly ConcurrentQueue<Texture2D> _q;
+        public Texture2D Texture { get; private set; }
+
+        public FrameAwaiter(ConcurrentQueue<Texture2D> q) => _q = q;
+
+        public override bool keepWaiting
+        {
+            get
+            {
+                if (_q.TryDequeue(out var tex))
+                {
+                    Texture = tex;
+                    return false;          // stop waiting – caller resumes
+                }
+                return true;               // keep waiting this frame
+            }
+        }
+    }
+
     /// <summary>
     /// Integrated API that combines LivePortrait and MuseTalk for complete talking head generation
     /// 
@@ -97,15 +136,17 @@ namespace MuseTalk.API
         private MuseTalkConfig _config;
         private bool _initialized = false;
         private bool _disposed = false;
+        private readonly AvatarController _avatarController;
         
         public bool IsInitialized => _initialized;
         
         /// <summary>
         /// Initialize the integrated API with configuration
         /// </summary>
-        public LivePortraitMuseTalkAPI(MuseTalkConfig config)
+        public LivePortraitMuseTalkAPI(MuseTalkConfig config, AvatarController avatarController)
         {
             _config = config ?? throw new ArgumentNullException(nameof(config));
+            _avatarController = avatarController ?? throw new ArgumentNullException(nameof(avatarController));
             
             try
             {
@@ -168,8 +209,9 @@ namespace MuseTalk.API
                     SourceImage = input.SourceImage,
                     DrivingFrames = input.DrivingFrames,
                 };
+                return null;
                 
-                return _livePortrait.GenerateAsync(livePortraitInput);
+                // return _livePortrait.GenerateAsync(livePortraitInput);
 
                 /*
                 // STAGE 2: Apply lip sync using MuseTalk (SYNCHRONOUS)
@@ -215,7 +257,7 @@ namespace MuseTalk.API
         /// <summary>
         /// Generate animated textures only using LivePortrait (SYNCHRONOUS)
         /// </summary>
-        public IEnumerator<Texture2D> GenerateAnimatedTexturesAsync(Texture2D sourceImage, Texture2D[] drivingFrames)
+        public LivePortaitStream GenerateAnimatedTexturesAsync(Texture2D sourceImage, Texture2D[] drivingFrames)
         {
             if (!_initialized)
                 throw new InvalidOperationException("API not initialized");
@@ -230,8 +272,10 @@ namespace MuseTalk.API
                 SourceImage = sourceImage,
                 DrivingFrames = drivingFrames
             };
-            
-            return _livePortrait.GenerateAsync(input);
+
+            var stream = new LivePortaitStream();
+            _avatarController.StartCoroutine(_livePortrait.GenerateAsync(input, stream));
+            return stream;
         }
         
         /// <summary>
@@ -313,28 +357,28 @@ namespace MuseTalk.API
         /// <summary>
         /// Create an instance of the integrated API with default configuration
         /// </summary>
-        public static LivePortraitMuseTalkAPI Create(string modelPath = "MuseTalk")
+        public static LivePortraitMuseTalkAPI Create(AvatarController avatarController,string modelPath = "MuseTalk")
         {
             var config = new MuseTalkConfig(modelPath);
-            return new LivePortraitMuseTalkAPI(config);
+            return new LivePortraitMuseTalkAPI(config, avatarController);
         }
         
         /// <summary>
         /// Create an instance optimized for performance
         /// </summary>
-        public static LivePortraitMuseTalkAPI CreateOptimized(string modelPath = "MuseTalk")
+        public static LivePortraitMuseTalkAPI CreateOptimized(AvatarController avatarController, string modelPath = "MuseTalk")
         {
             var config = MuseTalkConfig.CreateOptimized(modelPath);
-            return new LivePortraitMuseTalkAPI(config);
+            return new LivePortraitMuseTalkAPI(config, avatarController);
         }
         
         /// <summary>
         /// Create an instance optimized for development/debugging
         /// </summary>
-        public static LivePortraitMuseTalkAPI CreateForDevelopment(string modelPath = "MuseTalk")
+        public static LivePortraitMuseTalkAPI CreateForDevelopment(AvatarController avatarController, string modelPath = "MuseTalk")
         {
             var config = MuseTalkConfig.CreateForDevelopment(modelPath);
-            return new LivePortraitMuseTalkAPI(config);
+            return new LivePortraitMuseTalkAPI(config, avatarController);
         }
     }
 }

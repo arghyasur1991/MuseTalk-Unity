@@ -1,17 +1,19 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using UnityEngine;
 using Microsoft.ML.OnnxRuntime;
 using Microsoft.ML.OnnxRuntime.Tensors;
+using System.Diagnostics;
 using Unity.Collections.LowLevel.Unsafe;
 
 namespace MuseTalk.Core
 {
+    using API;
     using Utils;
     using Models;
-    using System.Diagnostics;
     using Debug = UnityEngine.Debug;
 
     /// <summary>
@@ -266,7 +268,7 @@ namespace MuseTalk.Core
         /// Generate talking head animation - matches Python LivePortraitWrapper.execute
         /// MAIN THREAD ONLY for correctness
         /// </summary>
-        public IEnumerator<Texture2D> GenerateAsync(LivePortraitInput input)
+        public IEnumerator GenerateAsync(LivePortraitInput input, LivePortaitStream stream)
         {
             if (!_initialized)
                 throw new InvalidOperationException("LivePortrait inference not initialized");
@@ -279,39 +281,33 @@ namespace MuseTalk.Core
             
             var (srcImg, srcWidth, srcHeight) = TextureUtils.Texture2DToBytes(input.SourceImage);
             var processSrcTask = ProcessSourceImageAsync(srcImg, srcWidth, srcHeight);
-            while (!processSrcTask.IsCompleted)
-            {
-                yield return null;
-            }
+            yield return new WaitUntil(() => processSrcTask.IsCompleted);
             var processResult = processSrcTask.Result;
 
-            var maxFrames = 17;
+            var maxFrames = 0;
 
             // For debugging, only generate 1 frame - matches Python: if frame_id > 0: break
-            for (int frameId = maxFrames; frameId < Mathf.Min(maxFrames + 2, input.DrivingFrames.Length); frameId++)
+            for (int frameId = maxFrames; frameId < Mathf.Min(maxFrames + 50, input.DrivingFrames.Length); frameId++)
             {
                 // Python: img_rgb = frame[:, :, ::-1]  # BGR -> RGB (Unity input is already RGB)
                 var imgRgb = input.DrivingFrames[frameId];
                 var (imgRgbData, w, h) = TextureUtils.Texture2DToBytes(imgRgb);
                 
                 var predictTask = ProcessNextFrameAsync(processResult, _predInfo, imgRgbData, w, h);
-                while (!predictTask.IsCompleted)
-                {
-                    yield return null;
-                }
+                yield return new WaitUntil(() => predictTask.IsCompleted);
                 var (generatedImg, updatedPredInfo) = predictTask.Result;
                 _predInfo = updatedPredInfo;
-                
                 if (_debugImage != null)
                 {
-                    yield return _debugImage;
+                    stream.queue.Enqueue(_debugImage);
                 }
-                else if (generatedImg != null)
+                if (generatedImg != null)
                 {
                     var generatedImgTexture = TextureUtils.BytesToTexture2D(generatedImg, processResult.SrcImgWidth, processResult.SrcImgHeight);
                     Debug.Log($"[LivePortraitInference] Frame {frameId} generated");
-                    yield return generatedImgTexture;
+                    stream.queue.Enqueue(generatedImgTexture);
                 }
+                yield return null;
             }
         }
         
