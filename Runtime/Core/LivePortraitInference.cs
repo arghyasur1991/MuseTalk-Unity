@@ -299,17 +299,18 @@ namespace MuseTalk.Core
                 {
                     yield return null;
                 }
-                var (drivingImg, updatedPredInfo) = predictTask.Result;
+                var (generatedImg, updatedPredInfo) = predictTask.Result;
                 _predInfo = updatedPredInfo;
                 
                 if (_debugImage != null)
                 {
                     yield return _debugImage;
                 }
-                else if (drivingImg != null)
+                else if (generatedImg != null)
                 {
-                    var drivingImgTexture = TextureUtils.BytesToTexture2D(drivingImg, processResult.SrcImgWidth, processResult.SrcImgHeight);
-                    yield return drivingImgTexture;
+                    var generatedImgTexture = TextureUtils.BytesToTexture2D(generatedImg, processResult.SrcImgWidth, processResult.SrcImgHeight);
+                    Debug.Log($"[LivePortraitInference] Frame {frameId} generated");
+                    yield return generatedImgTexture;
                 }
             }
         }
