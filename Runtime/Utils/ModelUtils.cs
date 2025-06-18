@@ -81,11 +81,12 @@ namespace MuseTalk.Utils
                 throw new FileNotFoundException($"{modelName} model not found: {modelPath}");
             var sessionOptions = CreateSessionOptions(config);
             if (
-                modelName == "det_10g" || 
-                modelName == "1k3d68"
+                modelName == "1k3d68" ||
+                modelName == "2d106det" ||
+                modelName == "warping_spade"
             )
             {
-                // sessionOptions.AppendExecutionProvider_CoreML();
+                sessionOptions.AppendExecutionProvider_CoreML();
             }
             var model = new InferenceSession(modelPath, sessionOptions);
             // Debug.Log($"[MuseTalkInference] Loaded {modelName} from {modelPath}");
@@ -153,7 +154,7 @@ namespace MuseTalk.Utils
         /// Load mask template texture from Resources or StreamingAssets
         /// Matches Python: mask_crop = cv2.imread('mask_template.png')
         /// </summary>
-        public static Texture2D LoadMaskTemplate(MuseTalkConfig config)
+        public static (byte[], int, int) LoadMaskTemplate(MuseTalkConfig config)
         {
             try
             {
@@ -162,7 +163,7 @@ namespace MuseTalk.Utils
                 if (maskTexture != null)
                 {
                     Debug.Log("[ModelUtils] Loaded mask template from Resources");
-                    return maskTexture;
+                    return TextureUtils.Texture2DToBytes(TextureUtils.ConvertTexture2DToRGB24(maskTexture));
                 }
                 
                 // Try to load from StreamingAssets
@@ -172,9 +173,9 @@ namespace MuseTalk.Utils
                     byte[] fileData = System.IO.File.ReadAllBytes(maskPath);
                     var texture = new Texture2D(2, 2);
                     if (texture.LoadImage(fileData))
-                    {
+                    {                        
                         Debug.Log("[ModelUtils] Loaded mask template from StreamingAssets");
-                        return texture;
+                        return TextureUtils.Texture2DToBytes(TextureUtils.ConvertTexture2DToRGB24(texture));
                     }
                     else
                     {
@@ -193,7 +194,7 @@ namespace MuseTalk.Utils
                         if (texture.LoadImage(fileData))
                         {
                             Debug.Log($"[ModelUtils] Loaded mask template from config path: {configMaskPath}");
-                            return texture;
+                            return TextureUtils.Texture2DToBytes(TextureUtils.ConvertTexture2DToRGB24(texture));
                         }
                         else
                         {
@@ -203,12 +204,12 @@ namespace MuseTalk.Utils
                 }
                 
                 Debug.LogWarning("[ModelUtils] Could not find mask_template.png in Resources, StreamingAssets, or config path. Will use default mask.");
-                return null;
+                return (null, 0, 0);
             }
             catch (System.Exception e)
             {
                 Debug.LogError($"[ModelUtils] Error loading mask template: {e.Message}");
-                return null;
+                return (null, 0, 0);
             }
         }
     }

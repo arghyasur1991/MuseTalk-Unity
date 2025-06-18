@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Threading;
 using System.Threading.Tasks;
 using UnityEngine;
 
@@ -34,11 +36,6 @@ namespace MuseTalk.API
         /// Batch size for MuseTalk processing
         /// </summary>
         public int BatchSize { get; set; } = 4;
-        
-        /// <summary>
-        /// Whether to use composite output during LivePortrait generation
-        /// </summary>
-        public bool UseComposite { get; set; } = false;
         
         public LivePortraitMuseTalkInput(Texture2D sourceImage, Texture2D[] drivingFrames, AudioClip audioClip)
         {
@@ -84,6 +81,43 @@ namespace MuseTalk.API
         public int GeneratedTalkingFrames { get; set; }
     }
 
+    public sealed class LivePortaitStream
+    {
+        internal readonly ConcurrentQueue<Texture2D> queue = new();
+        internal CancellationTokenSource cts = new();
+
+        public bool Finished { get; internal set; }
+
+        /// Non-blocking poll. Returns false if no frame is ready yet.
+        public bool TryGetNext(out Texture2D tex) => queue.TryDequeue(out tex);
+
+        /// Yield instruction that waits until the *next* frame exists,
+        /// then exposes it through the .Texture property.
+        public FrameAwaiter WaitForNext() => new(queue);
+    }
+
+    /// Custom yield instruction that delivers one Texture2D.
+    public sealed class FrameAwaiter : CustomYieldInstruction
+    {
+        private readonly ConcurrentQueue<Texture2D> _q;
+        public Texture2D Texture { get; private set; }
+
+        public FrameAwaiter(ConcurrentQueue<Texture2D> q) => _q = q;
+
+        public override bool keepWaiting
+        {
+            get
+            {
+                if (_q.TryDequeue(out var tex))
+                {
+                    Texture = tex;
+                    return false;          // stop waiting – caller resumes
+                }
+                return true;               // keep waiting this frame
+            }
+        }
+    }
+
     /// <summary>
     /// Integrated API that combines LivePortrait and MuseTalk for complete talking head generation
     /// 
@@ -102,15 +136,17 @@ namespace MuseTalk.API
         private MuseTalkConfig _config;
         private bool _initialized = false;
         private bool _disposed = false;
+        private readonly AvatarController _avatarController;
         
         public bool IsInitialized => _initialized;
         
         /// <summary>
         /// Initialize the integrated API with configuration
         /// </summary>
-        public LivePortraitMuseTalkAPI(MuseTalkConfig config)
+        public LivePortraitMuseTalkAPI(MuseTalkConfig config, AvatarController avatarController)
         {
             _config = config ?? throw new ArgumentNullException(nameof(config));
+            _avatarController = avatarController ?? throw new ArgumentNullException(nameof(avatarController));
             
             try
             {
@@ -149,16 +185,13 @@ namespace MuseTalk.API
         /// Step 1: LivePortrait generates animated textures from source image + driving frames
         /// Step 2: MuseTalk applies lip sync to animated textures using audio
         /// </summary>
-        public LivePortraitMuseTalkResult Generate(LivePortraitMuseTalkInput input)
+        public IEnumerator<Texture2D> GenerateAsync(LivePortraitMuseTalkInput input)
         {
             if (!_initialized)
                 throw new InvalidOperationException("API not initialized");
                 
             if (input?.SourceImage == null || input.DrivingFrames == null || input.AudioClip == null)
                 throw new ArgumentException("Invalid input: source image, driving frames, and audio are required");
-                
-            var result = new LivePortraitMuseTalkResult();
-            var startTime = Time.realtimeSinceStartup;
             
             try
             {
@@ -175,25 +208,12 @@ namespace MuseTalk.API
                 {
                     SourceImage = input.SourceImage,
                     DrivingFrames = input.DrivingFrames,
-                    UseComposite = input.UseComposite
                 };
+                return null;
                 
-                var livePortraitResult = _livePortrait.Generate(livePortraitInput);
-                var livePortraitEndTime = Time.realtimeSinceStartup;
-                
-                if (!livePortraitResult.Success)
-                {
-                    result.Success = false;
-                    result.ErrorMessage = $"LivePortrait generation failed: {livePortraitResult.ErrorMessage}";
-                    return result;
-                }
-                
-                result.AnimatedTextures = livePortraitResult.GeneratedFrames;
-                result.Metrics.LivePortraitDurationSeconds = livePortraitEndTime - livePortraitStartTime;
-                result.Metrics.GeneratedAnimatedFrames = livePortraitResult.GeneratedFrames.Count;
-                
-                Logger.Log($"[LivePortraitMuseTalkAPI] Stage 1 completed - Generated {result.AnimatedTextures.Count} animated textures in {result.Metrics.LivePortraitDurationSeconds:F2}s");
-                
+                // return _livePortrait.GenerateAsync(livePortraitInput);
+
+                /*
                 // STAGE 2: Apply lip sync using MuseTalk (SYNCHRONOUS)
                 Logger.Log("[LivePortraitMuseTalkAPI] STAGE 2: Applying lip sync with MuseTalk...");
                 var museTalkStartTime = Time.realtimeSinceStartup;
@@ -225,20 +245,19 @@ namespace MuseTalk.API
                 
                 result.Success = true;
                 return result;
+                */
             }
             catch (Exception e)
             {
                 Logger.LogError($"[LivePortraitMuseTalkAPI] Workflow failed: {e.Message}\n{e.StackTrace}");
-                result.Success = false;
-                result.ErrorMessage = e.Message;
-                return result;
+                throw;
             }
         }
 
         /// <summary>
         /// Generate animated textures only using LivePortrait (SYNCHRONOUS)
         /// </summary>
-        public LivePortraitResult GenerateAnimatedTextures(Texture2D sourceImage, Texture2D[] drivingFrames, bool useComposite = false)
+        public LivePortaitStream GenerateAnimatedTexturesAsync(Texture2D sourceImage, Texture2D[] drivingFrames)
         {
             if (!_initialized)
                 throw new InvalidOperationException("API not initialized");
@@ -251,19 +270,12 @@ namespace MuseTalk.API
             var input = new LivePortraitInput
             {
                 SourceImage = sourceImage,
-                DrivingFrames = drivingFrames,
-                UseComposite = useComposite
+                DrivingFrames = drivingFrames
             };
-            
-            return _livePortrait.Generate(input);
-        }
 
-        /// <summary>
-        /// Generate talking head animation using the integrated LivePortrait + MuseTalk workflow (ASYNC - LEGACY)
-        /// </summary>
-        public async Task<LivePortraitMuseTalkResult> GenerateAsync(LivePortraitMuseTalkInput input)
-        {
-            return await Task.Run(() => Generate(input));
+            var stream = new LivePortaitStream();
+            _avatarController.StartCoroutine(_livePortrait.GenerateAsync(input, stream));
+            return stream;
         }
         
         /// <summary>
@@ -345,28 +357,28 @@ namespace MuseTalk.API
         /// <summary>
         /// Create an instance of the integrated API with default configuration
         /// </summary>
-        public static LivePortraitMuseTalkAPI Create(string modelPath = "MuseTalk")
+        public static LivePortraitMuseTalkAPI Create(AvatarController avatarController,string modelPath = "MuseTalk")
         {
             var config = new MuseTalkConfig(modelPath);
-            return new LivePortraitMuseTalkAPI(config);
+            return new LivePortraitMuseTalkAPI(config, avatarController);
         }
         
         /// <summary>
         /// Create an instance optimized for performance
         /// </summary>
-        public static LivePortraitMuseTalkAPI CreateOptimized(string modelPath = "MuseTalk")
+        public static LivePortraitMuseTalkAPI CreateOptimized(AvatarController avatarController, string modelPath = "MuseTalk")
         {
             var config = MuseTalkConfig.CreateOptimized(modelPath);
-            return new LivePortraitMuseTalkAPI(config);
+            return new LivePortraitMuseTalkAPI(config, avatarController);
         }
         
         /// <summary>
         /// Create an instance optimized for development/debugging
         /// </summary>
-        public static LivePortraitMuseTalkAPI CreateForDevelopment(string modelPath = "MuseTalk")
+        public static LivePortraitMuseTalkAPI CreateForDevelopment(AvatarController avatarController, string modelPath = "MuseTalk")
         {
             var config = MuseTalkConfig.CreateForDevelopment(modelPath);
-            return new LivePortraitMuseTalkAPI(config);
+            return new LivePortraitMuseTalkAPI(config, avatarController);
         }
     }
 }

@@ -138,64 +138,46 @@ namespace MuseTalk.Utils
         }
 
         /// <summary>
-        /// Resize texture to exact target dimensions (matching Python cv2.resize with LANCZOS4)
+        /// Resize RGB24 byte array to exact target dimensions (matching Python cv2.resize with LANCZOS4)
         /// OPTIMIZED: Uses unsafe pointers, parallelization, and optimized interpolation for maximum performance
         /// </summary>
-        public static unsafe Texture2D ResizeTextureToExactSize(Texture2D source, int targetWidth, int targetHeight, SamplingMode samplingMode = SamplingMode.Bilinear)
+        public static unsafe byte[] ResizeTextureToExactSize(byte[] sourceData, int sourceWidth, int sourceHeight, int targetWidth, int targetHeight, SamplingMode samplingMode = SamplingMode.Bilinear)
         {
-            if (source == null)
-                throw new ArgumentNullException(nameof(source));
+            if (sourceData == null)
+                throw new ArgumentNullException(nameof(sourceData));
                 
             if (targetWidth <= 0 || targetHeight <= 0)
                 throw new ArgumentException("Target dimensions must be positive");
                 
-            // If already the correct size, return optimized copy using unsafe pointers
-            if (source.width == targetWidth && source.height == targetHeight)
+            if (sourceWidth <= 0 || sourceHeight <= 0)
+                throw new ArgumentException("Source dimensions must be positive");
+                
+            // If already the correct size, return copy
+            if (sourceWidth == targetWidth && sourceHeight == targetHeight)
             {
-                var copy = new Texture2D(targetWidth, targetHeight, TextureFormat.RGB24, false);
-                var copySourcePixelData = source.GetPixelData<byte>(0);
-                var copyPixelData = copy.GetPixelData<byte>(0);
-                
-                // Fast memcpy for identical size copy
-                byte* copySourcePtr = (byte*)copySourcePixelData.GetUnsafeReadOnlyPtr();
-                byte* copyPtr = (byte*)copyPixelData.GetUnsafePtr();
-                UnsafeUtility.MemCpy(copyPtr, copySourcePtr, copySourcePixelData.Length);
-                
-                copy.Apply();
-                
+                var copy = new byte[sourceData.Length];
+                Array.Copy(sourceData, copy, sourceData.Length);
                 return copy;
             }
             
-            // Create target texture with RGB24 format for maximum efficiency
-            var resized = new Texture2D(targetWidth, targetHeight, TextureFormat.RGB24, false);
-            
-            // Get pixel data as byte arrays for direct memory access
-            var sourcePixelData = source.GetPixelData<byte>(0);
-            var targetPixelData = resized.GetPixelData<byte>(0);
-            
-            // Get unsafe pointers for direct memory operations
-            byte* sourcePtr = (byte*)sourcePixelData.GetUnsafeReadOnlyPtr();
-            byte* targetPtr = (byte*)targetPixelData.GetUnsafePtr();
+            // Create target byte array (RGB24 = 3 bytes per pixel)
+            var targetData = new byte[targetWidth * targetHeight * 3];
             
             // Pre-calculate scaling ratios for performance
-            float xRatio = (float)source.width / targetWidth;
-            float yRatio = (float)source.height / targetHeight;
+            float xRatio = (float)sourceWidth / targetWidth;
+            float yRatio = (float)sourceHeight / targetHeight;
             
-            int sourceWidth = source.width;
-            int sourceHeight = source.height;
-            
-            // OPTIMIZED: Maximum parallelism across all target pixels (targetWidth × targetHeight)
+            // OPTIMIZED: Maximum parallelism across all target pixels
             int totalPixels = targetWidth * targetHeight;
             
             if (samplingMode == SamplingMode.Point)
             {
                 // FASTEST: Point/Nearest neighbor sampling - ~3-5x faster than bilinear
-                // Perfect for face detection where speed > precision
                 System.Threading.Tasks.Parallel.For(0, totalPixels, pixelIndex =>
                 {
-                    // Calculate x, y coordinates from linear pixel index using optimized arithmetic
-                    int y = pixelIndex / targetWidth;  // Row index
-                    int x = pixelIndex % targetWidth;  // Column index
+                    // Calculate x, y coordinates from linear pixel index
+                    int y = pixelIndex / targetWidth;
+                    int x = pixelIndex % targetWidth;
                     
                     // Map target pixel to source coordinates and round to nearest
                     int srcX = Mathf.RoundToInt(x * xRatio);
@@ -205,24 +187,24 @@ namespace MuseTalk.Utils
                     srcX = Mathf.Clamp(srcX, 0, sourceWidth - 1);
                     srcY = Mathf.Clamp(srcY, 0, sourceHeight - 1);
                     
-                    // Calculate source and target pixel pointers using stride arithmetic
-                    byte* sourcePixelPtr = sourcePtr + (srcY * sourceWidth + srcX) * 3;
-                    byte* targetPixelPtr = targetPtr + (y * targetWidth + x) * 3;
+                    // Calculate source and target indices
+                    int sourceIdx = (srcY * sourceWidth + srcX) * 3;
+                    int targetIdx = (y * targetWidth + x) * 3;
                     
-                    // ULTRA-FAST: Direct 3-byte copy (RGB24)
-                    targetPixelPtr[0] = sourcePixelPtr[0]; // R
-                    targetPixelPtr[1] = sourcePixelPtr[1]; // G
-                    targetPixelPtr[2] = sourcePixelPtr[2]; // B
+                    // Direct 3-byte copy (RGB24)
+                    targetData[targetIdx] = sourceData[sourceIdx];         // R
+                    targetData[targetIdx + 1] = sourceData[sourceIdx + 1]; // G
+                    targetData[targetIdx + 2] = sourceData[sourceIdx + 2]; // B
                 });
             }
             else
             {
-                // HIGH-QUALITY: Bilinear interpolation (approximation of LANCZOS4) with stride-based coordinate calculation
+                // HIGH-QUALITY: Bilinear interpolation
                 System.Threading.Tasks.Parallel.For(0, totalPixels, pixelIndex =>
                 {
-                    // Calculate x, y coordinates from linear pixel index using optimized arithmetic
-                    int y = pixelIndex / targetWidth;  // Row index
-                    int x = pixelIndex % targetWidth;  // Column index
+                    // Calculate x, y coordinates from linear pixel index
+                    int y = pixelIndex / targetWidth;
+                    int x = pixelIndex % targetWidth;
                     
                     // Map target pixel to source coordinates
                     float srcX = x * xRatio;
@@ -239,41 +221,71 @@ namespace MuseTalk.Utils
                     float invFx = 1.0f - fx;
                     float invFy = 1.0f - fy;
                     
-                    // Calculate source pixel pointers for bilinear interpolation using stride arithmetic
-                    byte* c1Ptr = sourcePtr + (y1 * sourceWidth + x1) * 3; // Top-left
-                    byte* c2Ptr = sourcePtr + (y1 * sourceWidth + x2) * 3; // Top-right
-                    byte* c3Ptr = sourcePtr + (y2 * sourceWidth + x1) * 3; // Bottom-left
-                    byte* c4Ptr = sourcePtr + (y2 * sourceWidth + x2) * 3; // Bottom-right
+                    // Calculate source pixel indices for bilinear interpolation
+                    int c1Idx = (y1 * sourceWidth + x1) * 3; // Top-left
+                    int c2Idx = (y1 * sourceWidth + x2) * 3; // Top-right
+                    int c3Idx = (y2 * sourceWidth + x1) * 3; // Bottom-left
+                    int c4Idx = (y2 * sourceWidth + x2) * 3; // Bottom-right
                     
                     // Pre-calculate bilinear interpolation weights
-                    // Bilinear interpolation: result = c1*(1-fx)*(1-fy) + c2*fx*(1-fy) + c3*(1-fx)*fy + c4*fx*fy
                     float w1 = invFx * invFy; // Top-left weight
                     float w2 = fx * invFy;    // Top-right weight
                     float w3 = invFx * fy;    // Bottom-left weight
                     float w4 = fx * fy;       // Bottom-right weight
                     
-                    // Calculate target pixel pointer using stride arithmetic
-                    byte* targetPixelPtr = targetPtr + (y * targetWidth + x) * 3;
+                    // Calculate target pixel index
+                    int targetIdx = (y * targetWidth + x) * 3;
                     
                     // OPTIMIZED: Direct byte interpolation with unrolled RGB channels
                     // R channel
-                    float r = c1Ptr[0] * w1 + c2Ptr[0] * w2 + c3Ptr[0] * w3 + c4Ptr[0] * w4;
-                    targetPixelPtr[0] = (byte)Mathf.Clamp(r, 0f, 255f);
+                    float r = sourceData[c1Idx] * w1 + sourceData[c2Idx] * w2 + sourceData[c3Idx] * w3 + sourceData[c4Idx] * w4;
+                    targetData[targetIdx] = (byte)Mathf.Clamp(r, 0f, 255f);
                     
                     // G channel
-                    float g = c1Ptr[1] * w1 + c2Ptr[1] * w2 + c3Ptr[1] * w3 + c4Ptr[1] * w4;
-                    targetPixelPtr[1] = (byte)Mathf.Clamp(g, 0f, 255f);
+                    float g = sourceData[c1Idx + 1] * w1 + sourceData[c2Idx + 1] * w2 + sourceData[c3Idx + 1] * w3 + sourceData[c4Idx + 1] * w4;
+                    targetData[targetIdx + 1] = (byte)Mathf.Clamp(g, 0f, 255f);
                     
                     // B channel
-                    float b = c1Ptr[2] * w1 + c2Ptr[2] * w2 + c3Ptr[2] * w3 + c4Ptr[2] * w4;
-                    targetPixelPtr[2] = (byte)Mathf.Clamp(b, 0f, 255f);
+                    float b = sourceData[c1Idx + 2] * w1 + sourceData[c2Idx + 2] * w2 + sourceData[c3Idx + 2] * w3 + sourceData[c4Idx + 2] * w4;
+                    targetData[targetIdx + 2] = (byte)Mathf.Clamp(b, 0f, 255f);
                 });
             }
             
-            // Apply changes to texture (no need for SetPixels since we wrote directly to pixel data)
-            resized.Apply();
+            return targetData;
+        }
+        
+        /// <summary>
+        /// Resize texture to exact target dimensions (matching Python cv2.resize with LANCZOS4)
+        /// OPTIMIZED: Uses the byte array overload internally to eliminate code duplication
+        /// </summary>
+        public static unsafe Texture2D ResizeTextureToExactSize(Texture2D source, int targetWidth, int targetHeight, SamplingMode samplingMode = SamplingMode.Bilinear)
+        {
+            if (source == null)
+                throw new ArgumentNullException(nameof(source));
+                
+            if (targetWidth <= 0 || targetHeight <= 0)
+                throw new ArgumentException("Target dimensions must be positive");
             
-            return resized;
+            // Convert source texture to byte array (assumes RGB24 format)
+            var sourcePixelData = source.GetPixelData<byte>(0);
+            var sourceBytes = new byte[sourcePixelData.Length];
+            sourcePixelData.CopyTo(sourceBytes);
+            
+            // Use the byte array resize method (contains the actual resize logic)
+            var resizedBytes = ResizeTextureToExactSize(sourceBytes, source.width, source.height, targetWidth, targetHeight, samplingMode);
+            
+            // Convert result back to texture
+            var resizedTexture = new Texture2D(targetWidth, targetHeight, TextureFormat.RGB24, false);
+            var resizedPixelData = resizedTexture.GetPixelData<byte>(0);
+            
+            // Copy resized bytes to texture
+            for (int i = 0; i < resizedBytes.Length; i++)
+            {
+                resizedPixelData[i] = resizedBytes[i];
+            }
+            
+            resizedTexture.Apply();
+            return resizedTexture;
         }
         
         /// <summary>
@@ -608,6 +620,87 @@ namespace MuseTalk.Utils
                 Debug.LogError($"[TextureUtils] Gaussian blur failed: {e.Message}");
                 return null;
             }
+        }
+
+        public static Texture2D ConvertTexture2DToRGB24(Texture2D texture)
+        {
+            if (texture.format != TextureFormat.RGB24)
+            {
+                var convertedTexture = new Texture2D(texture.width, texture.height, TextureFormat.RGB24, false)
+                {
+                    name = texture.name
+                };
+                convertedTexture.SetPixels(texture.GetPixels());
+                convertedTexture.Apply();
+                return convertedTexture;
+            }
+            return texture;
+        }
+
+        /// <summary>
+        /// Convert Texture2D to byte array (RGB24 format)
+        /// </summary>
+        public static unsafe (byte[], int, int) Texture2DToBytes(Texture2D img)
+        {
+            int h = img.height;
+            int w = img.width;
+            int rowBytes = w * 3; // RGB24 = 3 bytes per pixel
+            
+            // Get initial image data directly from texture (assumes RGB24 format)
+            var pixelData = img.GetPixelData<byte>(0);
+            var imageData = new byte[pixelData.Length];
+            
+            byte* srcPtr = (byte*)pixelData.GetUnsafeReadOnlyPtr();
+            
+            fixed (byte* dstPtr = imageData)
+            {
+                byte* srcPtrLocal = srcPtr;
+                byte* dstPtrLocal = dstPtr;
+                
+                System.Threading.Tasks.Parallel.For(0, h, y =>
+                {
+                    byte* srcRowPtr = srcPtrLocal + (h - 1 - y) * rowBytes; // Source row (flipped)
+                    byte* dstRowPtr = dstPtrLocal + y * rowBytes;            // Destination row
+                    Buffer.MemoryCopy(srcRowPtr, dstRowPtr, rowBytes, rowBytes);
+                });
+            }
+
+            return (imageData, w, h);
+        }
+        
+        /// <summary>
+        /// Convert RGB24 byte array back to Texture2D using unsafe pointers and parallelization
+        /// </summary>
+        public static unsafe Texture2D BytesToTexture2D(byte[] imageData, int width, int height)
+        {
+            var texture = new Texture2D(width, height, TextureFormat.RGB24, false);
+            
+            var pixelData = texture.GetPixelData<byte>(0);
+            byte* texturePtr = (byte*)pixelData.GetUnsafePtr();
+            
+            // OPTIMIZED: Process with unsafe pointers and parallelization
+            fixed (byte* imagePtrFixed = imageData)
+            {
+                // Capture pointer in local variable to avoid lambda closure issues
+                byte* imagePtrLocal = imagePtrFixed;
+                
+                System.Threading.Tasks.Parallel.For(0, height, y =>
+                {
+                    // Calculate Unity texture coordinate (bottom-left origin) from image coordinate (top-left origin)
+                    int unityY = height - 1 - y; // Flip Y coordinate for Unity coordinate system
+                    
+                    // Calculate row pointers using direct pointer arithmetic
+                    byte* srcRowPtr = imagePtrLocal + y * width * 3;        // Source row (top-left origin)
+                    byte* dstRowPtr = texturePtr + unityY * width * 3;      // Destination row (bottom-left origin)
+                    
+                    int rowBytes = width * 3; // RGB24 = 3 bytes per pixel
+                    Buffer.MemoryCopy(srcRowPtr, dstRowPtr, rowBytes, rowBytes);
+                });
+            }
+            
+            // Apply changes to texture (no need for SetPixels since we wrote directly to pixel data)
+            texture.Apply();
+            return texture;
         }
         
         /// <summary>
