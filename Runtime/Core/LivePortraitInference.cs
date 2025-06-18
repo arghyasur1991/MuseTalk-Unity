@@ -26,21 +26,6 @@ namespace MuseTalk.Core
     }
 
     /// <summary>
-    /// LivePortrait inference result
-    /// </summary>
-    public class LivePortraitResult
-    {
-        public bool Success { get; set; }
-        public List<Texture2D> GeneratedFrames { get; set; }
-        public string ErrorMessage { get; set; }
-        
-        public LivePortraitResult()
-        {
-            GeneratedFrames = new List<Texture2D>();
-        }
-    }
-
-    /// <summary>
     /// LivePortrait input configuration
     /// </summary>
     public class LivePortraitInput
