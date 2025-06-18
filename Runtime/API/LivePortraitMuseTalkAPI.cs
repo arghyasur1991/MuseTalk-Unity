@@ -178,7 +178,7 @@ namespace MuseTalk.API
                 _initialized = false;
             }
         }
-        
+
         /// <summary>
         /// Generate animated textures only using LivePortrait (SYNCHRONOUS)
         /// </summary>
@@ -201,20 +201,6 @@ namespace MuseTalk.API
             var stream = new LivePortaitStream();
             _avatarController.StartCoroutine(_livePortrait.GenerateAsync(input, stream));
             return stream;
-        }
-        
-        /// <summary>
-        /// Create a video sequence from generated frames
-        /// Note: This would require additional video encoding functionality
-        /// Returns the frame count for now since Unity doesn't have built-in VideoClip creation
-        /// </summary>
-        public int CreateVideoSequence(List<Texture2D> frames, float frameRate = 25f, AudioClip audioClip = null)
-        {
-            // This would require implementing video encoding in Unity
-            // For now, just log the request and return frame count
-            Logger.Log($"[LivePortraitMuseTalkAPI] Video creation requested: {frames.Count} frames at {frameRate} FPS");
-            Logger.LogWarning("[LivePortraitMuseTalkAPI] Video creation not yet implemented - frames are available as Texture2D list");
-            return frames.Count;
         }
         
         /// <summary>
