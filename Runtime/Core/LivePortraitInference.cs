@@ -287,7 +287,7 @@ namespace MuseTalk.Core
             var maxFrames = 0;
 
             // For debugging, only generate 1 frame - matches Python: if frame_id > 0: break
-            for (int frameId = maxFrames; frameId < Mathf.Min(maxFrames + 50, input.DrivingFrames.Length); frameId++)
+            for (int frameId = maxFrames; frameId < Mathf.Min(maxFrames + 25, input.DrivingFrames.Length); frameId++)
             {
                 // Python: img_rgb = frame[:, :, ::-1]  # BGR -> RGB (Unity input is already RGB)
                 var imgRgb = input.DrivingFrames[frameId];
@@ -301,7 +301,7 @@ namespace MuseTalk.Core
                 {
                     stream.queue.Enqueue(_debugImage);
                 }
-                if (generatedImg != null)
+                else if (generatedImg != null)
                 {
                     var generatedImgTexture = TextureUtils.BytesToTexture2D(generatedImg, processResult.SrcImgWidth, processResult.SrcImgHeight);
                     Debug.Log($"[LivePortraitInference] Frame {frameId} generated");
