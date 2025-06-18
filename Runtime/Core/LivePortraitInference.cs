@@ -7,7 +7,6 @@ using UnityEngine;
 using Microsoft.ML.OnnxRuntime;
 using Microsoft.ML.OnnxRuntime.Tensors;
 using System.Diagnostics;
-using Unity.Collections.LowLevel.Unsafe;
 
 namespace MuseTalk.Core
 {
