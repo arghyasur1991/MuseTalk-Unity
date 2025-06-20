@@ -215,12 +215,11 @@ namespace MuseTalk.Utils
         
         private unsafe (byte[], int, int) PostProcessParsingResult(int[,] parsingMap, string mode, int targetWidth, int targetHeight)
         {
-            // Create mask texture with RGB24 format for maximum efficiency
-            var maskTexture = new Texture2D(512, 512, TextureFormat.RGB24, false);
-            var maskPixelData = maskTexture.GetPixelData<byte>(0);
-            
-            // Get unsafe pointer for direct memory operations
-            byte* maskPtr = (byte*)maskPixelData.GetUnsafePtr();
+            // Create mask data directly as byte array (RGB24: 3 bytes per pixel)
+            const int maskWidth = 512;
+            const int maskHeight = 512;
+            int totalBytes = maskWidth * maskHeight * 3;
+            var maskData = new byte[totalBytes];
             
             // Pre-calculate class IDs for each mode to avoid string comparison in hot path
             bool* classLookup = stackalloc bool[19]; // 19 face parsing classes
@@ -255,37 +254,34 @@ namespace MuseTalk.Utils
             // OPTIMIZED: Maximum parallelism across all 512×512 pixels (262,144-way parallelism)
             // Apply mode-specific processing with stride-based coordinate calculation
             const int imageSize = 512 * 512;
-            System.Threading.Tasks.Parallel.For(0, imageSize, pixelIndex =>
+            
+            fixed (byte* maskPtrFixed = maskData)
             {
-                // Calculate x, y coordinates from linear pixel index using bit operations
-                int y = pixelIndex >> 9;  // Divide by 512 (right shift 9 bits: 2^9 = 512)
-                int x = pixelIndex & 511; // Modulo 512 (bitwise AND with 511: 2^9-1 = 511)
+                // Capture pointer in local variable to avoid lambda closure issues
+                byte* maskPtrLocal = maskPtrFixed;
                 
-                // Get class ID from parsing map
-                int classId = parsingMap[y, x];
-                
-                // Fast lookup using pre-calculated boolean array (no switch statement)
-                bool isForeground = classId < 19 && classLookup[classId];
-                
-                // CRITICAL: Flip Y coordinate for Unity's bottom-left origin texture
-                int unityY = 511 - y; // Convert from top-left to bottom-left
-                
-                // Calculate target pixel pointer using stride arithmetic
-                byte* pixelPtr = maskPtr + ((unityY << 9) + x) * 3; // (unityY * 512 + x) * 3 for RGB24
-                
-                // Set mask value directly in memory (RGB24: all channels same for grayscale)
-                byte maskValue = isForeground ? (byte)255 : (byte)0;
-                pixelPtr[0] = maskValue; // R
-                pixelPtr[1] = maskValue; // G  
-                pixelPtr[2] = maskValue; // B
-            });
-            
-            // Apply changes to texture (no need for SetPixels since we wrote directly to pixel data)
-            maskTexture.Apply();
-            
-            // Convert to byte array
-            var (maskData, maskWidth, maskHeight) = TextureUtils.Texture2DToBytes(maskTexture);
-            UnityEngine.Object.Destroy(maskTexture);
+                System.Threading.Tasks.Parallel.For(0, imageSize, pixelIndex =>
+                {
+                    // Calculate x, y coordinates from linear pixel index using bit operations
+                    int y = pixelIndex >> 9;  // Divide by 512 (right shift 9 bits: 2^9 = 512)
+                    int x = pixelIndex & 511; // Modulo 512 (bitwise AND with 511: 2^9-1 = 511)
+                    
+                    // Get class ID from parsing map
+                    int classId = parsingMap[y, x];
+                    
+                    // Fast lookup using pre-calculated boolean array (no switch statement)
+                    bool isForeground = classId < 19 && classLookup[classId];
+                    
+                    // Calculate target pixel pointer using stride arithmetic (no Y-flipping needed for byte arrays)
+                    byte* pixelPtr = maskPtrLocal + ((y << 9) + x) * 3; // (y * 512 + x) * 3 for RGB24
+                    
+                    // Set mask value directly in memory (RGB24: all channels same for grayscale)
+                    byte maskValue = isForeground ? (byte)255 : (byte)0;
+                    pixelPtr[0] = maskValue; // R
+                    pixelPtr[1] = maskValue; // G  
+                    pixelPtr[2] = maskValue; // B
+                });
+            }
             
             // Resize to target dimensions if needed using optimized resize
             if (targetWidth != 512 || targetHeight != 512)
