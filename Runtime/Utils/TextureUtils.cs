@@ -510,53 +510,6 @@ namespace MuseTalk.Utils
             return (pixelData, width, height);
         }
         
-        /// <summary>
-        /// Unsafe optimized Gaussian blur implementation for textures
-        /// UNSAFE OPTIMIZED: Uses direct pointer arithmetic for maximum performance
-        /// </summary>
-        public static unsafe Texture2D ApplySimpleGaussianBlur(Texture2D input, int kernelSize)
-        {
-            if (input == null)
-            {
-                Debug.LogError("[TextureUtils] Input texture is null for Gaussian blur");
-                return null;
-            }
-            
-            try
-            {
-                int width = input.width;
-                int height = input.height;
-                
-                if (width <= 0 || height <= 0)
-                {
-                    Debug.LogError($"[TextureUtils] Invalid texture dimensions: {width}x{height}");
-                    return null;
-                }
-                
-                // Get input pixel data
-                var inputPixelData = input.GetPixelData<byte>(0);
-                byte* inputPtr = (byte*)inputPixelData.GetUnsafeReadOnlyPtr();
-                
-                // Create output texture and get its pixel data
-                var result = new Texture2D(width, height, TextureFormat.RGB24, false);
-                var resultPixelData = result.GetPixelData<byte>(0);
-                byte* resultPtr = (byte*)resultPixelData.GetUnsafePtr();
-                
-                // Use the pointer-based implementation
-                ApplySimpleGaussianBlur(inputPtr, resultPtr, width, height, kernelSize);
-                
-                // Apply changes to texture
-                result.Apply();
-                
-                return result;
-            }
-            catch (Exception e)
-            {
-                Debug.LogError($"[TextureUtils] Gaussian blur failed: {e.Message}");
-                return null;
-            }
-        }
-
         public static Texture2D ConvertTexture2DToRGB24(Texture2D texture)
         {
             if (texture.format != TextureFormat.RGB24)
@@ -639,19 +592,45 @@ namespace MuseTalk.Utils
         }
 
         /// <summary>
-        /// Unsafe optimized dilation operation using direct byte pointer access
-        /// OPTIMIZED: Uses parallelization and direct memory operations for maximum performance
+        /// Morphological operation type for consolidated morphology function
         /// </summary>
-        public static unsafe void ApplyDilationUnsafe(byte* inputPtr, byte* outputPtr, int width, int height, int kernelSize)
+        public enum MorphologyOperation
+        {
+            /// <summary>
+            /// Dilation - expands bright regions (finds maximum in kernel neighborhood)
+            /// </summary>
+            Dilation,
+            /// <summary>
+            /// Erosion - shrinks bright regions (finds minimum in kernel neighborhood)
+            /// </summary>
+            Erosion
+        }
+
+        /// <summary>
+        /// Unsafe optimized morphological operation using direct byte pointer access
+        /// OPTIMIZED: Uses parallelization and direct memory operations for maximum performance
+        /// Consolidates dilation and erosion into a single optimized function
+        /// </summary>
+        /// <param name="inputPtr">Input image pointer</param>
+        /// <param name="outputPtr">Output image pointer</param>
+        /// <param name="width">Image width</param>
+        /// <param name="height">Image height</param>
+        /// <param name="kernelSize">Kernel size (odd number)</param>
+        /// <param name="operation">Morphological operation type</param>
+        public static unsafe void ApplyMorphologyUnsafe(byte* inputPtr, byte* outputPtr, int width, int height, int kernelSize, MorphologyOperation operation)
         {
             int radius = kernelSize / 2;
+            
+            // Pre-calculate operation-specific values for performance
+            byte initialValue = operation == MorphologyOperation.Dilation ? (byte)0 : (byte)255;
+            bool isDilation = operation == MorphologyOperation.Dilation;
             
             // Parallel processing for maximum performance
             System.Threading.Tasks.Parallel.For(0, height, y =>
             {
                 for (int x = 0; x < width; x++)
                 {
-                    byte maxValue = 0;
+                    byte resultValue = initialValue;
                     
                     // Check kernel neighborhood
                     for (int ky = -radius; ky <= radius; ky++)
@@ -663,55 +642,45 @@ namespace MuseTalk.Utils
                             
                             // Get pixel pointer and use red channel as grayscale value
                             byte* samplePixel = inputPtr + (ny * width + nx) * 3;
-                            maxValue = (byte)Mathf.Max(maxValue, samplePixel[0]); // Use red channel
+                            byte sampleValue = samplePixel[0]; // Use red channel
+                            
+                            // Apply operation-specific logic
+                            if (isDilation)
+                            {
+                                resultValue = (byte)Mathf.Max(resultValue, sampleValue);
+                            }
+                            else
+                            {
+                                resultValue = (byte)Mathf.Min(resultValue, sampleValue);
+                            }
                         }
                     }
                     
                     // Set output pixel (RGB24: all channels same for grayscale)
                     byte* outputPixel = outputPtr + (y * width + x) * 3;
-                    outputPixel[0] = maxValue; // R
-                    outputPixel[1] = maxValue; // G
-                    outputPixel[2] = maxValue; // B
+                    outputPixel[0] = resultValue; // R
+                    outputPixel[1] = resultValue; // G
+                    outputPixel[2] = resultValue; // B
                 }
             });
         }
         
         /// <summary>
+        /// Unsafe optimized dilation operation using direct byte pointer access
+        /// OPTIMIZED: Wrapper around consolidated ApplyMorphologyUnsafe for backward compatibility
+        /// </summary>
+        public static unsafe void ApplyDilationUnsafe(byte* inputPtr, byte* outputPtr, int width, int height, int kernelSize)
+        {
+            ApplyMorphologyUnsafe(inputPtr, outputPtr, width, height, kernelSize, MorphologyOperation.Dilation);
+        }
+        
+        /// <summary>
         /// Unsafe optimized erosion operation using direct byte pointer access
-        /// OPTIMIZED: Uses parallelization and direct memory operations for maximum performance
+        /// OPTIMIZED: Wrapper around consolidated ApplyMorphologyUnsafe for backward compatibility
         /// </summary>
         public static unsafe void ApplyErosionUnsafe(byte* inputPtr, byte* outputPtr, int width, int height, int kernelSize)
         {
-            int radius = kernelSize / 2;
-            
-            // Parallel processing for maximum performance
-            System.Threading.Tasks.Parallel.For(0, height, y =>
-            {
-                for (int x = 0; x < width; x++)
-                {
-                    byte minValue = 255;
-                    
-                    // Check kernel neighborhood
-                    for (int ky = -radius; ky <= radius; ky++)
-                    {
-                        for (int kx = -radius; kx <= radius; kx++)
-                        {
-                            int ny = Mathf.Clamp(y + ky, 0, height - 1);
-                            int nx = Mathf.Clamp(x + kx, 0, width - 1);
-                            
-                            // Get pixel pointer and use red channel as grayscale value
-                            byte* samplePixel = inputPtr + (ny * width + nx) * 3;
-                            minValue = (byte)Mathf.Min(minValue, samplePixel[0]); // Use red channel
-                        }
-                    }
-                    
-                    // Set output pixel (RGB24: all channels same for grayscale)
-                    byte* outputPixel = outputPtr + (y * width + x) * 3;
-                    outputPixel[0] = minValue; // R
-                    outputPixel[1] = minValue; // G
-                    outputPixel[2] = minValue; // B
-                }
-            });
+            ApplyMorphologyUnsafe(inputPtr, outputPtr, width, height, kernelSize, MorphologyOperation.Erosion);
         }
         
         /// <summary>
