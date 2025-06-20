@@ -321,8 +321,8 @@ namespace MuseTalk.Utils
                 fixed (byte* inputPtr = maskData)
                 {
                     // Apply morphological operations using unsafe pointers
-                    ApplyDilationUnsafe(inputPtr, dilatedPtr, width, height, 3);
-                    ApplyErosionUnsafe(dilatedPtr, erodedPtr, width, height, 2);
+                    TextureUtils.ApplyDilationUnsafe(inputPtr, dilatedPtr, width, height, 3);
+                    TextureUtils.ApplyErosionUnsafe(dilatedPtr, erodedPtr, width, height, 2);
                     
                     // Apply optimized Gaussian blur
                     float sigma = 1.0f;
@@ -349,83 +349,7 @@ namespace MuseTalk.Utils
                 UnsafeUtility.Free(blurredPtr, Unity.Collections.Allocator.Temp);
             }
         }
-        
-        /// <summary>
-        /// Unsafe optimized dilation operation using direct byte pointer access
-        /// OPTIMIZED: Uses parallelization and direct memory operations for maximum performance
-        /// </summary>
-        private static unsafe void ApplyDilationUnsafe(byte* inputPtr, byte* outputPtr, int width, int height, int kernelSize)
-        {
-            int radius = kernelSize / 2;
-            
-            // Parallel processing for maximum performance
-            System.Threading.Tasks.Parallel.For(0, height, y =>
-            {
-                for (int x = 0; x < width; x++)
-                {
-                    byte maxValue = 0;
-                    
-                    // Check kernel neighborhood
-                    for (int ky = -radius; ky <= radius; ky++)
-                    {
-                        for (int kx = -radius; kx <= radius; kx++)
-                        {
-                            int ny = Mathf.Clamp(y + ky, 0, height - 1);
-                            int nx = Mathf.Clamp(x + kx, 0, width - 1);
-                            
-                            // Get pixel pointer and use red channel as grayscale value
-                            byte* samplePixel = inputPtr + (ny * width + nx) * 3;
-                            maxValue = (byte)Mathf.Max(maxValue, samplePixel[0]); // Use red channel
-                        }
-                    }
-                    
-                    // Set output pixel (RGB24: all channels same for grayscale)
-                    byte* outputPixel = outputPtr + (y * width + x) * 3;
-                    outputPixel[0] = maxValue; // R
-                    outputPixel[1] = maxValue; // G
-                    outputPixel[2] = maxValue; // B
-                }
-            });
-        }
-        
-        /// <summary>
-        /// Unsafe optimized erosion operation using direct byte pointer access
-        /// OPTIMIZED: Uses parallelization and direct memory operations for maximum performance
-        /// </summary>
-        private static unsafe void ApplyErosionUnsafe(byte* inputPtr, byte* outputPtr, int width, int height, int kernelSize)
-        {
-            int radius = kernelSize / 2;
-            
-            // Parallel processing for maximum performance
-            System.Threading.Tasks.Parallel.For(0, height, y =>
-            {
-                for (int x = 0; x < width; x++)
-                {
-                    byte minValue = 255;
-                    
-                    // Check kernel neighborhood
-                    for (int ky = -radius; ky <= radius; ky++)
-                    {
-                        for (int kx = -radius; kx <= radius; kx++)
-                        {
-                            int ny = Mathf.Clamp(y + ky, 0, height - 1);
-                            int nx = Mathf.Clamp(x + kx, 0, width - 1);
-                            
-                            // Get pixel pointer and use red channel as grayscale value
-                            byte* samplePixel = inputPtr + (ny * width + nx) * 3;
-                            minValue = (byte)Mathf.Min(minValue, samplePixel[0]); // Use red channel
-                        }
-                    }
-                    
-                    // Set output pixel (RGB24: all channels same for grayscale)
-                    byte* outputPixel = outputPtr + (y * width + x) * 3;
-                    outputPixel[0] = minValue; // R
-                    outputPixel[1] = minValue; // G
-                    outputPixel[2] = minValue; // B
-                }
-            });
-        }
-        
+
         public void Dispose()
         {
             if (!_disposed)
