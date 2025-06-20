@@ -6,7 +6,6 @@ using System.Threading.Tasks;
 using UnityEngine;
 using Microsoft.ML.OnnxRuntime;
 using Microsoft.ML.OnnxRuntime.Tensors;
-using System.Diagnostics;
 
 namespace MuseTalk.Core
 {
@@ -183,55 +182,30 @@ namespace MuseTalk.Core
         public async Task<ProcessSourceImageResult> ProcessSourceImageAsync(byte[] srcImg, int srcWidth, int srcHeight)
         {
             return await Task.Run(() => {
-                var start = Stopwatch.StartNew();
                 var (srcImgData, srcImgWidth, srcImgHeight) = SrcPreprocess(srcImg, srcWidth, srcHeight);
-                var srcImgElapsed = start.ElapsedMilliseconds;
-                Debug.Log($"[LivePortraitInference] SrcPreprocess took {srcImgElapsed}ms");
                 
                 // Python: crop_info = crop_src_image(self.models, src_img)
                 var cropInfo = CropSrcImage(srcImgData, srcImgWidth, srcImgHeight);
 
-                var cropInfoElapsed = start.ElapsedMilliseconds;
-                Debug.Log($"[LivePortraitInference] CropSrcImage took {cropInfoElapsed - srcImgElapsed}ms");
-
-
-                var start2 = Stopwatch.StartNew();
                 // Python: img_crop_256x256 = crop_info["img_crop_256x256"]
                 // Python: I_s = preprocess(img_crop_256x256)
                 var Is = Preprocess(cropInfo.ImageCrop256x256, 256, 256);
-                var elapsed2 = start2.ElapsedMilliseconds;
-                Debug.Log($"[LivePortraitInference] Preprocess took {elapsed2}ms");
                 
                 // Python: x_s_info = get_kp_info(self.models, I_s)
-                var start3 = Stopwatch.StartNew();
                 var xSInfo = GetKpInfo(Is);
-                var elapsed3 = start3.ElapsedMilliseconds;
-                Debug.Log($"[LivePortraitInference] GetKpInfo took {elapsed3}ms");
                 
                 // Python: R_s = get_rotation_matrix(x_s_info["pitch"], x_s_info["yaw"], x_s_info["roll"])
-                var start4 = Stopwatch.StartNew();
                 var Rs = GetRotationMatrix(xSInfo.Pitch, xSInfo.Yaw, xSInfo.Roll);
-                var elapsed4 = start4.ElapsedMilliseconds;
-                Debug.Log($"[LivePortraitInference] GetRotationMatrix took {elapsed4}ms");
                 
                 // Python: f_s = extract_feature_3d(self.models, I_s)
-                var start5 = Stopwatch.StartNew();
                 var fs = ExtractFeature3d(Is);
-                var elapsed5 = start5.ElapsedMilliseconds;
-                Debug.Log($"[LivePortraitInference] ExtractFeature3d took {elapsed5}ms");
                 
                 // Python: x_s = transform_keypoint(x_s_info)
-                var start6 = Stopwatch.StartNew();
                 var xs = TransformKeypoint(xSInfo);
-                var elapsed6 = start6.ElapsedMilliseconds;
-                Debug.Log($"[LivePortraitInference] TransformKeypoint took {elapsed6}ms");
                 
                 // Python: prepare for pasteback
                 // Python: mask_ori = prepare_paste_back(self.mask_crop, crop_info["M_c2o"], dsize=(src_img.shape[1], src_img.shape[0]))
-                var start7 = Stopwatch.StartNew();
                 var maskOri = PreparePasteBack(cropInfo.Transform, srcImgWidth, srcImgHeight);
-                var elapsed7 = start7.ElapsedMilliseconds;
-                Debug.Log($"[LivePortraitInference] PreparePasteBack took {elapsed7}ms");
 
                 return new ProcessSourceImageResult
                 {
@@ -388,12 +362,9 @@ namespace MuseTalk.Core
         /// </summary>
         private CropInfo CropSrcImage(byte[] img, int width, int height)
         {
-            var start = System.Diagnostics.Stopwatch.StartNew();
             // Python: face_analysis = models["face_analysis"]
             // Python: src_face = face_analysis(img)
             var srcFaces = FaceAnalysis(img, width, height);
-            var elapsed = start.ElapsedMilliseconds;
-            Debug.Log($"[LivePortraitInference] Face analysis took {elapsed}ms");
             
             // Python: if len(src_face) == 0: print("No face detected in the source image."); return None
             if (srcFaces.Count == 0)
@@ -417,9 +388,6 @@ namespace MuseTalk.Core
             var cropSize = 512;
             var cropInfo = CropImage(img, width, height, lmk, cropSize, 2.3f, -0.125f);
 
-            var elapsed2 = start.ElapsedMilliseconds;
-            Debug.Log($"[LivePortraitInference] Crop image took {elapsed2 - elapsed}ms");
-            
             // Python: lmk = landmark_runner(models, img, lmk)
             lmk = LandmarkRunner(img, width, height, lmk);
             
@@ -468,7 +436,6 @@ namespace MuseTalk.Core
             float detScale = (float)newHeight / pythonHeight;
             
             // Python: resized_img = cv2.resize(img, (new_width, new_height))
-            var start = System.Diagnostics.Stopwatch.StartNew();
             var resizedImg = TextureUtils.ResizeTextureToExactSize(img, width, height, newWidth, newHeight, TextureUtils.SamplingMode.Bilinear);
             // Python: det_img = np.zeros((input_size, input_size, 3), dtype=np.uint8)
             // Python: det_img[:new_height, :new_width, :] = resized_img
@@ -509,39 +476,25 @@ namespace MuseTalk.Core
             // Python: det_img = np.expand_dims(det_img, axis=0)
             // Python: det_img = det_img.astype(np.float32)
             var inputTensor = PreprocessDetectionImage(detImg, inputSize);
-            var elapsed = start.ElapsedMilliseconds;
-            Debug.Log($"[LivePortraitInference] Resize image took {elapsed}ms");
             
             // Python: output = det_face.run(None, {"input.1": det_img})
             // Use the actual input name from the model metadata
-            string inputName = _detFace.InputMetadata.Keys.First();
-            
-            var inputs = new List<NamedOnnxValue>
+            var inputs = new List<Tensor<float>>
             {
-                NamedOnnxValue.CreateFromTensor(inputName, inputTensor)
+                inputTensor
             };
-            
-            var start2 = System.Diagnostics.Stopwatch.StartNew();
-            using var results = _detFace.Run(inputs);
-            var elapsed2 = start2.ElapsedMilliseconds;
-            Debug.Log($"[LivePortraitInference] Det face took {elapsed2}ms");
-            
+
+            var results = ModelUtils.RunModel("det_face", _detFace, inputs);
             var outputs = results.ToArray();
             
-            var start3 = System.Diagnostics.Stopwatch.StartNew();
             // Process detection results exactly as in Python
             var faces = ProcessDetectionResults(outputs, detScale);
-            var elapsed3 = start3.ElapsedMilliseconds;
-            Debug.Log($"[LivePortraitInference] Process detection results took {elapsed3}ms");
             
             // Get landmarks for each face
             var finalFaces = new List<FaceDetectionResult>();
             foreach (var face in faces)
             {
-                var start4 = System.Diagnostics.Stopwatch.StartNew();
                 var landmarks = GetLandmark(img, width, height, face);
-                var elapsed4 = start4.ElapsedMilliseconds;
-                Debug.Log($"[LivePortraitInference] Get landmark took {elapsed4}ms");
                 face.Landmarks106 = landmarks;
                 finalFaces.Add(face);
             }
@@ -597,15 +550,12 @@ namespace MuseTalk.Core
             var inputTensor = PreprocessLandmarkImage(alignedImg, inputSize);
             
             // Python: output = landmark.run(None, {"data": aimg})
-            var inputs = new List<NamedOnnxValue>
+            var inputs = new List<Tensor<float>>
             {
-                NamedOnnxValue.CreateFromTensor("data", inputTensor)
+                inputTensor
             };
             
-            var start2 = System.Diagnostics.Stopwatch.StartNew();
-            using var results = _landmark2d106.Run(inputs);
-            var elapsed2 = start2.ElapsedMilliseconds;
-            Debug.Log($"[LivePortraitInference] Landmark 2d 106 took {elapsed2}ms");
+            var results = ModelUtils.RunModel("landmark2d106", _landmark2d106, inputs);
             var output = results.First().AsTensor<float>().ToArray();
             
             // Python: pred = output[0][0]
@@ -652,15 +602,12 @@ namespace MuseTalk.Core
             
             // Python: net = models["landmark_runner"]
             // Python: output = net.run(None, {"input": img_crop})
-            var inputs = new List<NamedOnnxValue>
+            var inputs = new List<Tensor<float>>
             {
-                NamedOnnxValue.CreateFromTensor("input", inputTensor)
+                inputTensor
             };
             
-            var start = Stopwatch.StartNew();
-            using var results = _landmarkRunner.Run(inputs);
-            var elapsed = start.ElapsedMilliseconds;
-            Debug.Log($"[LivePortraitInference] LandmarkRunner model took {elapsed}ms");
+            var results = ModelUtils.RunModel("landmark_runner", _landmarkRunner, inputs);
             var outputs = results.ToArray();
             
             // Python: out_pts = output[2]
@@ -711,17 +658,13 @@ namespace MuseTalk.Core
             // Python: net = models["motion_extractor"]
             // Python: output = net.run(None, {"img": x})
             // Use the actual input name from the model metadata
-            string inputName = _motionExtractor.InputMetadata.Keys.First();
             
-            var inputs = new List<NamedOnnxValue>
+            var inputs = new List<Tensor<float>>
             {
-                NamedOnnxValue.CreateFromTensor(inputName, preprocessedData)
+                preprocessedData
             };
             
-            var start = Stopwatch.StartNew();
-            using var results = _motionExtractor.Run(inputs);
-            var elapsed = start.ElapsedMilliseconds;
-            Debug.Log($"[LivePortraitInference] MotionExtractor took {elapsed}ms");
+            var results = ModelUtils.RunModel("motion_extractor", _motionExtractor, inputs);
             
             // OPTIMIZED: Work with tensors directly, avoiding ToArray() calls until the final step
             var pitchTensor = results[1].AsTensor<float>();
@@ -866,18 +809,13 @@ namespace MuseTalk.Core
             // Python: net = models["appearance_feature_extractor"]
             // Python: output = net.run(None, {"img": x})
             // Use the actual input name from the model metadata
-            string inputName = _appearanceFeatureExtractor.InputMetadata.Keys.First();
             
-            var inputs = new List<NamedOnnxValue>
+            var inputs = new List<Tensor<float>>
             {
-                NamedOnnxValue.CreateFromTensor(inputName, inputTensor)
+                inputTensor
             };
             
-            var start = Stopwatch.StartNew();
-            using var results = _appearanceFeatureExtractor.Run(inputs);
-            var elapsed = start.ElapsedMilliseconds;
-            Debug.Log($"[LivePortraitInference] AppearanceFeatureExtractor took {elapsed}ms");
-            
+            var results = ModelUtils.RunModel("appearance_feature_extractor", _appearanceFeatureExtractor, inputs);
             var outputTensor = results.First().AsTensor<float>();
             
             // Python: f_s = output[0]
@@ -1009,7 +947,6 @@ namespace MuseTalk.Core
             MotionInfo xSInfo, float[,] Rs, Tensor<float> fs, float[] xs, 
             byte[] img, int width, int height, LivePortraitPredInfo predInfo)
         {
-            var start = Stopwatch.StartNew();
             // Python: frame_0 = pred_info['lmk'] is None
             bool frame0 = predInfo.Landmarks == null;
             
@@ -1018,10 +955,7 @@ namespace MuseTalk.Core
             {
                 // Python: face_analysis = models["face_analysis"]
                 // Python: src_face = face_analysis(img)
-                var start1 = Stopwatch.StartNew();
                 var srcFaces = FaceAnalysis(img, width, height);
-                var elapsed1 = start1.ElapsedMilliseconds;
-                Debug.Log($"[LivePortraitInference] FaceAnalysis in Predict took {elapsed1}ms");
                 if (srcFaces.Count == 0)
                 {
                     throw new InvalidOperationException("No face detected in the frame");
@@ -1038,18 +972,12 @@ namespace MuseTalk.Core
                 lmk = srcFace.Landmarks106;
                 
                 // Python: lmk = landmark_runner(models, img, lmk)
-                var start2 = Stopwatch.StartNew();
                 lmk = LandmarkRunner(img, width, height, lmk);
-                var elapsed2 = start2.ElapsedMilliseconds;
-                Debug.Log($"[LivePortraitInference] LandmarkRunner in Predict took {elapsed2}ms");
             }
             else
             {
                 // Python: lmk = landmark_runner(models, img, pred_info['lmk'])
-                var start2 = Stopwatch.StartNew();
                 lmk = LandmarkRunner(img, width, height, predInfo.Landmarks);
-                var elapsed2 = start2.ElapsedMilliseconds;
-                Debug.Log($"[LivePortraitInference] LandmarkRunner in Predict took {elapsed2}ms");
             }
             
             // Python: pred_info['lmk'] = lmk
@@ -1080,7 +1008,6 @@ namespace MuseTalk.Core
             // Python: prepare_driving_videos
             // Python: img = cv2.resize(img, (256, 256))
 
-            var start3 = Stopwatch.StartNew();
             var img256 = TextureUtils.ResizeTextureToExactSize(img, width, height, 256, 256, TextureUtils.SamplingMode.Bilinear);
             // Python: I_d = preprocess(img)
             var Id = Preprocess(img256, 256, 256);
@@ -1088,10 +1015,7 @@ namespace MuseTalk.Core
             // Python: collect s_d, R_d, δ_d and t_d for inference
             // Python: x_d_info = get_kp_info(models, I_d)
             var xDInfo = GetKpInfo(Id);
-            var elapsed3 = start3.ElapsedMilliseconds;
-            Debug.Log($"[LivePortraitInference] GetKpInfo in Predict took {elapsed3}ms");
 
-            var start4 = Stopwatch.StartNew();
             // Python: R_d = get_rotation_matrix(x_d_info["pitch"], x_d_info["yaw"], x_d_info["roll"])
             var Rd = GetRotationMatrix(xDInfo.Pitch, xDInfo.Yaw, xDInfo.Roll);
             
@@ -1160,31 +1084,19 @@ namespace MuseTalk.Core
             // Python: x_d_new = scale_new * (x_c_s @ R_new + delta_new) + t_new
             var xDNew = CalculateNewKeypoints(xCs, RNew, deltaNew, scaleNew, tNew);
 
-            var elapsed4 = start4.ElapsedMilliseconds;
-            Debug.Log($"[LivePortraitInference] CalculateNewKeypoints in Predict took {elapsed4}ms");
-            
             // Debug: Check keypoint transformation values
             
-            var start5 = Stopwatch.StartNew();
             // Python: x_d_new = stitching(models, x_s, x_d_new)
             xDNew = Stitching(xs, xDNew);
-            var elapsed5 = start5.ElapsedMilliseconds;
-            Debug.Log($"[LivePortraitInference] Stitching in Predict took {elapsed5}ms");
             
             // Python: out = warping_spade(models, f_s, x_s, x_d_new)
-            var start6 = Stopwatch.StartNew();
             var output = WarpingSpade(fs, xs, xDNew);
-            var elapsed6 = start6.ElapsedMilliseconds;
-            Debug.Log($"[LivePortraitInference] WarpingSpade in Predict took {elapsed6}ms");
             
             // Python: out = out.transpose(0, 2, 3, 1)  # 1x3xHxW -> 1xHxWx3
             // Python: out = np.clip(out, 0, 1)  # clip to 0~1
             // Python: out = (out * 255).astype(np.uint8)  # 0~1 -> 0~255
             // Python: I_p = out[0]
             var resultTexture = ConvertOutput(output, 512, 512);
-            var elapsed = start.ElapsedMilliseconds;
-            Debug.Log($"[LivePortraitInference] Predict took {elapsed}ms");
-            // UnityEngine.Object.DestroyImmediate(img256);
             
             // Python: return I_p, pred_info
             return (resultTexture, predInfo);
@@ -1212,14 +1124,12 @@ namespace MuseTalk.Core
             // Python: net = models["stitching"]
             // Python: output = net.run(None, {"input": feat})
             // Use actual input name from model metadata
-            string inputName = _stitching.InputMetadata.Keys.First();
-            
-            var inputs = new List<NamedOnnxValue>
+            var inputs = new List<Tensor<float>>
             {
-                NamedOnnxValue.CreateFromTensor(inputName, inputTensor)
+                inputTensor
             };
             
-            using var results = _stitching.Run(inputs);
+            var results = ModelUtils.RunModel("stitching", _stitching, inputs);
             var delta = results.First().AsTensor<float>().ToArray();
             
             // Python: delta_exp = delta[..., : 3 * num_kp].reshape(bs, num_kp, 3)  # 1x20x3
@@ -1282,16 +1192,15 @@ namespace MuseTalk.Core
             // Python: net = models["warping_spade"]
             // Python: output = net.run(None, {"feature_3d": feature_3d, "kp_driving": kp_driving, "kp_source": kp_source})
             // Use actual input names from model metadata
-            var inputNames = _warpingSpade.InputMetadata.Keys.ToArray();
             
-            var inputs = new List<NamedOnnxValue>
+            var inputs = new List<Tensor<float>>
             {
-                NamedOnnxValue.CreateFromTensor(inputNames[0], feature3DTensor),  // feature_3d
-                NamedOnnxValue.CreateFromTensor(inputNames[1], kpDrivingTensor), // kp_driving  
-                NamedOnnxValue.CreateFromTensor(inputNames[2], kpSourceTensor)   // kp_source
+                feature3DTensor,  // feature_3d
+                kpDrivingTensor, // kp_driving  
+                kpSourceTensor   // kp_source
             };
             
-            using var results = _warpingSpade.Run(inputs);
+            var results = ModelUtils.RunModel("warping_spade", _warpingSpade, inputs);
             
             // Python: return output[0] - take the first output (warped_feature)
             var output = results[0].AsTensor<float>().ToArray();

@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using Microsoft.ML.OnnxRuntime;
+using Microsoft.ML.OnnxRuntime.Tensors;
 using UnityEngine;
 
 namespace MuseTalk.Utils
@@ -91,6 +93,25 @@ namespace MuseTalk.Utils
             var model = new InferenceSession(modelPath, sessionOptions);
             // Debug.Log($"[MuseTalkInference] Loaded {modelName} from {modelPath}");
             return model;
+        }
+
+        public static IDisposableReadOnlyCollection<DisposableNamedOnnxValue> RunModel(string modelName, InferenceSession session, List<Tensor<float>> inputTensors)
+        {
+            var inputNames = session.InputMetadata.Keys.ToArray();
+            if (inputTensors.Count != inputNames.Length)
+            {
+                throw new Exception($"Input tensors count mismatch: {inputTensors.Count} != {inputNames.Length}");
+            }
+            var inputs = new List<NamedOnnxValue>(inputTensors.Count);
+            for (int i = 0; i < inputTensors.Count; i++)
+            {
+                inputs.Add(NamedOnnxValue.CreateFromTensor(inputNames[i], inputTensors[i]));
+            }
+            var start = System.Diagnostics.Stopwatch.StartNew();
+            var results = session.Run(inputs);
+            var elapsed = start.ElapsedMilliseconds;
+            Debug.Log($"[ModelUtils] RunModel {modelName} took {elapsed}ms");
+            return results;
         }
 
         /// <summary>
