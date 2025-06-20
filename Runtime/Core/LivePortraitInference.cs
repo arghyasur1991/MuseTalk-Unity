@@ -180,7 +180,7 @@ namespace MuseTalk.Core
             }
         }
 
-        private async Task<ProcessSourceImageResult> ProcessSourceImageAsync(byte[] srcImg, int srcWidth, int srcHeight)
+        public async Task<ProcessSourceImageResult> ProcessSourceImageAsync(byte[] srcImg, int srcWidth, int srcHeight)
         {
             return await Task.Run(() => {
                 var start = Stopwatch.StartNew();
@@ -967,7 +967,7 @@ namespace MuseTalk.Core
             return kpTransformed;
         }
 
-        private async Task<(byte[], LivePortraitPredInfo)> ProcessNextFrameAsync(
+        public async Task<(byte[], LivePortraitPredInfo)> ProcessNextFrameAsync(
             ProcessSourceImageResult processResult,
             LivePortraitPredInfo predInfo,
             byte[] drivingFrame, 

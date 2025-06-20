@@ -126,6 +126,40 @@ namespace MuseTalk.API
     }
 
     /// <summary>
+    /// Stream for driving frames input - similar to output stream but for input processing
+    /// </summary>
+    public sealed class DrivingFramesStream
+    {
+        public int TotalExpectedFrames { get; set; }
+        public bool LoadingFinished { get; internal set; }
+        public bool ProcessingFinished { get; internal set; }
+
+        public DrivingFramesStream(int totalExpectedFrames)
+        {
+            TotalExpectedFrames = totalExpectedFrames;
+        }
+
+        internal readonly ConcurrentQueue<Texture2D> loadQueue = new();
+        internal CancellationTokenSource cts = new();
+
+        /// Non-blocking poll. Returns false if no frame is ready yet.
+        public bool TryGetNext(out Texture2D tex) => loadQueue.TryDequeue(out tex);
+
+        /// Check if frames are available for processing
+        public bool HasFramesAvailable => !loadQueue.IsEmpty;
+
+        /// Get current queue count
+        public int QueueCount => loadQueue.Count;
+
+        /// Yield instruction that waits until the *next* frame exists,
+        /// then exposes it through the .Texture property.
+        public FrameAwaiter WaitForNext() => new(loadQueue);
+
+        /// Check if we have more frames to process
+        public bool HasMoreFrames => !LoadingFinished || HasFramesAvailable;
+    }
+
+    /// <summary>
     /// Integrated API that combines LivePortrait and MuseTalk for complete talking head generation
     /// 
     /// Workflow:
@@ -186,14 +220,8 @@ namespace MuseTalk.API
             }
         }
         
-        public LivePortaitStream GenerateAnimatedTexturesAsync(Texture2D sourceImage, string drivingFramesPath)
-        {
-            var drivingFrames = FileUtils.LoadFramesFromFolder(drivingFramesPath);
-            return GenerateAnimatedTexturesAsync(sourceImage, drivingFrames);
-        }
-
         /// <summary>
-        /// Generate animated textures only using LivePortrait (SYNCHRONOUS)
+        /// Generate animated textures only using LivePortrait (SYNCHRONOUS) - List<Texture2D> overload
         /// </summary>
         public LivePortaitStream GenerateAnimatedTexturesAsync(Texture2D sourceImage, List<Texture2D> drivingFrames)
         {
@@ -215,7 +243,189 @@ namespace MuseTalk.API
             _avatarController.StartCoroutine(_livePortrait.GenerateAsync(input, stream));
             return stream;
         }
-        
+
+        public LivePortaitStream GenerateAnimatedTexturesAsync(Texture2D sourceImage, string drivingFramesPath)
+        {
+            if (!_initialized)
+                throw new InvalidOperationException("API not initialized");
+                
+            if (sourceImage == null || string.IsNullOrEmpty(drivingFramesPath))
+                throw new ArgumentException("Invalid input: source image and driving frames path are required");
+
+            // Get frame count first to estimate total frames
+            var frameFiles = GetDrivingFrameFiles(drivingFramesPath);
+            if (frameFiles.Length == 0)
+            {
+                throw new ArgumentException($"No driving frames found in path: {drivingFramesPath}");
+            }
+
+            Logger.Log($"[LivePortraitMuseTalkAPI] Starting pipelined processing: {frameFiles.Length} driving frames");
+            
+            var stream = new LivePortaitStream(frameFiles.Length);
+            _avatarController.StartCoroutine(GenerateAnimatedTexturesPipelined(sourceImage, drivingFramesPath, frameFiles, stream));
+            return stream;
+        }
+
+        /// <summary>
+        /// Get driving frame file paths for counting and loading
+        /// </summary>
+        private string[] GetDrivingFrameFiles(string drivingFramesPath)
+        {
+            var supportedExtensions = new string[] { ".png", ".jpg", ".jpeg" };
+            string fullFolderPath = System.IO.Path.Combine(Application.streamingAssetsPath, drivingFramesPath);
+            
+            if (!System.IO.Directory.Exists(fullFolderPath))
+            {
+                return new string[0];
+            }
+
+            var allFiles = new List<string>();
+            foreach (string extension in supportedExtensions)
+            {
+                string[] files = System.IO.Directory.GetFiles(fullFolderPath, "*" + extension, System.IO.SearchOption.TopDirectoryOnly);
+                allFiles.AddRange(files);
+            }
+
+            // Sort files by name for consistent ordering
+            allFiles.Sort((a, b) => string.Compare(System.IO.Path.GetFileNameWithoutExtension(a), 
+                                                  System.IO.Path.GetFileNameWithoutExtension(b), 
+                                                  System.StringComparison.Ordinal));
+
+            return allFiles.ToArray();
+        }
+
+        /// <summary>
+        /// Pipelined generation that starts source processing immediately and streams driving frames
+        /// </summary>
+        private System.Collections.IEnumerator GenerateAnimatedTexturesPipelined(Texture2D sourceImage, string drivingFramesPath, string[] frameFiles, LivePortaitStream outputStream)
+        {
+            // Step 1: Start source image processing immediately (async)
+            var (srcImg, srcWidth, srcHeight) = TextureUtils.Texture2DToBytes(sourceImage);
+            var processSrcTask = _livePortrait.ProcessSourceImageAsync(srcImg, srcWidth, srcHeight);
+            
+            Logger.Log("[LivePortraitMuseTalkAPI] Source image processing started asynchronously");
+
+            // Step 2: Create driving frames stream and start loading frames asynchronously
+            var drivingStream = new DrivingFramesStream(frameFiles.Length);
+            var loadFramesCoroutine = _avatarController.StartCoroutine(LoadDrivingFramesAsync(frameFiles, drivingStream));
+
+            // Step 3: Wait for source processing to complete
+            yield return new WaitUntil(() => processSrcTask.IsCompleted);
+            var processResult = processSrcTask.Result;
+            
+            Logger.Log("[LivePortraitMuseTalkAPI] Source image processing completed, starting frame processing pipeline");
+
+            // Step 4: Process driving frames as they become available
+            int processedFrames = 0;
+            var predInfo = new Core.LivePortraitPredInfo
+            {
+                Landmarks = null,
+                InitialMotionInfo = null
+            };
+
+            while (processedFrames < frameFiles.Length && drivingStream.HasMoreFrames)
+            {
+                // Wait for next driving frame using CustomYieldInstruction
+                var awaiter = drivingStream.WaitForNext();
+                yield return awaiter;
+
+                if (awaiter.Texture != null)
+                {
+                    var drivingFrame = awaiter.Texture;
+                    
+                    // Process this driving frame
+                    var (imgRgbData, w, h) = TextureUtils.Texture2DToBytes(drivingFrame);
+                    
+                    var predictTask = _livePortrait.ProcessNextFrameAsync(processResult, predInfo, imgRgbData, w, h);
+                    yield return new WaitUntil(() => predictTask.IsCompleted);
+                    var (generatedImg, updatedPredInfo) = predictTask.Result;
+                    predInfo = updatedPredInfo;
+
+                    // Output the generated frame
+                    if (generatedImg != null)
+                    {
+                        var generatedImgTexture = TextureUtils.BytesToTexture2D(generatedImg, processResult.SrcImgWidth, processResult.SrcImgHeight);
+                        outputStream.queue.Enqueue(generatedImgTexture);
+                        Logger.Log($"[LivePortraitMuseTalkAPI] Processed frame {processedFrames + 1}/{frameFiles.Length}");
+                    }
+
+                    processedFrames++;
+                    
+                    // Clean up driving frame
+                    if (drivingFrame != null)
+                    {
+                        UnityEngine.Object.DestroyImmediate(drivingFrame);
+                    }
+                }
+                else if (drivingStream.LoadingFinished)
+                {
+                    // No more frames available and loading is finished
+                    break;
+                }
+            }
+
+            // Mark streams as finished
+            outputStream.Finished = true;
+            drivingStream.ProcessingFinished = true;
+            
+            Logger.Log($"[LivePortraitMuseTalkAPI] Pipelined processing completed: {processedFrames} frames generated");
+        }
+
+        /// <summary>
+        /// Load driving frames asynchronously and add them to the stream
+        /// </summary>
+        private System.Collections.IEnumerator LoadDrivingFramesAsync(string[] frameFiles, DrivingFramesStream stream)
+        {
+            Logger.Log($"[LivePortraitMuseTalkAPI] Starting to load {frameFiles.Length} driving frames asynchronously");
+
+            for (int i = 0; i < frameFiles.Length; i++)
+            {
+                string filePath = frameFiles[i];
+                
+                // Load frame data asynchronously - outside try-catch to avoid yield in try-catch
+                var loadFileTask = System.IO.File.ReadAllBytesAsync(filePath);
+                yield return new WaitUntil(() => loadFileTask.IsCompleted);
+                
+                try
+                {
+                    if (loadFileTask.IsFaulted)
+                    {
+                        Logger.LogError($"[LivePortraitMuseTalkAPI] Error loading driving frame {filePath}: {loadFileTask.Exception?.GetBaseException().Message}");
+                        continue;
+                    }
+                    
+                    byte[] fileData = loadFileTask.Result;
+                    Texture2D texture = new Texture2D(2, 2);
+                    
+                    if (texture.LoadImage(fileData))
+                    {
+                        texture.name = System.IO.Path.GetFileNameWithoutExtension(filePath);
+                        var rgbTexture = TextureUtils.ConvertTexture2DToRGB24(texture);
+                        stream.loadQueue.Enqueue(rgbTexture);
+                        
+                        // Clean up original texture if different
+                        if (rgbTexture != texture)
+                        {
+                            UnityEngine.Object.DestroyImmediate(texture);
+                        }
+                    }
+                    else
+                    {
+                        Logger.LogWarning($"[LivePortraitMuseTalkAPI] Failed to load image: {filePath}");
+                        UnityEngine.Object.DestroyImmediate(texture);
+                    }
+                }
+                catch (Exception e)
+                {
+                    Logger.LogError($"[LivePortraitMuseTalkAPI] Error processing driving frame {filePath}: {e.Message}");
+                }
+                yield return null;
+            }
+
+            stream.LoadingFinished = true;
+            Logger.Log($"[LivePortraitMuseTalkAPI] Finished loading driving frames, {stream.QueueCount} frames queued");
+        }
+
         /// <summary>
         /// Get cache information for debugging and monitoring
         /// </summary>
