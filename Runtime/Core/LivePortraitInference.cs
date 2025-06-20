@@ -33,17 +33,6 @@ namespace MuseTalk.Core
     }
 
     /// <summary>
-    /// Face detection result matching Python face_analysis output
-    /// </summary>
-    public class FaceDetectionResult
-    {
-        public Rect BoundingBox { get; set; }
-        public Vector2[] Keypoints5 { get; set; }  // 5 keypoints from detection
-        public Vector2[] Landmarks106 { get; set; }  // 106 landmarks
-        public float DetectionScore { get; set; }
-    }
-
-    /// <summary>
     /// Crop information matching Python crop_info
     /// </summary>
     public class CropInfo

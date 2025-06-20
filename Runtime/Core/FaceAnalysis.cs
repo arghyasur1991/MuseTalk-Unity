@@ -4,11 +4,11 @@ using System.Linq;
 using UnityEngine;
 using Microsoft.ML.OnnxRuntime;
 using Microsoft.ML.OnnxRuntime.Tensors;
-using Unity.Collections.LowLevel.Unsafe;
 
-namespace MuseTalk.Utils
+namespace MuseTalk.Core
 {
     using Models;
+    using Utils;
 
     /// <summary>
     /// Face detection result matching Python face_analysis output
@@ -1309,16 +1309,5 @@ namespace MuseTalk.Utils
                 Logger.Log("[FaceAnalysis] Disposed");
             }
         }
-    }
-    
-    /// <summary>
-    /// Crop information for image transformations
-    /// </summary>
-    public class CropInfo
-    {
-        public byte[] ImageCrop { get; set; }
-        public Vector2[] LandmarksCrop { get; set; }
-        public Matrix4x4 Transform { get; set; }
-        public Matrix4x4 InverseTransform { get; set; }
     }
 } 
