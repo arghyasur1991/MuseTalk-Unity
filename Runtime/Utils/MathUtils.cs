@@ -237,5 +237,15 @@ namespace MuseTalk.Utils
             
             return result;
         }
+
+        public static Matrix4x4 GetCropTransform(float[,] MInv)
+        {
+            var Mo2c = Matrix4x4.identity;
+            Mo2c.m00 = MInv[0, 0]; Mo2c.m01 = MInv[0, 1]; Mo2c.m03 = MInv[0, 2];
+            Mo2c.m10 = MInv[1, 0]; Mo2c.m11 = MInv[1, 1]; Mo2c.m13 = MInv[1, 2];
+            Mo2c.m20 = 0f; Mo2c.m21 = 0f; Mo2c.m22 = 1f; Mo2c.m23 = 0f;
+            Mo2c.m30 = 0f; Mo2c.m31 = 0f; Mo2c.m32 = 0f; Mo2c.m33 = 1f;
+            return Mo2c;
+        }
     }
 }

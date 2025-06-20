@@ -331,26 +331,25 @@ namespace MuseTalk.Core
             return (imageData, currentWidth, currentHeight);
         }
         
-
-
-        
         /// <summary>
         /// Crop RGB24 byte array using optimized bulk memory operations
         /// OPTIMIZED: Uses parallelization and bulk copying for maximum performance
         /// </summary>
-        private unsafe byte[] CropImageBytesUnsafe(byte[] sourceData, int sourceWidth, int sourceHeight, int cropWidth, int cropHeight)
+        private unsafe byte[] CropImageBytesUnsafe(
+            byte[] sourceData, int sourceWidth, int sourceHeight, int cropWidth, int cropHeight)
         {
+            if (cropHeight > sourceHeight || cropWidth > sourceWidth)
+            {
+                throw new InvalidOperationException("Crop size is larger than source image size");
+            }
             var croppedData = new byte[cropWidth * cropHeight * 3];
-            
-            // OPTIMIZED: Parallel row-wise processing
-            System.Threading.Tasks.Parallel.For(0, cropHeight, y =>
+            Parallel.For(0, cropHeight, y =>
             {
                 // Calculate source and destination indices for this row
                 int sourceRowStart = y * sourceWidth * 3;
                 int croppedRowStart = y * cropWidth * 3;
                 int bytesToCopy = cropWidth * 3;
                 
-                // Use Array.Copy for efficient bulk copy (faster than manual loop)
                 Array.Copy(sourceData, sourceRowStart, croppedData, croppedRowStart, bytesToCopy);
             });
             
@@ -1228,11 +1227,7 @@ namespace MuseTalk.Core
             var ptCrop = MathUtils.TransformPts(lmk, MInv);
             
             // Python: M_o2c = np.vstack([M_INV, np.array([0, 0, 1], dtype=np.float32)])
-            var Mo2c = Matrix4x4.identity;
-            Mo2c.m00 = MInv[0, 0]; Mo2c.m01 = MInv[0, 1]; Mo2c.m03 = MInv[0, 2];
-            Mo2c.m10 = MInv[1, 0]; Mo2c.m11 = MInv[1, 1]; Mo2c.m13 = MInv[1, 2];
-            Mo2c.m20 = 0f; Mo2c.m21 = 0f; Mo2c.m22 = 1f; Mo2c.m23 = 0f;
-            Mo2c.m30 = 0f; Mo2c.m31 = 0f; Mo2c.m32 = 0f; Mo2c.m33 = 1f;
+            var Mo2c = MathUtils.GetCropTransform(MInv);
             
             // Python: M_c2o = np.linalg.inv(M_o2c)
             var Mc2o = Mo2c.inverse;
