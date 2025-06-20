@@ -885,7 +885,7 @@ namespace MuseTalk.Core
             {
                 // Resize image data to 256x256 for VAE encoder
                 var resizedData = TextureUtils.ResizeTextureToExactSize(imageData, width, height, 256, 256, TextureUtils.SamplingMode.Bilinear);
-                var inputTensor = TextureUtils.BytesToTensorWithMask(resizedData, 256, 256);
+                var inputTensor = TextureUtils.BytesToTensor(resizedData, 256, 256, applyLowerHalfMask: true);
                 
                 var inputs = new List<NamedOnnxValue>
                 {

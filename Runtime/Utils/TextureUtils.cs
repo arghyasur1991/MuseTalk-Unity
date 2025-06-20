@@ -1006,7 +1006,11 @@ namespace MuseTalk.Utils
         /// Convert byte array to ONNX tensor format [1, 3, H, W] with exact Python VAE preprocessing
         /// OPTIMIZED: Uses unsafe pointers, parallelization, and direct memory access for maximum performance
         /// </summary>
-        public static unsafe DenseTensor<float> BytesToTensor(byte[] imageData, int width, int height)
+        /// <param name="imageData">RGB24 byte array</param>
+        /// <param name="width">Image width</param>
+        /// <param name="height">Image height</param>
+        /// <param name="applyLowerHalfMask">If true, masks lower half of image to zero (upper half = 1.0, lower half = 0.0)</param>
+        public static unsafe DenseTensor<float> BytesToTensor(byte[] imageData, int width, int height, bool applyLowerHalfMask = false)
         {
             if (imageData == null)
                 throw new ArgumentNullException(nameof(imageData));
@@ -1020,8 +1024,8 @@ namespace MuseTalk.Utils
             
             // Pre-calculate tensor offsets for each channel (CHW format)
             int imageSize = height * width;
+            int halfHeight = applyLowerHalfMask ? height / 2 : 0; // Pre-calculate for mask comparison
             
-            // OPTIMIZED: Maximum parallelism across all pixels with coordinate flipping
             // Process pixels in CHW format (channels first) with stride-based coordinate calculation
             fixed (byte* pixelPtrFixed = imageData)
             {
@@ -1039,6 +1043,15 @@ namespace MuseTalk.Utils
                     float r = pixelBytePtr[0] / 255.0f; // R channel
                     float g = pixelBytePtr[1] / 255.0f; // G channel
                     float b = pixelBytePtr[2] / 255.0f; // B channel
+                    
+                    // Apply mask if requested (upper half = 1, lower half = 0)
+                    if (applyLowerHalfMask)
+                    {
+                        float mask = (y < halfHeight) ? 1.0f : 0.0f;
+                        r *= mask;
+                        g *= mask;
+                        b *= mask;
+                    }
                     
                     float normalizedR = (r - 0.5f) / 0.5f;
                     float normalizedG = (g - 0.5f) / 0.5f;
@@ -1054,66 +1067,6 @@ namespace MuseTalk.Utils
             
             return tensor;
         }
-        
-        /// <summary>
-        /// Convert byte array to ONNX tensor with lower half masked (for VAE encoder input)
-        /// OPTIMIZED: Uses unsafe pointers, parallelization, and direct memory access for maximum performance
-        /// </summary>
-        public static unsafe DenseTensor<float> BytesToTensorWithMask(byte[] imageData, int width, int height)
-        {
-            if (imageData == null)
-                throw new ArgumentNullException(nameof(imageData));
-            
-            if (imageData.Length != width * height * 3)
-                throw new ArgumentException($"Image data size {imageData.Length} doesn't match expected size {width * height * 3} for RGB24 format");
-            
-            // Create tensor with CHW format: [batch=1, channels=3, height, width]
-            var tensorData = new float[1 * 3 * height * width];
-            var tensor = new DenseTensor<float>(tensorData, new[] { 1, 3, height, width });
-            
-            // Pre-calculate tensor offsets for each channel (CHW format)
-            int imageSize = height * width;
-            int halfHeight = height / 2; // Pre-calculate for mask comparison
-            
-            // OPTIMIZED: Maximum parallelism across all pixels with coordinate flipping and masking
-            // Process pixels in CHW format (channels first) with stride-based coordinate calculation
-            fixed (byte* pixelPtrFixed = imageData)
-            {
-                // Capture pointer in local variable to avoid lambda closure issues
-                byte* pixelPtrLocal = pixelPtrFixed;
-                
-                System.Threading.Tasks.Parallel.For(0, imageSize, pixelIndex =>
-                {
-                    // Calculate x, y coordinates from linear pixel index using stride arithmetic
-                    int y = pixelIndex / width;
-                    int x = pixelIndex % width;
-                    
-                    // Calculate pointer for this specific pixel using stride arithmetic
-                    byte* pixelBytePtr = pixelPtrLocal + (y * width + x) * 3; // RGB24: 3 bytes per pixel
-                    
-                    float r = pixelBytePtr[0] / 255.0f; // R channel
-                    float g = pixelBytePtr[1] / 255.0f; // G channel
-                    float b = pixelBytePtr[2] / 255.0f; // B channel
-                    
-                    float mask = (y < halfHeight) ? 1.0f : 0.0f;  // Upper half = 1, lower half = 0
-                    
-                    float maskedR = r * mask;
-                    float maskedG = g * mask;
-                    float maskedB = b * mask;
-                    
-                    float normalizedR = (maskedR - 0.5f) / 0.5f;
-                    float normalizedG = (maskedG - 0.5f) / 0.5f;
-                    float normalizedB = (maskedB - 0.5f) / 0.5f;
-                    
-                    // Write to tensor in CHW format without bounds checking (direct array access)
-                    // Channel layout: [batch=0, channel, y, x] = index
-                    tensorData[y * width + x] = normalizedR;                    // Channel 0 (R) offset: 0 * imageSize
-                    tensorData[imageSize + y * width + x] = normalizedG;        // Channel 1 (G) offset: 1 * imageSize
-                    tensorData[2 * imageSize + y * width + x] = normalizedB;    // Channel 2 (B) offset: 2 * imageSize
-                });
-            }
-            
-            return tensor;
-        }
+
     }
 }
