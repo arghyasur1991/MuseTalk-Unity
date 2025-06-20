@@ -195,9 +195,6 @@ namespace MuseTalk.Utils
         {
             _config = config ?? throw new ArgumentNullException(nameof(config));
             
-            // Ensure MainThreadDispatcher is available for texture operations
-            _ = MainThreadDispatcher.Instance;
-            
             // Determine cache directory
             if (string.IsNullOrEmpty(config.CacheDirectory))
             {
@@ -457,7 +454,6 @@ namespace MuseTalk.Utils
         
         /// <summary>
         /// Serialize avatar data for disk storage
-        /// Uses MainThreadDispatcher to handle Unity texture operations safely
         /// </summary>
         private async Task<SerializableAvatarData> SerializeAvatarDataAsync(AvatarData avatarData, string cacheKey)
         {
@@ -549,7 +545,6 @@ namespace MuseTalk.Utils
         
         /// <summary>
         /// Deserialize avatar data from disk storage
-        /// Uses MainThreadDispatcher to handle Unity texture operations safely
         /// </summary>
         private async Task<AvatarData> DeserializeAvatarDataAsync(SerializableAvatarData serializableData)
         {

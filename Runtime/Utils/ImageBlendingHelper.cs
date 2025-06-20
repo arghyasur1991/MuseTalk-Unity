@@ -327,26 +327,6 @@ namespace MuseTalk.Utils
         }
 
         /// <summary>
-        /// Composite images using mask-based blending (matching Python PIL paste logic)
-        /// </summary>
-        private static Texture2D CompositeImages(
-            Texture2D originalImage,
-            Texture2D generatedFace,
-            Texture2D faceLarge,
-            Vector4 faceBbox,
-            Rect cropBox,
-            Texture2D blurredMask)
-        {
-            // Step 1: Paste generated face into face_large at relative position
-            var compositeFaceLarge = PasteFaceIntoLarge(faceLarge, generatedFace, faceBbox, cropBox);
-            
-            // Step 2: Paste composite face_large back into original image using mask
-            var result = PasteWithMask(originalImage, compositeFaceLarge, cropBox, blurredMask);
-            
-            return result;
-        }
-
-        /// <summary>
         /// Paste generated face into the large face region
         /// OPTIMIZED: Uses unsafe pointers, parallelization, and memcpy for maximum performance
         /// </summary>
@@ -429,57 +409,6 @@ namespace MuseTalk.Utils
             });
             
             result.Apply();
-            return result;
-        }
-
-        /// <summary>
-        /// Paste image with mask-based alpha blending
-        /// </summary>
-        private static Texture2D PasteWithMask(
-            Texture2D background,
-            Texture2D foreground,
-            Rect cropBox,
-            Texture2D mask)
-        {
-            var result = new Texture2D(background.width, background.height, background.format, false);
-            var bgPixelsOriginal = background.GetPixels();
-            result.SetPixels(bgPixelsOriginal);
-            result.Apply();
-            
-            var bgPixels = result.GetPixels();
-            var fgPixels = foreground.GetPixels();
-            var maskPixels = mask.GetRawTextureData<byte>();
-            
-            int cropX = Mathf.RoundToInt(cropBox.x);
-            int cropY = Mathf.RoundToInt(cropBox.y);
-            
-            for (int y = 0; y < foreground.height && y + cropY < result.height; y++)
-            {
-                for (int x = 0; x < foreground.width && x + cropX < result.width; x++)
-                {
-                    if (x + cropX >= 0 && y + cropY >= 0)
-                    {
-                        int bgIndex = (y + cropY) * result.width + (x + cropX);
-                        int fgIndex = y * foreground.width + x;
-                        int maskIndex = y * mask.width + x;
-                        
-                        if (bgIndex < bgPixels.Length && fgIndex < fgPixels.Length && maskIndex < maskPixels.Length)
-                        {
-                            float alpha = maskPixels[maskIndex] / 255f;
-                            
-                            // Alpha blending
-                            Color bgColor = bgPixels[bgIndex];
-                            Color fgColor = fgPixels[fgIndex];
-                            
-                            bgPixels[bgIndex] = Color.Lerp(bgColor, fgColor, alpha);
-                        }
-                    }
-                }
-            }
-            
-            result.SetPixels(bgPixels);
-            result.Apply();
-            
             return result;
         }
         
