@@ -4,6 +4,8 @@ using UnityEngine;
 
 namespace MuseTalk.Models
 {
+    using Utils;
+    
     /// <summary>
     /// Configuration for MuseTalk inference
     /// </summary>
@@ -107,29 +109,146 @@ namespace MuseTalk.Models
     
     /// <summary>
     /// Face detection and landmark data
+    /// REFACTORED: Uses byte arrays for internal storage instead of Texture2D for better memory efficiency
     /// </summary>
     public class FaceData
     {
         public bool HasFace { get; set; }
         public Rect BoundingBox { get; set; }
         public Vector2[] Landmarks { get; set; }
-        public Texture2D CroppedFaceTexture { get; set; }
-        public Texture2D OriginalTexture { get; set; }
+        
+        // Face texture data as byte arrays (RGB24 format)
+        public byte[] CroppedFaceTextureData { get; set; }
+        public int CroppedFaceWidth { get; set; }
+        public int CroppedFaceHeight { get; set; }
+        
+        public byte[] OriginalTextureData { get; set; }
+        public int OriginalWidth { get; set; }
+        public int OriginalHeight { get; set; }
         
         // Face parsing mask (if enabled)
-        public Texture2D FaceMask { get; set; }
+        public byte[] FaceMaskData { get; set; }
+        public int FaceMaskWidth { get; set; }
+        public int FaceMaskHeight { get; set; }
         
         // Cached segmentation data (computed once during avatar processing)
-        public Texture2D FaceLarge { get; set; }           // Cropped face region with expansion
-        public Texture2D SegmentationMask { get; set; }    // BiSeNet segmentation mask
+        public byte[] FaceLargeData { get; set; }           // Cropped face region with expansion
+        public int FaceLargeWidth { get; set; }
+        public int FaceLargeHeight { get; set; }
+        
+        public byte[] SegmentationMaskData { get; set; }    // BiSeNet segmentation mask
+        public int SegmentationMaskWidth { get; set; }
+        public int SegmentationMaskHeight { get; set; }
+        
         public Vector4 AdjustedFaceBbox { get; set; }      // Face bbox with version-specific adjustments
         public Vector4 CropBox { get; set; }               // Expanded crop box coordinates
         
         // Precomputed blending masks (computed once during avatar processing for performance)
-        public Texture2D MaskSmall { get; set; }           // Small mask cropped to face region
-        public Texture2D FullMask { get; set; }            // Full mask with small mask pasted back
-        public Texture2D BoundaryMask { get; set; }        // Mask with upper boundary ratio applied
-        public Texture2D BlurredMask { get; set; }         // Final blurred mask for smooth blending
+        public byte[] MaskSmallData { get; set; }           // Small mask cropped to face region
+        public int MaskSmallWidth { get; set; }
+        public int MaskSmallHeight { get; set; }
+        
+        public byte[] FullMaskData { get; set; }            // Full mask with small mask pasted back
+        public int FullMaskWidth { get; set; }
+        public int FullMaskHeight { get; set; }
+        
+        public byte[] BoundaryMaskData { get; set; }        // Mask with upper boundary ratio applied
+        public int BoundaryMaskWidth { get; set; }
+        public int BoundaryMaskHeight { get; set; }
+        
+        public byte[] BlurredMaskData { get; set; }         // Final blurred mask for smooth blending
+        public int BlurredMaskWidth { get; set; }
+        public int BlurredMaskHeight { get; set; }
+        
+        // Helper methods to convert to Texture2D when needed for client consumption
+        public Texture2D GetCroppedFaceTexture()
+        {
+            if (CroppedFaceTextureData == null) return null;
+            return TextureUtils.BytesToTexture2D(CroppedFaceTextureData, CroppedFaceWidth, CroppedFaceHeight);
+        }
+        
+        public Texture2D GetOriginalTexture()
+        {
+            if (OriginalTextureData == null) return null;
+            return TextureUtils.BytesToTexture2D(OriginalTextureData, OriginalWidth, OriginalHeight);
+        }
+        
+        public Texture2D GetFaceLargeTexture()
+        {
+            if (FaceLargeData == null) return null;
+            return TextureUtils.BytesToTexture2D(FaceLargeData, FaceLargeWidth, FaceLargeHeight);
+        }
+        
+        public Texture2D GetBlurredMaskTexture()
+        {
+            if (BlurredMaskData == null) return null;
+            return TextureUtils.BytesToTexture2D(BlurredMaskData, BlurredMaskWidth, BlurredMaskHeight);
+        }
+        
+        // Helper method to store Texture2D as byte array
+        public void SetCroppedFaceTexture(Texture2D texture)
+        {
+            if (texture == null)
+            {
+                CroppedFaceTextureData = null;
+                CroppedFaceWidth = 0;
+                CroppedFaceHeight = 0;
+                return;
+            }
+            
+            var (data, width, height) = TextureUtils.Texture2DToBytes(texture);
+            CroppedFaceTextureData = data;
+            CroppedFaceWidth = width;
+            CroppedFaceHeight = height;
+        }
+        
+        public void SetOriginalTexture(Texture2D texture)
+        {
+            if (texture == null)
+            {
+                OriginalTextureData = null;
+                OriginalWidth = 0;
+                OriginalHeight = 0;
+                return;
+            }
+            
+            var (data, width, height) = TextureUtils.Texture2DToBytes(texture);
+            OriginalTextureData = data;
+            OriginalWidth = width;
+            OriginalHeight = height;
+        }
+        
+        public void SetFaceLargeTexture(Texture2D texture)
+        {
+            if (texture == null)
+            {
+                FaceLargeData = null;
+                FaceLargeWidth = 0;
+                FaceLargeHeight = 0;
+                return;
+            }
+            
+            var (data, width, height) = TextureUtils.Texture2DToBytes(texture);
+            FaceLargeData = data;
+            FaceLargeWidth = width;
+            FaceLargeHeight = height;
+        }
+        
+        public void SetBlurredMaskTexture(Texture2D texture)
+        {
+            if (texture == null)
+            {
+                BlurredMaskData = null;
+                BlurredMaskWidth = 0;
+                BlurredMaskHeight = 0;
+                return;
+            }
+            
+            var (data, width, height) = TextureUtils.Texture2DToBytes(texture);
+            BlurredMaskData = data;
+            BlurredMaskWidth = width;
+            BlurredMaskHeight = height;
+        }
     }
     
     /// <summary>

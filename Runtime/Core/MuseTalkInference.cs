@@ -14,19 +14,37 @@ namespace MuseTalk.Core
 
     /// <summary>
     /// Precomputed segmentation data for efficient frame blending
+    /// REFACTORED: Uses byte arrays for internal storage instead of Texture2D for better memory efficiency
     /// </summary>
     public class SegmentationData
     {
-        public Texture2D FaceLarge { get; set; }
-        public Texture2D SegmentationMask { get; set; }
+        public byte[] FaceLargeData { get; set; }
+        public int FaceLargeWidth { get; set; }
+        public int FaceLargeHeight { get; set; }
+        
+        public byte[] SegmentationMaskData { get; set; }
+        public int SegmentationMaskWidth { get; set; }
+        public int SegmentationMaskHeight { get; set; }
+        
         public Vector4 AdjustedFaceBbox { get; set; }
         public Vector4 CropBox { get; set; }
         
         // Precomputed masks for efficient blending
-        public Texture2D MaskSmall { get; set; }
-        public Texture2D FullMask { get; set; }
-        public Texture2D BoundaryMask { get; set; }
-        public Texture2D BlurredMask { get; set; }
+        public byte[] MaskSmallData { get; set; }
+        public int MaskSmallWidth { get; set; }
+        public int MaskSmallHeight { get; set; }
+        
+        public byte[] FullMaskData { get; set; }
+        public int FullMaskWidth { get; set; }
+        public int FullMaskHeight { get; set; }
+        
+        public byte[] BoundaryMaskData { get; set; }
+        public int BoundaryMaskWidth { get; set; }
+        public int BoundaryMaskHeight { get; set; }
+        
+        public byte[] BlurredMaskData { get; set; }
+        public int BlurredMaskWidth { get; set; }
+        public int BlurredMaskHeight { get; set; }
     }
 
     /// <summary>
@@ -249,6 +267,7 @@ namespace MuseTalk.Core
         /// <summary>
         /// Pre-compute segmentation data that can be cached and reused for all frames
         /// This includes face_large crop, BiSeNet segmentation mask, and all blending masks
+        /// REFACTORED: Uses byte arrays internally for better memory efficiency
         /// </summary>
         private SegmentationData PrecomputeSegmentationData(Texture2D originalImage, Vector4 faceBbox, string version)
         {
@@ -292,18 +311,51 @@ namespace MuseTalk.Core
             // Step 4: Apply Gaussian blur for smooth blending (matching Python)
             var blurredMask = ImageBlendingHelper.ApplyGaussianBlurToMask(boundaryMask);
             
+            // Convert all textures to byte arrays for efficient storage
+            var (faceLargeData, faceLargeWidth, faceLargeHeight) = TextureUtils.Texture2DToBytes(faceLarge);
+            var (segmentationMaskData, segmentationMaskWidth, segmentationMaskHeight) = TextureUtils.Texture2DToBytes(segmentationMask);
+            var (maskSmallData, maskSmallWidth, maskSmallHeight) = TextureUtils.Texture2DToBytes(maskSmall);
+            var (fullMaskData, fullMaskWidth, fullMaskHeight) = TextureUtils.Texture2DToBytes(fullMask);
+            var (boundaryMaskData, boundaryMaskWidth, boundaryMaskHeight) = TextureUtils.Texture2DToBytes(boundaryMask);
+            var (blurredMaskData, blurredMaskWidth, blurredMaskHeight) = TextureUtils.Texture2DToBytes(blurredMask);
+            
+            // Clean up temporary textures
+            UnityEngine.Object.Destroy(faceLarge);
+            UnityEngine.Object.Destroy(segmentationMask);
+            UnityEngine.Object.Destroy(maskSmall);
+            UnityEngine.Object.Destroy(fullMask);
+            UnityEngine.Object.Destroy(boundaryMask);
+            UnityEngine.Object.Destroy(blurredMask);
+            
             return new SegmentationData
             {
-                FaceLarge = faceLarge,
-                SegmentationMask = segmentationMask,
+                FaceLargeData = faceLargeData,
+                FaceLargeWidth = faceLargeWidth,
+                FaceLargeHeight = faceLargeHeight,
+                
+                SegmentationMaskData = segmentationMaskData,
+                SegmentationMaskWidth = segmentationMaskWidth,
+                SegmentationMaskHeight = segmentationMaskHeight,
+                
                 AdjustedFaceBbox = adjustedFaceBbox,
                 CropBox = cropBox,
                 
                 // Precomputed masks for efficient blending
-                MaskSmall = maskSmall,
-                FullMask = fullMask,
-                BoundaryMask = boundaryMask,
-                BlurredMask = blurredMask
+                MaskSmallData = maskSmallData,
+                MaskSmallWidth = maskSmallWidth,
+                MaskSmallHeight = maskSmallHeight,
+                
+                FullMaskData = fullMaskData,
+                FullMaskWidth = fullMaskWidth,
+                FullMaskHeight = fullMaskHeight,
+                
+                BoundaryMaskData = boundaryMaskData,
+                BoundaryMaskWidth = boundaryMaskWidth,
+                BoundaryMaskHeight = boundaryMaskHeight,
+                
+                BlurredMaskData = blurredMaskData,
+                BlurredMaskWidth = blurredMaskWidth,
+                BlurredMaskHeight = blurredMaskHeight
             };
         }
         
@@ -424,15 +476,11 @@ namespace MuseTalk.Core
                 {
                     if (_avatarAnimationCache.TryGetValue(key, out var cachedData))
                     {
-                        // Clean up cached textures to prevent memory leaks
+                        // Clean up cached byte arrays (no Texture2D cleanup needed since we use byte arrays now)
                         foreach (var faceRegion in cachedData.FaceRegions)
                         {
-                            if (faceRegion.FaceLarge != null) UnityEngine.Object.Destroy(faceRegion.FaceLarge);
-                            if (faceRegion.SegmentationMask != null) UnityEngine.Object.Destroy(faceRegion.SegmentationMask);
-                            if (faceRegion.MaskSmall != null) UnityEngine.Object.Destroy(faceRegion.MaskSmall);
-                            if (faceRegion.FullMask != null) UnityEngine.Object.Destroy(faceRegion.FullMask);
-                            if (faceRegion.BoundaryMask != null) UnityEngine.Object.Destroy(faceRegion.BoundaryMask);
-                            if (faceRegion.BlurredMask != null) UnityEngine.Object.Destroy(faceRegion.BlurredMask);
+                            // Data is stored as byte arrays, so no Unity Object cleanup needed
+                            // The garbage collector will handle the byte arrays when the cache entry is removed
                         }
                     }
                     _avatarAnimationCache.Remove(key);
@@ -487,8 +535,8 @@ namespace MuseTalk.Core
                         if (diskCachedData.FaceRegions.Count > 0)
                         {
                             var firstFace = diskCachedData.FaceRegions[0];
-                            if (firstFace.OriginalTexture == null || firstFace.CroppedFaceTexture == null || 
-                                firstFace.BlurredMask == null || firstFace.FaceLarge == null)
+                            if (firstFace.OriginalTextureData == null || firstFace.CroppedFaceTextureData == null || 
+                                firstFace.BlurredMaskData == null || firstFace.FaceLargeData == null)
                             {
                                 needsTextureReprocessing = true;
                                 Logger.Log("[MuseTalkInference] Disk cache has latents but missing texture data, will reprocess face regions for blending");
@@ -555,25 +603,56 @@ namespace MuseTalk.Core
                     // Pre-compute segmentation mask and cached data for blending
                     var segmentationData = PrecomputeSegmentationData(originalTexture, bbox, _config.Version);
                     
-                    // Create face data for this region
+                    // Convert textures to byte arrays for efficient storage
+                    var (croppedTextureData, croppedWidth, croppedHeight) = TextureUtils.Texture2DToBytes(croppedTexture);
+                    var (originalTextureData, originalWidth, originalHeight) = TextureUtils.Texture2DToBytes(originalTexture);
+                    
+                    // Clean up temporary textures
+                    UnityEngine.Object.Destroy(croppedTexture);
+                    
+                    // Create face data for this region using byte arrays
                     var faceData = new FaceData
                     {
                         HasFace = true,
                         BoundingBox = new Rect(bbox.x, bbox.y, bbox.z - bbox.x, bbox.w - bbox.y),
-                        CroppedFaceTexture = croppedTexture,
-                        OriginalTexture = originalTexture,  // Store for blending
+                        
+                        // Face texture data as byte arrays
+                        CroppedFaceTextureData = croppedTextureData,
+                        CroppedFaceWidth = croppedWidth,
+                        CroppedFaceHeight = croppedHeight,
+                        
+                        OriginalTextureData = originalTextureData,
+                        OriginalWidth = originalWidth,
+                        OriginalHeight = originalHeight,
                         
                         // Cached segmentation data
-                        FaceLarge = segmentationData.FaceLarge,
-                        SegmentationMask = segmentationData.SegmentationMask,
+                        FaceLargeData = segmentationData.FaceLargeData,
+                        FaceLargeWidth = segmentationData.FaceLargeWidth,
+                        FaceLargeHeight = segmentationData.FaceLargeHeight,
+                        
+                        SegmentationMaskData = segmentationData.SegmentationMaskData,
+                        SegmentationMaskWidth = segmentationData.SegmentationMaskWidth,
+                        SegmentationMaskHeight = segmentationData.SegmentationMaskHeight,
+                        
                         AdjustedFaceBbox = segmentationData.AdjustedFaceBbox,
                         CropBox = segmentationData.CropBox,
                         
                         // Precomputed blending masks
-                        MaskSmall = segmentationData.MaskSmall,
-                        FullMask = segmentationData.FullMask,
-                        BoundaryMask = segmentationData.BoundaryMask,
-                        BlurredMask = segmentationData.BlurredMask
+                        MaskSmallData = segmentationData.MaskSmallData,
+                        MaskSmallWidth = segmentationData.MaskSmallWidth,
+                        MaskSmallHeight = segmentationData.MaskSmallHeight,
+                        
+                        FullMaskData = segmentationData.FullMaskData,
+                        FullMaskWidth = segmentationData.FullMaskWidth,
+                        FullMaskHeight = segmentationData.FullMaskHeight,
+                        
+                        BoundaryMaskData = segmentationData.BoundaryMaskData,
+                        BoundaryMaskWidth = segmentationData.BoundaryMaskWidth,
+                        BoundaryMaskHeight = segmentationData.BoundaryMaskHeight,
+                        
+                        BlurredMaskData = segmentationData.BlurredMaskData,
+                        BlurredMaskWidth = segmentationData.BlurredMaskWidth,
+                        BlurredMaskHeight = segmentationData.BlurredMaskHeight
                     };
                     
                     avatarData.FaceRegions.Add(faceData);
@@ -589,7 +668,7 @@ namespace MuseTalk.Core
                     else
                     {
                         // Generate new latents
-                        latents = await GetLatentsForUNet(croppedTexture);
+                        latents = await GetLatentsForUNet(croppedTextureData, croppedWidth, croppedHeight);
                     }
                     avatarData.Latents.Add(latents);
                 }
@@ -693,16 +772,16 @@ namespace MuseTalk.Core
         
         /// <summary>
         /// Encode image using VAE encoder
+        /// REFACTORED: Works with byte arrays instead of Texture2D
         /// </summary>
-        private async Task<float[]> EncodeImage(Texture2D texture)
+        private async Task<float[]> EncodeImage(byte[] imageData, int width, int height)
         {
-            // Texture operations must run on main thread - do them first
-            var resizedTexture = TextureUtils.ResizeTexture(texture, 256, 256);
-            var inputTensor = TextureUtils.TextureToTensor(resizedTexture);
-            
-            // Now we can run ONNX inference on background thread
             return await Task.Run(() =>
             {
+                // Resize image data to 256x256 for VAE encoder
+                var resizedData = TextureUtils.ResizeTextureToExactSize(imageData, width, height, 256, 256, TextureUtils.SamplingMode.Bilinear);
+                var inputTensor = TextureUtils.BytesToTensor(resizedData, 256, 256);
+                
                 var inputs = new List<NamedOnnxValue>
                 {
                     NamedOnnxValue.CreateFromTensor("image", inputTensor)
@@ -721,16 +800,16 @@ namespace MuseTalk.Core
         /// <summary>
         /// Encode image with lower half masked using VAE encoder
         /// Matches Python's encode_image_with_half_mask exactly
+        /// REFACTORED: Works with byte arrays instead of Texture2D
         /// </summary>
-        private async Task<float[]> EncodeImageWithMask(Texture2D texture)
+        private async Task<float[]> EncodeImageWithMask(byte[] imageData, int width, int height)
         {
-            // Texture operations must run on main thread - do them first
-            var resizedTexture = TextureUtils.ResizeTexture(texture, 256, 256);
-            var inputTensor = TextureUtils.TextureToTensorWithMask(resizedTexture);
-            
-            // Now we can run ONNX inference on background thread
             return await Task.Run(() =>
             {
+                // Resize image data to 256x256 for VAE encoder
+                var resizedData = TextureUtils.ResizeTextureToExactSize(imageData, width, height, 256, 256, TextureUtils.SamplingMode.Bilinear);
+                var inputTensor = TextureUtils.BytesToTensorWithMask(resizedData, 256, 256);
+                
                 var inputs = new List<NamedOnnxValue>
                 {
                     NamedOnnxValue.CreateFromTensor("image", inputTensor)
@@ -746,14 +825,15 @@ namespace MuseTalk.Core
         
         /// <summary>
         /// Get latents for UNet inference, matching Python's get_latents_for_unet exactly
+        /// REFACTORED: Works with byte arrays instead of Texture2D
         /// </summary>
-        private async Task<float[]> GetLatentsForUNet(Texture2D texture)
+        private async Task<float[]> GetLatentsForUNet(byte[] imageData, int width, int height)
         {
             // Get masked latents (lower half masked)
-            var maskedLatents = await EncodeImageWithMask(texture);
+            var maskedLatents = await EncodeImageWithMask(imageData, width, height);
             
             // Get reference latents (full image)
-            var refLatents = await EncodeImage(texture);
+            var refLatents = await EncodeImage(imageData, width, height);
             
             // Match Python concatenation exactly along axis=1 (channel dimension)
             if (maskedLatents.Length != refLatents.Length)
@@ -765,11 +845,11 @@ namespace MuseTalk.Core
             const int maskedChannels = 4;
             const int refChannels = 4;
             const int totalChannels = maskedChannels + refChannels;
-            const int height = 32;
-            const int width = 32;
-            const int spatialSize = height * width;
+            const int latentHeight = 32;
+            const int latentWidth = 32;
+            const int spatialSize = latentHeight * latentWidth;
             
-            var combinedLatents = new float[batch * totalChannels * height * width];
+            var combinedLatents = new float[batch * totalChannels * latentHeight * latentWidth];
             
             unsafe
             {
@@ -1115,9 +1195,9 @@ namespace MuseTalk.Core
                     {
                         targetHeight += 10; // extra_margin
                         // Clamp to original image height
-                        if (faceData.OriginalTexture != null)
+                        if (faceData.OriginalTextureData != null)
                         {
-                            targetHeight = Mathf.Min(targetHeight, faceData.OriginalTexture.height - Mathf.RoundToInt(bbox.y));
+                            targetHeight = Mathf.Min(targetHeight, faceData.OriginalHeight - Mathf.RoundToInt(bbox.y));
                         }
                     }
                     
@@ -1125,12 +1205,16 @@ namespace MuseTalk.Core
                     var resizedFrame = TextureUtils.ResizeTextureToExactSize(rawDecodedTexture, targetWidth, targetHeight);
                     
                     // Step 3: Apply seamless face blending
-                    var originalImage = faceData.OriginalTexture;
-                    if (originalImage == null)
+                    if (faceData.OriginalTextureData == null)
                     {
                         blendedFrames.Add(resizedFrame);
                         continue;
                     }
+                    
+                    // Convert byte arrays back to textures for blending (only when needed)
+                    var originalImage = TextureUtils.BytesToTexture2D(faceData.OriginalTextureData, faceData.OriginalWidth, faceData.OriginalHeight);
+                    var blurredMask = TextureUtils.BytesToTexture2D(faceData.BlurredMaskData, faceData.BlurredMaskWidth, faceData.BlurredMaskHeight);
+                    var faceLarge = TextureUtils.BytesToTexture2D(faceData.FaceLargeData, faceData.FaceLargeWidth, faceData.FaceLargeHeight);
                     
                     // Convert face bbox to Vector4 format for blending (x1, y1, x2, y2)
                     var faceBbox = new Vector4(bbox.x, bbox.y, bbox.x + bbox.width, bbox.y + bbox.height);
@@ -1145,14 +1229,26 @@ namespace MuseTalk.Core
                             faceBbox,
                             blendingMode,
                             faceData.CropBox, // Use cached crop box
-                            faceData.BlurredMask, // Use precomputed blurred mask
-                            faceData.FaceLarge); // Use precomputed face large
+                            blurredMask, // Use precomputed blurred mask
+                            faceLarge); // Use precomputed face large
+                        
+                        // Clean up temporary textures
+                        UnityEngine.Object.Destroy(originalImage);
+                        UnityEngine.Object.Destroy(blurredMask);
+                        UnityEngine.Object.Destroy(faceLarge);
+                        UnityEngine.Object.Destroy(resizedFrame);
                         
                         blendedFrames.Add(blendedFrame);
                     }
                     catch (Exception e)
                     {
                         Logger.LogError($"[MuseTalkInference] Frame processing failed for frame {globalFrameIdx}: {e.Message}");
+                        
+                        // Clean up temporary textures in case of error
+                        UnityEngine.Object.Destroy(originalImage);
+                        UnityEngine.Object.Destroy(blurredMask);
+                        UnityEngine.Object.Destroy(faceLarge);
+                        
                         blendedFrames.Add(resizedFrame);
                     }
                 }
@@ -1167,22 +1263,12 @@ namespace MuseTalk.Core
         
         /// <summary>
         /// Clear the avatar animation cache (useful for memory management)
+        /// REFACTORED: No texture cleanup needed since we use byte arrays now
         /// </summary>
         public static void ClearAvatarAnimationCache()
         {
-            foreach (var cachedData in _avatarAnimationCache.Values)
-            {
-                // Clean up cached textures
-                foreach (var faceRegion in cachedData.FaceRegions)
-                {
-                    if (faceRegion.FaceLarge != null) UnityEngine.Object.Destroy(faceRegion.FaceLarge);
-                    if (faceRegion.SegmentationMask != null) UnityEngine.Object.Destroy(faceRegion.SegmentationMask);
-                    if (faceRegion.MaskSmall != null) UnityEngine.Object.Destroy(faceRegion.MaskSmall);
-                    if (faceRegion.FullMask != null) UnityEngine.Object.Destroy(faceRegion.FullMask);
-                    if (faceRegion.BoundaryMask != null) UnityEngine.Object.Destroy(faceRegion.BoundaryMask);
-                    if (faceRegion.BlurredMask != null) UnityEngine.Object.Destroy(faceRegion.BlurredMask);
-                }
-            }
+            // No need to destroy textures since we use byte arrays now
+            // The garbage collector will handle the byte arrays automatically
             _avatarAnimationCache.Clear();
             Logger.Log("[MuseTalkInference] Cleared avatar animation cache");
         }
