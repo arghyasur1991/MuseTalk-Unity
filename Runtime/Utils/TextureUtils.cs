@@ -854,7 +854,9 @@ namespace MuseTalk.Utils
         /// <param name="multiplier">Multiplier for all RGB channels</param>
         /// <param name="offset">Offset for all RGB channels</param>
         /// <param name="applyLowerHalfMask">If true, masks lower half of image to zero (upper half = 1.0, lower half = 0.0)</param>
-        public static unsafe DenseTensor<float> PreprocessImageOptimized(byte[] img, int width, int height, float multiplier, float offset, bool applyLowerHalfMask = false)
+        public static unsafe DenseTensor<float> PreprocessImageOptimized(
+            byte[] img, int width, int height, 
+            float multiplier, float offset, bool applyLowerHalfMask = false)
         {
             // Use per-channel version with same multiplier/offset for all channels
             var multipliers = new float[] { multiplier, multiplier, multiplier };
@@ -872,7 +874,9 @@ namespace MuseTalk.Utils
         /// <param name="multipliers">Per-channel multipliers (3 values for RGB)</param>
         /// <param name="offsets">Per-channel offsets (3 values for RGB)</param>
         /// <param name="applyLowerHalfMask">If true, masks lower half of image to zero (upper half = 1.0, lower half = 0.0)</param>
-        public static unsafe DenseTensor<float> PreprocessImageOptimized(byte[] img, int width, int height, float[] multipliers, float[] offsets, bool applyLowerHalfMask = false)
+        public static unsafe DenseTensor<float> PreprocessImageOptimized(
+            byte[] img, int width, int height, 
+            float[] multipliers, float[] offsets, bool applyLowerHalfMask = false)
         {
             if (multipliers.Length != 3 || offsets.Length != 3)
                 throw new ArgumentException("Multipliers and offsets must have exactly 3 elements for RGB channels");
@@ -928,24 +932,5 @@ namespace MuseTalk.Utils
             
             return new DenseTensor<float>(tensorData, new[] { 1, 3, height, width });
         }
-
-        /// <summary>
-        /// Convert byte array to ONNX tensor format [1, 3, H, W] with exact Python VAE preprocessing
-        /// This is a convenience wrapper around PreprocessImageOptimized with VAE-specific normalization
-        /// Normalization: (pixel/255.0 - 0.5) / 0.5 = pixel * (2.0/255.0) - 1.0 (range: -1 to 1)
-        /// </summary>
-        /// <param name="imageData">RGB24 byte array</param>
-        /// <param name="width">Image width</param>
-        /// <param name="height">Image height</param>
-        /// <param name="applyLowerHalfMask">If true, masks lower half of image to zero (upper half = 1.0, lower half = 0.0)</param>
-        public static DenseTensor<float> BytesToTensor(byte[] imageData, int width, int height, bool applyLowerHalfMask = false)
-        {
-            // VAE preprocessing: (pixel/255.0 - 0.5) / 0.5 = pixel * (2.0/255.0) - 1.0
-            const float multiplier = 2.0f / 255.0f; // ≈ 0.007843137f
-            const float offset = -1.0f;
-            
-            return PreprocessImageOptimized(imageData, width, height, multiplier, offset, applyLowerHalfMask);
-        }
-
     }
 }
