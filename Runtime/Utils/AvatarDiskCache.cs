@@ -367,7 +367,7 @@ namespace MuseTalk.Utils
                 
                 // Convert back to AvatarData
                 var start = Stopwatch.StartNew();
-                var avatarData = await DeserializeAvatarDataAsync(serializableData);
+                var avatarData = DeserializeAvatarData(serializableData);
 
                 var elapsed = start.Elapsed;
                 Logger.Log($"[AvatarDiskCache] Loaded avatar data from cache: in {elapsed.TotalMilliseconds}ms");
@@ -403,7 +403,7 @@ namespace MuseTalk.Utils
                 var filePath = Path.Combine(_cacheDirectory, fileName);
                 
                 // Serialize avatar data
-                var serializableData = await SerializeAvatarDataAsync(avatarData, cacheKey);
+                var serializableData = SerializeAvatarData(avatarData, cacheKey);
                 var jsonData = JsonConvert.SerializeObject(serializableData, Formatting.Indented);
                 
                 // Write to disk
@@ -455,7 +455,7 @@ namespace MuseTalk.Utils
         /// <summary>
         /// Serialize avatar data for disk storage
         /// </summary>
-        private async Task<SerializableAvatarData> SerializeAvatarDataAsync(AvatarData avatarData, string cacheKey)
+        private SerializableAvatarData SerializeAvatarData(AvatarData avatarData, string cacheKey)
         {
             var serializableData = new SerializableAvatarData
             {
@@ -546,7 +546,7 @@ namespace MuseTalk.Utils
         /// <summary>
         /// Deserialize avatar data from disk storage
         /// </summary>
-        private async Task<AvatarData> DeserializeAvatarDataAsync(SerializableAvatarData serializableData)
+        private AvatarData DeserializeAvatarData(SerializableAvatarData serializableData)
         {
             var avatarData = new AvatarData
             {
@@ -565,28 +565,35 @@ namespace MuseTalk.Utils
                         Landmarks = serializableFace.Landmarks?.Select(v => v.ToVector2()).ToArray(),
                         AdjustedFaceBbox = serializableFace.AdjustedFaceBbox?.ToVector4() ?? default(Vector4),
                         CropBox = serializableFace.CropBox?.ToVector4() ?? default(Vector4),
-                        // Convert base64 strings back to byte arrays (no texture conversion needed)
+                        // Cropped Face Texture Data
                         CroppedFaceTextureData = !string.IsNullOrEmpty(serializableFace.CroppedFaceTextureData) ? Convert.FromBase64String(serializableFace.CroppedFaceTextureData) : null,
                         CroppedFaceWidth = serializableFace.CroppedFaceWidth,
                         CroppedFaceHeight = serializableFace.CroppedFaceHeight,
+                        // Original Texture Data
                         OriginalTextureData = !string.IsNullOrEmpty(serializableFace.OriginalTextureData) ? Convert.FromBase64String(serializableFace.OriginalTextureData) : null,
                         OriginalWidth = serializableFace.OriginalWidth,
                         OriginalHeight = serializableFace.OriginalHeight,
+                        // Face Large Data
                         FaceLargeData = !string.IsNullOrEmpty(serializableFace.FaceLargeData) ? Convert.FromBase64String(serializableFace.FaceLargeData) : null,
                         FaceLargeWidth = serializableFace.FaceLargeWidth,
                         FaceLargeHeight = serializableFace.FaceLargeHeight,
+                        // Segmentation Mask Data
                         SegmentationMaskData = !string.IsNullOrEmpty(serializableFace.SegmentationMaskData) ? Convert.FromBase64String(serializableFace.SegmentationMaskData) : null,
                         SegmentationMaskWidth = serializableFace.SegmentationMaskWidth,
                         SegmentationMaskHeight = serializableFace.SegmentationMaskHeight,
+                        // Mask Small Data
                         MaskSmallData = !string.IsNullOrEmpty(serializableFace.MaskSmallData) ? Convert.FromBase64String(serializableFace.MaskSmallData) : null,
                         MaskSmallWidth = serializableFace.MaskSmallWidth,
                         MaskSmallHeight = serializableFace.MaskSmallHeight,
+                        // Full Mask Data
                         FullMaskData = !string.IsNullOrEmpty(serializableFace.FullMaskData) ? Convert.FromBase64String(serializableFace.FullMaskData) : null,
                         FullMaskWidth = serializableFace.FullMaskWidth,
                         FullMaskHeight = serializableFace.FullMaskHeight,
+                        // Boundary Mask Data
                         BoundaryMaskData = !string.IsNullOrEmpty(serializableFace.BoundaryMaskData) ? Convert.FromBase64String(serializableFace.BoundaryMaskData) : null,
                         BoundaryMaskWidth = serializableFace.BoundaryMaskWidth,
                         BoundaryMaskHeight = serializableFace.BoundaryMaskHeight,
+                        // Blurred Mask Data
                         BlurredMaskData = !string.IsNullOrEmpty(serializableFace.BlurredMaskData) ? Convert.FromBase64String(serializableFace.BlurredMaskData) : null,
                         BlurredMaskWidth = serializableFace.BlurredMaskWidth,
                         BlurredMaskHeight = serializableFace.BlurredMaskHeight
