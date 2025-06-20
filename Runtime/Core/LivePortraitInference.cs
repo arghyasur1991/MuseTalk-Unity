@@ -12,7 +12,6 @@ namespace MuseTalk.Core
     using API;
     using Utils;
     using Models;
-    using Debug = UnityEngine.Debug;
 
     /// <summary>
     /// LivePortrait prediction state for frame-by-frame inference
