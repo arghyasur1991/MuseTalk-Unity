@@ -926,6 +926,46 @@ namespace MuseTalk.Utils
                 return hash.ToString("X8");
             }
         }
+        
+        // Face detection and landmark processing methods - SIMPLIFIED FOR NOW
+        /// <summary>
+        /// OPTIMIZED: Common image preprocessing with unsafe pointers and parallelization for maximum performance
+        /// Supports different normalization modes via multiplier and offset constants
+        /// </summary>
+        public static unsafe DenseTensor<float> PreprocessImageOptimized(byte[] img, int width, int height, float multiplier, float offset)
+        {
+            var tensorData = new float[1 * 3 * height * width];
+            int imageSize = height * width;
+            
+            // OPTIMIZED: Use unsafe pointers for direct memory access
+            fixed (byte* imgPtrFixed = img)
+            fixed (float* tensorPtrFixed = tensorData)
+            {
+                // Capture pointers in local variables to avoid lambda closure issues
+                byte* imgPtrLocal = imgPtrFixed;
+                float* tensorPtrLocal = tensorPtrFixed;
+                
+                // MAXIMUM PERFORMANCE: Parallel processing across all pixels for maximum parallelism
+                // Process each pixel independently across all available CPU cores
+                System.Threading.Tasks.Parallel.For(0, imageSize, pixelIdx =>
+                {
+                    // Process all 3 RGB channels for this pixel
+                    for (int c = 0; c < 3; c++)
+                    {
+                        // Direct pointer access for input pixel (HWC format)
+                        byte pixelValue = imgPtrLocal[pixelIdx * 3 + c];
+                        
+                        // Calculate output position in CHW format: [channel][pixel]
+                        float* outputPtr = tensorPtrLocal + c * imageSize + pixelIdx;
+                        
+                        // OPTIMIZED: Configurable normalization with fast math
+                        *outputPtr = pixelValue * multiplier + offset;
+                    }
+                });
+            }
+            
+            return new DenseTensor<float>(tensorData, new[] { 1, 3, height, width });
+        }
 
         /// <summary>
         /// Convert byte array to ONNX tensor format [1, 3, H, W] with exact Python VAE preprocessing

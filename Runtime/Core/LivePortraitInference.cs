@@ -400,118 +400,7 @@ namespace MuseTalk.Core
             
             return cropInfo;
         }
-        
-        /// <summary>
-        /// DEPRECATED: Removed - now using consolidated FaceAnalysis class
-        /// </summary>
-        [Obsolete("Use _faceAnalysis.AnalyzeFaces() instead")]
-        private List<FaceDetectionResult> FaceAnalysis(byte[] img, int width, int height)
-        {
-            // Python: input_size = 512
-            const int inputSize = 512;
-            int pythonHeight = height;  // This matches Python's img.shape[0]
-            int pythonWidth = width;    // This matches Python's img.shape[1]
-            
-            
-            // Python: im_ratio = float(img.shape[0]) / img.shape[1]
-            float imRatio = (float)pythonHeight / pythonWidth;
-            
-            int newHeight, newWidth;
-            // Python: if im_ratio > 1: new_height = input_size; new_width = int(new_height / im_ratio)
-            if (imRatio > 1)
-            {
-                newHeight = inputSize;
-                newWidth = Mathf.FloorToInt(newHeight / imRatio);
-            }
-            else
-            {
-                // Python: else: new_width = input_size; new_height = int(new_width * im_ratio)
-                newWidth = inputSize;
-                newHeight = Mathf.FloorToInt(newWidth * imRatio);
-            }
-            
-            // Python: det_scale = float(new_height) / img.shape[0]
-            float detScale = (float)newHeight / pythonHeight;
-            
-            // Python: resized_img = cv2.resize(img, (new_width, new_height))
-            var resizedImg = TextureUtils.ResizeTextureToExactSize(img, width, height, newWidth, newHeight, TextureUtils.SamplingMode.Bilinear);
-            // Python: det_img = np.zeros((input_size, input_size, 3), dtype=np.uint8)
-            // Python: det_img[:new_height, :new_width, :] = resized_img
-            var detImg = new byte[inputSize * inputSize * 3];
-            var resizedPixels = resizedImg;
-            
-            // OPTIMIZED: Fill with zeros using Array.Clear (faster than manual loop)
-            Array.Clear(detImg, 0, detImg.Length);
-            
-            // OPTIMIZED: Copy resized image to top-left with unsafe pointers and parallelization
-            unsafe
-            {
-                fixed (byte* srcPtrFixed = resizedPixels)
-                fixed (byte* dstPtrFixed = detImg)
-                {
-                    // Capture pointers in local variables to avoid lambda closure issues
-                    byte* srcPtrLocal = srcPtrFixed;
-                    byte* dstPtrLocal = dstPtrFixed;
-                    
-                    // MAXIMUM PERFORMANCE: Parallel row copying with bulk memory operations
-                    // Each row can be processed independently for perfect parallelization
-                    System.Threading.Tasks.Parallel.For(0, newHeight, y =>
-                    {
-                        // Calculate source and destination row pointers
-                        byte* srcRowPtr = srcPtrLocal + y * newWidth * 3;        // Source row (RGB24)
-                        byte* dstRowPtr = dstPtrLocal + y * inputSize * 3;       // Destination row (RGB24)
-                        
-                        // Bulk copy entire row in one operation (much faster than pixel-by-pixel)
-                        int rowBytes = newWidth * 3; // RGB24 = 3 bytes per pixel
-                        Buffer.MemoryCopy(srcRowPtr, dstRowPtr, rowBytes, rowBytes);
-                    });
-                }
-            }
-            
-            
-            // Python: det_img = (det_img - 127.5) / 128
-            // Python: det_img = det_img.transpose(2, 0, 1)  # HWC -> CHW
-            // Python: det_img = np.expand_dims(det_img, axis=0)
-            // Python: det_img = det_img.astype(np.float32)
-            var inputTensor = PreprocessDetectionImage(detImg, inputSize);
-            
-            // Python: output = det_face.run(None, {"input.1": det_img})
-            // Use the actual input name from the model metadata
-            var inputs = new List<Tensor<float>>
-            {
-                inputTensor
-            };
 
-            var results = ModelUtils.RunModel("det_face", _detFace, inputs);
-            var outputs = results.ToArray();
-            
-            // Process detection results exactly as in Python
-            var faces = ProcessDetectionResults(outputs, detScale);
-            
-            // Get landmarks for each face
-            var finalFaces = new List<FaceDetectionResult>();
-            foreach (var face in faces)
-            {
-                var landmarks = GetLandmark(img, width, height, face);
-                face.Landmarks106 = landmarks;
-                finalFaces.Add(face);
-            }
-            
-            // Python: src_face = sorted(ret, key=lambda face: (face["bbox"][2] - face["bbox"][0]) * (face["bbox"][3] - face["bbox"][1]), reverse=True)
-            finalFaces.Sort((a, b) => 
-            {
-                float areaA = a.BoundingBox.width * a.BoundingBox.height;
-                float areaB = b.BoundingBox.width * b.BoundingBox.height;
-                return areaB.CompareTo(areaA); // Descending order
-            });
-            
-            // UnityEngine.Object.DestroyImmediate(resizedImg);
-            // UnityEngine.Object.DestroyImmediate(detImg);
-            
-            
-            return finalFaces;
-        }
-        
         /// <summary>
         /// Python: get_landmark(img, face) - EXACT MATCH
         /// </summary>
@@ -643,7 +532,7 @@ namespace MuseTalk.Core
             // Python: img = img.astype(np.float32)
             
             // Use the common optimized method: pixelValue / 255.0 = pixelValue * (1/255) + 0
-            var tensor = PreprocessImageOptimized(img, width, height, 1.0f / 255.0f, 0.0f);
+            var tensor = TextureUtils.PreprocessImageOptimized(img, width, height, 1.0f / 255.0f, 0.0f);
             return tensor;
         }
         
@@ -1585,46 +1474,6 @@ namespace MuseTalk.Core
             
             return result;
         }
-        
-        // Face detection and landmark processing methods - SIMPLIFIED FOR NOW
-        /// <summary>
-        /// OPTIMIZED: Common image preprocessing with unsafe pointers and parallelization for maximum performance
-        /// Supports different normalization modes via multiplier and offset constants
-        /// </summary>
-        private unsafe DenseTensor<float> PreprocessImageOptimized(byte[] img, int width, int height, float multiplier, float offset)
-        {
-            var tensorData = new float[1 * 3 * height * width];
-            int imageSize = height * width;
-            
-            // OPTIMIZED: Use unsafe pointers for direct memory access
-            fixed (byte* imgPtrFixed = img)
-            fixed (float* tensorPtrFixed = tensorData)
-            {
-                // Capture pointers in local variables to avoid lambda closure issues
-                byte* imgPtrLocal = imgPtrFixed;
-                float* tensorPtrLocal = tensorPtrFixed;
-                
-                // MAXIMUM PERFORMANCE: Parallel processing across all pixels for maximum parallelism
-                // Process each pixel independently across all available CPU cores
-                System.Threading.Tasks.Parallel.For(0, imageSize, pixelIdx =>
-                {
-                    // Process all 3 RGB channels for this pixel
-                    for (int c = 0; c < 3; c++)
-                    {
-                        // Direct pointer access for input pixel (HWC format)
-                        byte pixelValue = imgPtrLocal[pixelIdx * 3 + c];
-                        
-                        // Calculate output position in CHW format: [channel][pixel]
-                        float* outputPtr = tensorPtrLocal + c * imageSize + pixelIdx;
-                        
-                        // OPTIMIZED: Configurable normalization with fast math
-                        *outputPtr = pixelValue * multiplier + offset;
-                    }
-                });
-            }
-            
-            return new DenseTensor<float>(tensorData, new[] { 1, 3, height, width });
-        }
 
         /// <summary>
         /// OPTIMIZED: Detection image preprocessing - matches Python exactly
@@ -1633,7 +1482,7 @@ namespace MuseTalk.Core
         private DenseTensor<float> PreprocessDetectionImage(byte[] img, int inputSize)
         {
             // Pre-calculated constants: (pixelValue - 127.5) / 128 = pixelValue * 0.0078125 - 0.99609375
-            return PreprocessImageOptimized(img, inputSize, inputSize, 0.0078125f, -0.99609375f);
+            return TextureUtils.PreprocessImageOptimized(img, inputSize, inputSize, 0.0078125f, -0.99609375f);
         }
         
         /// <summary>
@@ -2010,7 +1859,7 @@ namespace MuseTalk.Core
         private DenseTensor<float> PreprocessLandmarkImage(byte[] img, int inputSize)
         {
             // No normalization: pixelValue = pixelValue * 1.0 + 0.0
-            return PreprocessImageOptimized(img, inputSize, inputSize, 1.0f, 0.0f);
+            return TextureUtils.PreprocessImageOptimized(img, inputSize, inputSize, 1.0f, 0.0f);
         }
         
         /// <summary>
@@ -2020,7 +1869,7 @@ namespace MuseTalk.Core
         private DenseTensor<float> PreprocessLandmarkRunnerImage(byte[] img, int width, int height)
         {
             // Normalize to [0,1]: pixelValue / 255 = pixelValue * 0.00392157 + 0
-            return PreprocessImageOptimized(img, width, height, 0.00392157f, 0.0f);  // 1/255 = 0.00392157
+            return TextureUtils.PreprocessImageOptimized(img, width, height, 0.00392157f, 0.0f);  // 1/255 = 0.00392157
         }
         
         private Vector2[] TransformLandmarksWithMatrix(Vector2[] landmarks, Matrix4x4 transform)
