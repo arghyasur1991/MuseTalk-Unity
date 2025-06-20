@@ -14,7 +14,6 @@ namespace MuseTalk.Core
 
     /// <summary>
     /// Precomputed segmentation data for efficient frame blending
-    /// REFACTORED: Uses byte arrays for internal storage instead of Texture2D for better memory efficiency
     /// </summary>
     public class SegmentationData
     {
@@ -354,7 +353,6 @@ namespace MuseTalk.Core
         
         /// <summary>
         /// Generate segmentation mask for caching (extracted from ImageBlendingHelper logic)
-        /// OPTIMIZED: Returns byte array directly without creating temporary Texture2D objects
         /// FIXED: Runs on main thread to avoid Unity texture operation violations
         /// </summary>
         private (byte[], int, int) GenerateFaceSegmentationMaskCached(byte[] faceLarge, int faceLargeWidth, int faceLargeHeight)
@@ -457,15 +455,6 @@ namespace MuseTalk.Core
                 var keysToRemove = _avatarAnimationCache.Keys.Take(_avatarAnimationCache.Count - MAX_CACHE_SIZE + 1).ToList();
                 foreach (var key in keysToRemove)
                 {
-                    if (_avatarAnimationCache.TryGetValue(key, out var cachedData))
-                    {
-                        // Clean up cached byte arrays (no Texture2D cleanup needed since we use byte arrays now)
-                        foreach (var faceRegion in cachedData.FaceRegions)
-                        {
-                            // Data is stored as byte arrays, so no Unity Object cleanup needed
-                            // The garbage collector will handle the byte arrays when the cache entry is removed
-                        }
-                    }
                     _avatarAnimationCache.Remove(key);
                     Logger.Log($"[MuseTalkInference] Removed cached avatar animation to manage memory");
                 }
@@ -760,7 +749,6 @@ namespace MuseTalk.Core
         
         /// <summary>
         /// Encode image using VAE encoder
-        /// REFACTORED: Works with byte arrays instead of Texture2D
         /// </summary>
         private async Task<float[]> EncodeImage(byte[] imageData, int width, int height)
         {
@@ -788,7 +776,6 @@ namespace MuseTalk.Core
         /// <summary>
         /// Encode image with lower half masked using VAE encoder
         /// Matches Python's encode_image_with_half_mask exactly
-        /// REFACTORED: Works with byte arrays instead of Texture2D
         /// </summary>
         private async Task<float[]> EncodeImageWithMask(byte[] imageData, int width, int height)
         {
@@ -813,7 +800,6 @@ namespace MuseTalk.Core
         
         /// <summary>
         /// Get latents for UNet inference, matching Python's get_latents_for_unet exactly
-        /// REFACTORED: Works with byte arrays instead of Texture2D
         /// </summary>
         private async Task<float[]> GetLatentsForUNet(byte[] imageData, int width, int height)
         {
@@ -1094,8 +1080,6 @@ namespace MuseTalk.Core
                 
                 try
                 {
-                    // OPTIMIZATION: Reuse the tensor directly without creating a copy
-                    // CreateFromTensor with existing tensor should not copy if tensor owns its buffer
                     var inputs = new List<NamedOnnxValue>
                     {
                         NamedOnnxValue.CreateFromTensor("latents", unetOutputBatch)
@@ -1190,40 +1174,24 @@ namespace MuseTalk.Core
                     }
                     
                     // Resize decoded frame to face crop size
-                    var resizedFrame = TextureUtils.ResizeTextureToExactSize(rawDecodedTextureData, rawDecodedTextureWidth, rawDecodedTextureHeight, targetWidth, targetHeight);
-                    
-                    // Step 3: Apply seamless face blending
-                    if (faceData.OriginalTextureData == null)
-                    {
-                        blendedFrames.Add(TextureUtils.BytesToTexture2D(resizedFrame, targetWidth, targetHeight));
-                        continue;
-                    }
+                    var resizedFrame = TextureUtils.ResizeTextureToExactSize(
+                        rawDecodedTextureData, rawDecodedTextureWidth, rawDecodedTextureHeight, 
+                        targetWidth, targetHeight);
                     
                     // Convert face bbox to Vector4 format for blending (x1, y1, x2, y2)
                     var faceBbox = new Vector4(bbox.x, bbox.y, bbox.x + bbox.width, bbox.y + bbox.height);
                     string blendingMode = "jaw"; // version v15
+                    // Use precomputed segmentation data for optimal performance
+                    var blendedFrame = ImageBlendingHelper.BlendFaceWithOriginal(
+                        faceData.OriginalTextureData, faceData.OriginalWidth, faceData.OriginalHeight,
+                        resizedFrame, targetWidth, targetHeight,
+                        faceBbox,
+                        faceData.CropBox,
+                        faceData.BlurredMaskData, faceData.BlurredMaskWidth, faceData.BlurredMaskHeight,
+                        faceData.FaceLargeData, faceData.FaceLargeWidth, faceData.FaceLargeHeight,
+                        blendingMode);
                     
-                    try
-                    {
-                        // Use precomputed segmentation data for optimal performance
-                        var blendedFrame = ImageBlendingHelper.BlendFaceWithOriginal(
-                            faceData.OriginalTextureData, faceData.OriginalWidth, faceData.OriginalHeight,
-                            resizedFrame, targetWidth, targetHeight,
-                            faceBbox,
-                            faceData.CropBox,
-                            faceData.BlurredMaskData, faceData.BlurredMaskWidth, faceData.BlurredMaskHeight,
-                            faceData.FaceLargeData, faceData.FaceLargeWidth, faceData.FaceLargeHeight,
-                            blendingMode);
-                        
-                        blendedFrames.Add(TextureUtils.BytesToTexture2D(blendedFrame, faceData.OriginalWidth, faceData.OriginalHeight));
-                    }
-                    catch (Exception e)
-                    {
-                        Logger.LogError($"[MuseTalkInference] Frame processing failed for frame {globalFrameIdx}: {e.Message}");
-                        
-                        // Clean up temporary textures in case of error
-                        blendedFrames.Add(TextureUtils.BytesToTexture2D(resizedFrame, targetWidth, targetHeight));
-                    }
+                    blendedFrames.Add(TextureUtils.BytesToTexture2D(blendedFrame, faceData.OriginalWidth, faceData.OriginalHeight));
                 }
                 else
                 {
