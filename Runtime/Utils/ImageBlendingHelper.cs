@@ -34,38 +34,42 @@ namespace MuseTalk.Utils
 
         /// <summary>
         /// Blend face with original image using cached segmentation mask
+        /// REFACTORED: Now works with byte arrays for better memory efficiency
         /// OPTIMIZED: Uses pre-computed segmentation data to avoid regenerating mask for every frame
         /// </summary>
-        public static Texture2D BlendFaceWithOriginal(Texture2D originalImage, Texture2D faceTexture,
-            Vector4 faceBbox, string mode = "raw", Vector4 cachedCropBox = default,
-            Texture2D precomputedBlurredMask = null, Texture2D precomputedFaceLarge = null)
+        public static byte[] BlendFaceWithOriginal(
+            byte[] originalImage, int originalWidth, int originalHeight, 
+            byte[] faceTexture, int faceWidth, int faceHeight,  
+            Vector4 faceBbox, Vector4 cropBox,
+            byte[] precomputedBlurredMask, int precomputedBlurredMaskWidth, int precomputedBlurredMaskHeight,
+            byte[] precomputedFaceLarge, int precomputedFaceLargeWidth, int precomputedFaceLargeHeight, 
+            string mode = "raw")
         {
-            try
+            // Use precomputed blurred mask if available (optimal path)
+            if (precomputedBlurredMask != null && cropBox != default)
             {
-                // Use precomputed blurred mask if available (optimal path)
-                if (precomputedBlurredMask != null && cachedCropBox != default)
+                // OPTIMAL PATH: Use precomputed blurred mask for maximum performance
+                Vector4 adjustedFaceBbox = faceBbox;
+                if (mode == "jaw") // v15 mode
                 {
-                    // OPTIMAL PATH: Use precomputed blurred mask for maximum performance
-                    Vector4 adjustedFaceBbox = faceBbox;
-                    if (mode == "jaw") // v15 mode
-                    {
-                        adjustedFaceBbox.w = Mathf.Min(adjustedFaceBbox.w + 10f, originalImage.height);
-                    }
-                    
-                    // Apply the precomputed blurred mask to blend the face
-                    var result = ApplySegmentationMaskWithPrecomputedMasks(originalImage, faceTexture, adjustedFaceBbox, cachedCropBox, precomputedBlurredMask, precomputedFaceLarge);
-                    return result;
+                    adjustedFaceBbox.w = Mathf.Min(adjustedFaceBbox.w + 10f, originalHeight);
                 }
-                else
-                {                    
-                    // No fallback - throw exception if face segmentation fails
-                    throw new InvalidOperationException("Face segmentation failed and no fallback is available");
-                }
+                
+                // Apply the precomputed blurred mask to blend the face
+                var result = ApplySegmentationMaskWithPrecomputedMasks(
+                    originalImage, originalWidth, originalHeight, 
+                    faceTexture, faceWidth, faceHeight, 
+                    adjustedFaceBbox, cropBox,
+                    precomputedBlurredMask, precomputedBlurredMaskWidth, precomputedBlurredMaskHeight,
+                    precomputedFaceLarge, precomputedFaceLargeWidth, precomputedFaceLargeHeight, 
+                    mode);
+                return result;
             }
-            catch (Exception e)
+            else
             {
-                Logger.LogError($"[ImageBlendingHelper] Blending failed: {e.Message}");
-                throw;
+                // No fallback - throw exception if face segmentation fails
+                Logger.LogError("Face segmentation failed and no fallback is available");
+                return null;
             }
         }
 
@@ -97,23 +101,28 @@ namespace MuseTalk.Utils
 
         /// <summary>
         /// Crop image to specified rectangle
+        /// REFACTORED: Now works with byte arrays for better memory efficiency
         /// </summary>
-        private static Texture2D CropImage(Texture2D source, Rect cropRect)
+        private static (byte[], int, int) CropImage(byte[] sourceData, int sourceWidth, int sourceHeight, Rect cropRect)
         {
             // Ensure crop bounds are within image
             cropRect.x = Mathf.Max(0, cropRect.x);
             cropRect.y = Mathf.Max(0, cropRect.y);
-            cropRect.width = Mathf.Min(cropRect.width, source.width - cropRect.x);
-            cropRect.height = Mathf.Min(cropRect.height, source.height - cropRect.y);
+            cropRect.width = Mathf.Min(cropRect.width, sourceWidth - cropRect.x);
+            cropRect.height = Mathf.Min(cropRect.height, sourceHeight - cropRect.y);
             
-            return TextureUtils.CropTexture(source, cropRect);
+            return (TextureUtils.CropTexture(sourceData, sourceWidth, sourceHeight, cropRect), 
+                    (int)cropRect.width, (int)cropRect.height);
         }
 
         /// <summary>
         /// Create mask_small from BiSeNet result by cropping to face region
+        /// REFACTORED: Now works with byte arrays for better memory efficiency
         /// Matches Python: mask_small = mask_image.crop((x - x_s, y - y_s, x1 - x_s, y1 - y_s))
         /// </summary>
-        public static Texture2D CreateSmallMaskFromBiSeNet(Texture2D biSeNetMask, Vector4 faceBbox, Rect cropBox)
+        public static (byte[], int, int) CreateSmallMaskFromBiSeNet(
+            byte[] biSeNetMaskData, int maskWidth, int maskHeight,
+            Vector4 faceBbox, Rect cropBox)
         {
             float x = faceBbox.x;
             float y = faceBbox.y;
@@ -130,53 +139,14 @@ namespace MuseTalk.Utils
                 y1 - y   // height = y1 - y
             );
             
-            return CropImage(biSeNetMask, cropRect);
-        }
-        
-        /// <summary>
-        /// Paste mask_small into blank canvas at correct position
-        /// Matches Python: mask_image.paste(mask_small, (x-x_s, y-y_s, x1-x_s, y1-y_s))
-        /// </summary>
-        private static Texture2D PasteMaskSmallIntoBlank(Texture2D blankMask, Texture2D maskSmall, Vector4 faceBbox, Rect cropBox)
-        {
-            float x = faceBbox.x;
-            float y = faceBbox.y;
-            float x_s = cropBox.x;
-            float y_s = cropBox.y;
-            
-            int pasteX = Mathf.RoundToInt(x - x_s);
-            int pasteY = Mathf.RoundToInt(y - y_s);
-            
-            // Create result texture
-            var result = new Texture2D(blankMask.width, blankMask.height, TextureFormat.R8, false);
-            var resultPixels = blankMask.GetRawTextureData<byte>().ToArray();
-            var smallPixels = maskSmall.GetRawTextureData<byte>();
-            
-            // Paste mask_small into result at calculated position
-            for (int sy = 0; sy < maskSmall.height; sy++)
-            {
-                for (int sx = 0; sx < maskSmall.width; sx++)
-                {
-                    int targetX = pasteX + sx;
-                    int targetY = pasteY + sy;
-                    
-                    if (targetX >= 0 && targetX < result.width && targetY >= 0 && targetY < result.height)
-                    {
-                        resultPixels[targetY * result.width + targetX] = smallPixels[sy * maskSmall.width + sx];
-                    }
-                }
-            }
-            
-            result.LoadRawTextureData(resultPixels);
-            result.Apply();
-            
-            return result;
+            return CropImage(biSeNetMaskData, maskWidth, maskHeight, cropRect);
         }
 
         /// <summary>
         /// Create small mask cropped to face region (matching Python mask_small)
+        /// REFACTORED: Now works with byte arrays for better memory efficiency
         /// </summary>
-        private static Texture2D CreateSmallMask(Texture2D maskTexture, Vector4 faceBbox, Rect cropBox)
+        private static (byte[], int, int) CreateSmallMask(byte[] maskData, int maskWidth, int maskHeight, Vector4 faceBbox, Rect cropBox)
         {
             // Python: mask_small = mask_image.crop((x - x_s, y - y_s, x1 - x_s, y1 - y_s))
             float x = faceBbox.x;
@@ -193,37 +163,28 @@ namespace MuseTalk.Utils
                 y1 - y - (y - y_s)   // height = y1 - y
             );
             
-            return CropImage(maskTexture, cropRect);
+            return CropImage(maskData, maskWidth, maskHeight, cropRect);
         }
 
         /// <summary>
         /// Create full mask by pasting small mask into blank canvas (matching Python mask_full)
+        /// REFACTORED: Now works with byte arrays for better memory efficiency
         /// OPTIMIZED: Uses unsafe pointers, parallelization, and memcpy for maximum performance
         /// </summary>
-        public static unsafe Texture2D CreateFullMask(Texture2D originalMask, Texture2D smallMask, Vector4 faceBbox, Rect cropBox)
+        public static unsafe (byte[], int, int) CreateFullMask(
+            byte[] originalMaskData, int originalWidth, int originalHeight, 
+            byte[] smallMaskData, int smallWidth, int smallHeight, 
+            Vector4 faceBbox, Rect cropBox)
         {
             // Python: mask_image = Image.new('L', ori_shape, 0)
             // Python: mask_image.paste(mask_small, (x-x_s, y-y_s, x1-x_s, y1-y_s))
             
-            int width = originalMask.width;
-            int height = originalMask.height;
+            int width = originalWidth;
+            int height = originalHeight;
+            int rowSizeBytes = width * 3; // RGB24: 3 bytes per pixel
             
-            // Create blank mask with RGB24 format for efficiency
-            var fullMask = new Texture2D(width, height, TextureFormat.RGB24, false);
-            var fullPixelData = fullMask.GetPixelData<byte>(0);
-            var smallPixelData = smallMask.GetPixelData<byte>(0);
-            
-            // Get unsafe pointers for direct memory operations
-            byte* fullPtr = (byte*)fullPixelData.GetUnsafePtr();
-            byte* smallPtr = (byte*)smallPixelData.GetUnsafeReadOnlyPtr();
-            
-            // Initialize to black (parallel clear for large textures)
-            int totalBytes = width * height * 3; // RGB24: 3 bytes per pixel
-            System.Threading.Tasks.Parallel.For(0, height, y =>
-            {
-                byte* rowPtr = fullPtr + y * width * 3;
-                UnsafeUtility.MemClear(rowPtr, width * 3);
-            });
+            // Create blank mask data with RGB24 format for efficiency
+            var fullMaskData = new byte[width * height * 3];
             
             // Calculate paste position (matching Python coordinates)
             float x = faceBbox.x;
@@ -236,103 +197,119 @@ namespace MuseTalk.Utils
             
             // Calculate valid paste region to avoid bounds checking in inner loop
             int startX = Mathf.Max(0, pasteX);
-            int endX = Mathf.Min(width, pasteX + smallMask.width);
+            int endX = Mathf.Min(width, pasteX + smallWidth);
             int startY = Mathf.Max(0, pasteY);
-            int endY = Mathf.Min(height, pasteY + smallMask.height);
+            int endY = Mathf.Min(height, pasteY + smallHeight);
             
-            // Parallel paste operation - process rows concurrently with bulk copy optimization
-            System.Threading.Tasks.Parallel.For(startY, endY, targetY =>
+            // Use unsafe pointers for maximum performance with memcpy operations
+            fixed (byte* fullMaskPtr = fullMaskData)
+            fixed (byte* smallMaskPtr = smallMaskData)
             {
-                int sourceY = targetY - pasteY;
-                if (sourceY >= 0 && sourceY < smallMask.height)
+                byte* fullMaskPtrLocal = fullMaskPtr;
+                byte* smallMaskPtrLocal = smallMaskPtr;
+                
+                // Initialize to black using parallel memclear (much faster than loops)
+                System.Threading.Tasks.Parallel.For(0, height, y =>
                 {
-                    byte* targetRowPtr = fullPtr + targetY * width * 3;
-                    byte* sourceRowPtr = smallPtr + sourceY * smallMask.width * 3;
-                    
-                    // Check if we can do a full row copy (when pasting starts at X=0 and covers full width)
-                    if (pasteX == 0 && startX == 0 && endX == width && smallMask.width == width)
+                    byte* targetRowPtr = fullMaskPtrLocal + y * rowSizeBytes;
+                    UnsafeUtility.MemClear(targetRowPtr, rowSizeBytes);
+                });
+                
+                // Parallel paste operation - process rows concurrently
+                System.Threading.Tasks.Parallel.For(startY, endY, targetY =>
+                {
+                    int sourceY = targetY - pasteY;
+                    if (sourceY >= 0 && sourceY < smallHeight)
                     {
-                        // Bulk copy entire row using native memcpy (fastest path)
-                        UnsafeUtility.MemCpy(targetRowPtr, sourceRowPtr, smallMask.width * 3);
-                    }
-                    else
-                    {
-                        // Partial row copy - optimized pixel-by-pixel with pointer arithmetic
-                        for (int targetX = startX; targetX < endX; targetX++)
+                        byte* targetRowPtr = fullMaskPtrLocal + targetY * rowSizeBytes;
+                        byte* sourceRowPtr = smallMaskPtrLocal + sourceY * smallWidth * 3;
+                        
+                        // Check if we can do a full row copy (when small mask width matches and aligns perfectly)
+                        if (pasteX == 0 && startX == 0 && endX == width && smallWidth == width)
                         {
-                            int sourceX = targetX - pasteX;
-                            
-                            // Copy RGB values from small mask (grayscale: R=G=B)
-                            byte* targetPixel = targetRowPtr + targetX * 3;
-                            byte* sourcePixel = sourceRowPtr + sourceX * 3;
-                            
-                            // Use red channel as grayscale value for all RGB components
-                            byte grayValue = sourcePixel[0]; // Red channel
-                            targetPixel[0] = grayValue; // R
-                            targetPixel[1] = grayValue; // G
-                            targetPixel[2] = grayValue; // B
+                            // Bulk copy entire row using native memcpy (fastest path)
+                            UnsafeUtility.MemCpy(targetRowPtr, sourceRowPtr, smallWidth * 3);
+                        }
+                        else
+                        {
+                            // Partial row copy - process pixels in chunks when possible
+                            for (int targetX = startX; targetX < endX; targetX++)
+                            {
+                                int sourceX = targetX - pasteX;
+                                if (sourceX >= 0 && sourceX < smallWidth)
+                                {
+                                    byte* targetPixelPtr = targetRowPtr + targetX * 3;
+                                    byte* sourcePixelPtr = sourceRowPtr + sourceX * 3;
+                                    
+                                    // Use red channel as grayscale value for all RGB components
+                                    byte grayValue = sourcePixelPtr[0]; // Red channel
+                                    targetPixelPtr[0] = grayValue; // R
+                                    targetPixelPtr[1] = grayValue; // G
+                                    targetPixelPtr[2] = grayValue; // B
+                                }
+                            }
                         }
                     }
-                }
-            });
+                });
+            }
             
-            fullMask.Apply();
-            return fullMask;
+            return (fullMaskData, width, height);
         }
 
         /// <summary>
         /// Apply upper boundary ratio to preserve upper face area (matching Python)
+        /// REFACTORED: Now works with byte arrays for better memory efficiency
         /// OPTIMIZED: Uses unsafe pointers, parallelization, and memcpy for maximum performance
         /// </summary>
-        public static unsafe Texture2D ApplyUpperBoundaryRatio(Texture2D mask, float upperBoundaryRatio)
+        public static unsafe (byte[], int, int) ApplyUpperBoundaryRatio(byte[] maskData, int width, int height, float upperBoundaryRatio)
         {
-            int width = mask.width;
-            int height = mask.height;
-            
-            // Create result texture with RGB24 format for efficiency
-            var result = new Texture2D(width, height, TextureFormat.RGB24, false);
-            var maskPixelData = mask.GetPixelData<byte>(0);
-            var resultPixelData = result.GetPixelData<byte>(0);
-            
-            // Get unsafe pointers for direct memory operations
-            byte* maskPtr = (byte*)maskPixelData.GetUnsafeReadOnlyPtr();
-            byte* resultPtr = (byte*)resultPixelData.GetUnsafePtr();
+            // Create result data with RGB24 format for efficiency
+            var resultData = new byte[width * height * 3];
             
             // Calculate boundary line (matching Python upper_boundary_ratio logic)
-            // In Unity: Y=0 is bottom, Y=height-1 is top
+            // In standard image coordinates: Y=0 is top, Y=height-1 is bottom
             // upperBoundaryRatio=0.5 means preserve top 50% of face (upper half)
-            int boundaryY = Mathf.RoundToInt(height * (1.0f - upperBoundaryRatio));
+            // Python: top_boundary = int(height * upper_boundary_ratio)
+            int boundaryY = Mathf.RoundToInt(height * upperBoundaryRatio);
+            int rowSizeBytes = width * 3; // RGB24: 3 bytes per pixel
             
-            // Parallel processing of rows for maximum performance
-            System.Threading.Tasks.Parallel.For(0, height, y =>
+            // Use unsafe pointers for maximum performance with memcpy operations
+            fixed (byte* maskPtr = maskData)
+            fixed (byte* resultPtr = resultData)
             {
-                byte* maskRowPtr = maskPtr + y * width * 3;
-                byte* resultRowPtr = resultPtr + y * width * 3;
+                byte* maskPtrLocal = maskPtr;
+                byte* resultPtrLocal = resultPtr;
                 
-                // In Unity coordinates: higher Y = upper part of image
-                if (y >= boundaryY) // Upper part of face (preserve original)
+                // Parallel processing of rows for maximum performance
+                System.Threading.Tasks.Parallel.For(0, height, y =>
                 {
-                    // Zero out entire row using fast memclear (preserve original face - eyes, nose, forehead)
-                    UnsafeUtility.MemClear(resultRowPtr, width * 3);
-                }
-                else // Lower part of face (talking area - mouth, chin)
-                {
-                    // Copy entire row from mask to result using fast memcpy (allow blending)
-                    UnsafeUtility.MemCpy(resultRowPtr, maskRowPtr, width * 3);
-                }
-            });
+                    byte* sourceRowPtr = maskPtrLocal + y * rowSizeBytes;
+                    byte* targetRowPtr = resultPtrLocal + y * rowSizeBytes;
+                    
+                    // In standard image coordinates: lower Y = upper part of image
+                    if (y < boundaryY) // Upper part of face (preserve original - eyes, nose, forehead)
+                    {
+                        // Zero out entire row using fast memset (preserve original face - eyes, nose, forehead)
+                        UnsafeUtility.MemClear(targetRowPtr, rowSizeBytes);
+                    }
+                    else // Lower part of face (talking area - mouth, chin)
+                    {
+                        // Copy entire row from mask to result using fast memcpy (allow blending)
+                        UnsafeUtility.MemCpy(targetRowPtr, sourceRowPtr, rowSizeBytes);
+                    }
+                });
+            }
             
-            result.Apply();
-            return result;
+            return (resultData, width, height);
         }
 
         /// <summary>
         /// Paste generated face into the large face region
         /// OPTIMIZED: Uses unsafe pointers, parallelization, and memcpy for maximum performance
         /// </summary>
-        private static unsafe Texture2D PasteFaceIntoLarge(
-            Texture2D faceLarge,
-            Texture2D generatedFace,
+        private static unsafe byte[] PasteFaceIntoLarge(
+            byte[] faceLarge, int faceLargeWidth, int faceLargeHeight,
+            byte[] generatedFace, int generatedFaceWidth, int generatedFaceHeight,
             Vector4 faceBbox,
             Rect cropBox)
         {
@@ -340,75 +317,75 @@ namespace MuseTalk.Utils
             int relativeX = (int)(faceBbox.x - cropBox.x);
             int relativeY = (int)(faceBbox.y - cropBox.y);
             
-            // CRITICAL: Convert from image coordinates (Y=0 at top) to Unity coordinates (Y=0 at bottom)
-            int unityRelativeY = faceLarge.height - relativeY - generatedFace.height;
-            
             // Create result texture with RGB24 format for efficiency
-            var result = new Texture2D(faceLarge.width, faceLarge.height, TextureFormat.RGB24, false);
-            var faceLargePixelData = faceLarge.GetPixelData<byte>(0);
-            var generatedFacePixelData = generatedFace.GetPixelData<byte>(0);
-            var resultPixelData = result.GetPixelData<byte>(0);
+            var result = new byte[faceLargeWidth * faceLargeHeight * 3];
+            var faceLargePixelData = faceLarge;
+            var generatedFacePixelData = generatedFace;
+            var resultPixelData = result;
             
             // Get unsafe pointers for direct memory operations
-            byte* faceLargePtr = (byte*)faceLargePixelData.GetUnsafeReadOnlyPtr();
-            byte* generatedFacePtr = (byte*)generatedFacePixelData.GetUnsafeReadOnlyPtr();
-            byte* resultPtr = (byte*)resultPixelData.GetUnsafePtr();
-            
-            int resultWidth = result.width;
-            int resultHeight = result.height;
-            int faceWidth = generatedFace.width;
-            int faceHeight = generatedFace.height;
-            
-            // First, copy the entire faceLarge to result using parallel memcpy
-            System.Threading.Tasks.Parallel.For(0, resultHeight, y =>
+            fixed (byte* faceLargePtr = faceLargePixelData)
+            fixed (byte* generatedFacePtr = generatedFacePixelData)
+            fixed (byte* resultPtr = resultPixelData)
             {
-                byte* sourceRowPtr = faceLargePtr + y * resultWidth * 3;
-                byte* targetRowPtr = resultPtr + y * resultWidth * 3;
-                UnsafeUtility.MemCpy(targetRowPtr, sourceRowPtr, resultWidth * 3);
-            });
-            
-            // Calculate valid paste region to avoid bounds checking in inner loop
-            int startX = Mathf.Max(0, relativeX);
-            int endX = Mathf.Min(resultWidth, relativeX + faceWidth);
-            int startY = Mathf.Max(0, unityRelativeY);
-            int endY = Mathf.Min(resultHeight, unityRelativeY + faceHeight);
-            
-            // Parallel paste operation - process rows of the generated face
-            System.Threading.Tasks.Parallel.For(startY, endY, targetY =>
-            {
-                int sourceY = targetY - unityRelativeY;
-                if (sourceY >= 0 && sourceY < faceHeight)
+                int resultWidth = faceLargeWidth;
+                int resultHeight = faceLargeHeight;
+                int faceWidth = generatedFaceWidth;
+                int faceHeight = generatedFaceHeight;
+
+                byte* faceLargePtrLocal = faceLargePtr;
+                byte* generatedFacePtrLocal = generatedFacePtr;
+                byte* resultPtrLocal = resultPtr;
+
+                // First, copy the entire faceLarge to result using parallel memcpy
+                System.Threading.Tasks.Parallel.For(0, resultHeight, y =>
                 {
-                    byte* targetRowPtr = resultPtr + targetY * resultWidth * 3;
-                    byte* sourceRowPtr = generatedFacePtr + sourceY * faceWidth * 3;
-                    
-                    // Check if we can do a full row copy (when face width matches and aligns perfectly)
-                    if (relativeX == 0 && startX == 0 && endX == resultWidth && faceWidth == resultWidth)
+                    byte* sourceRowPtr = faceLargePtrLocal + y * resultWidth * 3;
+                    byte* targetRowPtr = resultPtrLocal + y * resultWidth * 3;
+                    UnsafeUtility.MemCpy(targetRowPtr, sourceRowPtr, resultWidth * 3);
+                });
+
+                // Calculate valid paste region to avoid bounds checking in inner loop
+                int startX = Mathf.Max(0, relativeX);
+                int endX = Mathf.Min(resultWidth, relativeX + faceWidth);
+                int startY = Mathf.Max(0, relativeY);
+                int endY = Mathf.Min(resultHeight, relativeY + faceHeight);
+                
+                // Parallel paste operation - process rows of the generated face
+                System.Threading.Tasks.Parallel.For(startY, endY, targetY =>
+                {
+                    int sourceY = targetY - relativeY;
+                    if (sourceY >= 0 && sourceY < faceHeight)
                     {
-                        // Bulk copy entire row using native memcpy (fastest path)
-                        UnsafeUtility.MemCpy(targetRowPtr, sourceRowPtr, faceWidth * 3);
-                    }
-                    else
-                    {
-                        // Partial row copy - use optimized chunk copying when possible
-                        int copyStartX = startX;
-                        int copyEndX = endX;
-                        int sourceStartX = copyStartX - relativeX;
-                        int copyWidth = copyEndX - copyStartX;
+                        byte* targetRowPtr = resultPtrLocal + targetY * resultWidth * 3;
+                        byte* sourceRowPtr = generatedFacePtrLocal + sourceY * faceWidth * 3;
                         
-                        if (copyWidth > 0 && sourceStartX >= 0)
+                        // Check if we can do a full row copy (when face width matches and aligns perfectly)
+                        if (relativeX == 0 && startX == 0 && endX == resultWidth && faceWidth == resultWidth)
                         {
-                            byte* targetPtr = targetRowPtr + copyStartX * 3;
-                            byte* sourcePtr = sourceRowPtr + sourceStartX * 3;
+                            // Bulk copy entire row using native memcpy (fastest path)
+                            UnsafeUtility.MemCpy(targetRowPtr, sourceRowPtr, faceWidth * 3);
+                        }
+                        else
+                        {
+                            // Partial row copy - use optimized chunk copying when possible
+                            int copyStartX = startX;
+                            int copyEndX = endX;
+                            int sourceStartX = copyStartX - relativeX;
+                            int copyWidth = copyEndX - copyStartX;
                             
-                            // Use memcpy for contiguous pixel chunks (much faster than pixel-by-pixel)
-                            UnsafeUtility.MemCpy(targetPtr, sourcePtr, copyWidth * 3);
+                            if (copyWidth > 0 && sourceStartX >= 0)
+                            {
+                                byte* targetPtr = targetRowPtr + copyStartX * 3;
+                                byte* sourcePtr = sourceRowPtr + sourceStartX * 3;
+                                
+                                // Use memcpy for contiguous pixel chunks (much faster than pixel-by-pixel)
+                                UnsafeUtility.MemCpy(targetPtr, sourcePtr, copyWidth * 3);
+                            }
                         }
                     }
-                }
-            });
-            
-            result.Apply();
+                });
+            }
             return result;
         }
         
@@ -416,51 +393,61 @@ namespace MuseTalk.Utils
         /// Apply segmentation mask to blend face with original image using precomputed masks
         /// OPTIMIZED: Uses precomputed masks for maximum performance
         /// </summary>
-        public static Texture2D ApplySegmentationMaskWithPrecomputedMasks(Texture2D originalImage, Texture2D faceTexture, 
-            Vector4 faceBbox, Vector4 cropBox, Texture2D precomputedBlurredMask, Texture2D precomputedFaceLarge)
+        public static byte[] ApplySegmentationMaskWithPrecomputedMasks(
+            byte[] originalImage, int originalWidth, int originalHeight, 
+            byte[] faceTexture, int faceTextureWidth, int faceTextureHeight,  
+            Vector4 faceBbox, Vector4 cropBox,
+            byte[] precomputedBlurredMask, int precomputedBlurredMaskWidth, int precomputedBlurredMaskHeight,
+            byte[] precomputedFaceLarge, int precomputedFaceLargeWidth, int precomputedFaceLargeHeight, 
+            string mode = "raw")
         {
-            try
-            {
-                // Step 1: Use precomputed face_large and paste the resized face into it (matching Python exactly)
-                // Python: face_large = body.crop(crop_box); face_large.paste(face, (x-x_s, y-y_s))
-                // Note: faceLarge is already precomputed, no need to crop again
-                
-                // Resize face texture to match face bbox dimensions (use exact integer calculation like Python)
-                int faceWidth = (int)(faceBbox.z - faceBbox.x);
-                int faceHeight = (int)(faceBbox.w - faceBbox.y);
-                var resizedFace = TextureUtils.ResizeTexture(faceTexture, faceWidth, faceHeight);
+            // Step 1: Use precomputed face_large and paste the resized face into it (matching Python exactly)
+            // Python: face_large = body.crop(crop_box); face_large.paste(face, (x-x_s, y-y_s))
+            // Note: faceLarge is already precomputed, no need to crop again
+            
+            // Resize face texture to match face bbox dimensions (use exact integer calculation like Python)
+            int faceWidth = (int)(faceBbox.z - faceBbox.x);
+            int faceHeight = (int)(faceBbox.w - faceBbox.y);
+            var resizedFace = TextureUtils.ResizeTextureToExactSize(faceTexture, faceTextureWidth, faceTextureHeight, faceWidth, faceHeight);
 
-                // Paste the resized face into precomputed face_large at relative position (matching Python)
-                // Python: face_large.paste(face, (x-x_s, y-y_s))
-                var faceLargeWithFace = PasteFaceIntoLarge(precomputedFaceLarge, resizedFace, faceBbox, new Rect(cropBox.x, cropBox.y, cropBox.z - cropBox.x, cropBox.w - cropBox.y));
-                // Step 2: Composite images using the precomputed blurred mask (matching Python alpha blending)
-                // Python: body.paste(face_large, crop_box[:2], mask_image)
-                var result = CompositeWithMask(originalImage, faceLargeWithFace, faceBbox, precomputedBlurredMask, cropBox);
+            // Paste the resized face into precomputed face_large at relative position (matching Python)
+            // Python: face_large.paste(face, (x-x_s, y-y_s))
+            var cropRect = new Rect(cropBox.x, cropBox.y, cropBox.z - cropBox.x, cropBox.w - cropBox.y);
+            var faceLargeWithFace = PasteFaceIntoLarge(
+                precomputedFaceLarge, precomputedFaceLargeWidth, precomputedFaceLargeHeight, 
+                resizedFace, faceWidth, faceHeight, 
+                faceBbox, cropRect);
+            // Step 2: Composite images using the precomputed blurred mask (matching Python alpha blending)
+            // Python: body.paste(face_large, crop_box[:2], mask_image)
+            var result = CompositeWithMask(
+                originalImage, originalWidth, originalHeight,
+                faceLargeWithFace, precomputedFaceLargeWidth, precomputedFaceLargeHeight,
+                faceBbox, 
+                precomputedBlurredMask, precomputedBlurredMaskWidth, precomputedBlurredMaskHeight,
+                cropBox);
 
-                // Cleanup intermediate textures (don't destroy precomputed faceLarge as it's cached)
-                UnityEngine.Object.Destroy(resizedFace);
-                UnityEngine.Object.Destroy(faceLargeWithFace);
-                
-                return result;
-            }
-            catch (Exception e)
-            {
-                Logger.LogError($"[ImageBlendingHelper] Precomputed mask blending failed: {e.Message}");
-                throw;
-            }
+            return result;
         }
         
         /// <summary>
         /// Apply Gaussian blur to mask for smooth blending (matching Python)
+        /// REFACTORED: Now works with byte arrays for better memory efficiency
         /// </summary>
-        public static Texture2D ApplyGaussianBlurToMask(Texture2D mask)
+        public static unsafe (byte[], int, int) ApplyGaussianBlurToMask(byte[] maskData, int width, int height)
         {
             // Calculate blur kernel size based on mask dimensions (matching Python)
             float blurFactor = 0.08f; // jaw mode blur factor from Python
-            int kernelSize = Mathf.RoundToInt(blurFactor * mask.width / 2) * 2 + 1;
+            int kernelSize = Mathf.RoundToInt(blurFactor * width / 2) * 2 + 1;
             kernelSize = Mathf.Max(kernelSize, 15); // Minimum kernel size
+
+            byte[] blurredMaskData = new byte[maskData.Length];
+            fixed (byte* maskPtr = maskData)
+            fixed (byte* blurredMaskPtr = blurredMaskData)
+            {
+                TextureUtils.ApplySimpleGaussianBlur(maskPtr, blurredMaskPtr, width, height, kernelSize);
+            }
             
-            return TextureUtils.ApplySimpleGaussianBlur(mask, kernelSize);
+            return (blurredMaskData, width, height);
         }
         
         /// <summary>
@@ -468,87 +455,93 @@ namespace MuseTalk.Utils
         /// OPTIMIZED: Uses unsafe pointers, parallelization, and optimized alpha blending
         /// Python: body.paste(face_large, crop_box[:2], mask_image)
         /// </summary>
-        private static unsafe Texture2D CompositeWithMask(Texture2D originalImage, Texture2D faceLarge, 
-            Vector4 faceBbox, Texture2D blurredMask, Vector4 cropBox)
+        private static unsafe byte[] CompositeWithMask(
+            byte[] originalImage, int originalWidth, int originalHeight,
+            byte[] faceLarge, int faceLargeWidth, int faceLargeHeight,
+            Vector4 faceBbox,
+            byte[] blurredMask, int blurredMaskWidth, int blurredMaskHeight,
+            Vector4 cropBox)
         {
-            int resultWidth = originalImage.width;
-            int resultHeight = originalImage.height;
-            int blendWidth = faceLarge.width;
-            int blendHeight = faceLarge.height;
+            int resultWidth = originalWidth;
+            int resultHeight = originalHeight;
+            int blendWidth = faceLargeWidth;
+            int blendHeight = faceLargeHeight;
             
             // Create result texture with RGB24 format for efficiency
-            var result = new Texture2D(resultWidth, resultHeight, TextureFormat.RGB24, false);
-            var originalPixelData = originalImage.GetPixelData<byte>(0);
-            var faceLargePixelData = faceLarge.GetPixelData<byte>(0);
-            var maskPixelData = blurredMask.GetPixelData<byte>(0);
-            var resultPixelData = result.GetPixelData<byte>(0);
+            var result = new byte[resultWidth * resultHeight * 3];
+            var originalPixelData = originalImage;
+            var faceLargePixelData = faceLarge;
+            var maskPixelData = blurredMask;
+            var resultPixelData = result;
             
             // Get unsafe pointers for direct memory operations
-            byte* originalPtr = (byte*)originalPixelData.GetUnsafeReadOnlyPtr();
-            byte* faceLargePtr = (byte*)faceLargePixelData.GetUnsafeReadOnlyPtr();
-            byte* maskPtr = (byte*)maskPixelData.GetUnsafeReadOnlyPtr();
-            byte* resultPtr = (byte*)resultPixelData.GetUnsafePtr();
-            
-            // Calculate paste position (matching Python: crop_box[:2])
-            int pasteX = (int)cropBox.x;
-            int pasteY = (int)cropBox.y;
-            
-            // Convert image coordinates to Unity coordinates (flip Y axis)
-            int unityPasteY = resultHeight - pasteY - blendHeight;
-            
-            // First, copy the entire original image to result using parallel memcpy
-            System.Threading.Tasks.Parallel.For(0, resultHeight, y =>
+            fixed (byte* originalPtr = originalPixelData)
+            fixed (byte* faceLargePtr = faceLargePixelData)
+            fixed (byte* maskPtr = maskPixelData)
+            fixed (byte* resultPtr = resultPixelData)
             {
-                byte* sourceRowPtr = originalPtr + y * resultWidth * 3;
-                byte* targetRowPtr = resultPtr + y * resultWidth * 3;
-                UnsafeUtility.MemCpy(targetRowPtr, sourceRowPtr, resultWidth * 3);
-            });
-            
-            // Calculate valid blend region to avoid bounds checking in inner loop
-            int startX = Mathf.Max(0, pasteX);
-            int endX = Mathf.Min(resultWidth, pasteX + blendWidth);
-            int startY = Mathf.Max(0, unityPasteY);
-            int endY = Mathf.Min(resultHeight, unityPasteY + blendHeight);
-            
-            // Parallel alpha blending - process rows concurrently
-            System.Threading.Tasks.Parallel.For(startY, endY, targetY =>
-            {
-                int sourceY = targetY - unityPasteY;
-                if (sourceY >= 0 && sourceY < blendHeight)
+                byte* originalPtrLocal = originalPtr;
+                byte* faceLargePtrLocal = faceLargePtr;
+                byte* maskPtrLocal = maskPtr;
+                byte* resultPtrLocal = resultPtr;
+
+                // Calculate paste position (matching Python: crop_box[:2])
+                int pasteX = (int)cropBox.x;
+                int pasteY = (int)cropBox.y;
+                
+                // First, copy the entire original image to result using parallel memcpy
+                System.Threading.Tasks.Parallel.For(0, resultHeight, y =>
                 {
-                    byte* resultRowPtr = resultPtr + targetY * resultWidth * 3;
-                    byte* faceLargeRowPtr = faceLargePtr + sourceY * blendWidth * 3;
-                    byte* maskRowPtr = maskPtr + sourceY * blendWidth * 3;
-                    
-                    // Process pixels in this row
-                    for (int targetX = startX; targetX < endX; targetX++)
+                    byte* sourceRowPtr = originalPtrLocal + y * resultWidth * 3;
+                    byte* targetRowPtr = resultPtrLocal + y * resultWidth * 3;
+                    UnsafeUtility.MemCpy(targetRowPtr, sourceRowPtr, resultWidth * 3);
+                });
+                
+                // Calculate valid blend region to avoid bounds checking in inner loop
+                int startX = Mathf.Max(0, pasteX);
+                int endX = Mathf.Min(resultWidth, pasteX + blendWidth);
+                int startY = Mathf.Max(0, pasteY);
+                int endY = Mathf.Min(resultHeight, pasteY + blendHeight);
+                
+                // Parallel alpha blending - process rows concurrently
+                System.Threading.Tasks.Parallel.For(startY, endY, targetY =>
+                {
+                    int sourceY = targetY - pasteY;
+                    if (sourceY >= 0 && sourceY < blendHeight)
                     {
-                        int sourceX = targetX - pasteX;
-                        if (sourceX >= 0 && sourceX < blendWidth)
+                        byte* resultRowPtr = resultPtrLocal + targetY * resultWidth * 3;
+                        byte* faceLargeRowPtr = faceLargePtrLocal + sourceY * blendWidth * 3;
+                        byte* maskRowPtr = maskPtrLocal + sourceY * blendWidth * 3;
+                        
+                        // Process pixels in this row
+                        for (int targetX = startX; targetX < endX; targetX++)
                         {
-                            byte* targetPixel = resultRowPtr + targetX * 3;
-                            byte* sourcePixel = faceLargeRowPtr + sourceX * 3;
-                            byte* maskPixel = maskRowPtr + sourceX * 3;
-                            
-                            // Get mask alpha (use red channel as alpha, convert to 0-1 range)
-                            float alpha = maskPixel[0] / 255.0f;
-                            
-                            if (alpha > 0.001f) // Small threshold to avoid unnecessary blending
+                            int sourceX = targetX - pasteX;
+                            if (sourceX >= 0 && sourceX < blendWidth)
                             {
-                                // Optimized alpha blend: result = foreground * alpha + background * (1 - alpha)
-                                float invAlpha = 1.0f - alpha;
+                                byte* targetPixel = resultRowPtr + targetX * 3;
+                                byte* sourcePixel = faceLargeRowPtr + sourceX * 3;
+                                byte* maskPixel = maskRowPtr + sourceX * 3;
                                 
-                                // Blend RGB channels directly with byte arithmetic
-                                targetPixel[0] = (byte)(sourcePixel[0] * alpha + targetPixel[0] * invAlpha); // R
-                                targetPixel[1] = (byte)(sourcePixel[1] * alpha + targetPixel[1] * invAlpha); // G
-                                targetPixel[2] = (byte)(sourcePixel[2] * alpha + targetPixel[2] * invAlpha); // B
+                                // Get mask alpha (use red channel as alpha, convert to 0-1 range)
+                                float alpha = maskPixel[0] / 255.0f;
+                                
+                                if (alpha > 0.001f) // Small threshold to avoid unnecessary blending
+                                {
+                                    // Optimized alpha blend: result = foreground * alpha + background * (1 - alpha)
+                                    float invAlpha = 1.0f - alpha;
+                                    
+                                    // Blend RGB channels directly with byte arithmetic
+                                    targetPixel[0] = (byte)(sourcePixel[0] * alpha + targetPixel[0] * invAlpha); // R
+                                    targetPixel[1] = (byte)(sourcePixel[1] * alpha + targetPixel[1] * invAlpha); // G
+                                    targetPixel[2] = (byte)(sourcePixel[2] * alpha + targetPixel[2] * invAlpha); // B
+                                }
                             }
                         }
                     }
-                }
-            });
+                });
+            }
             
-            result.Apply();
             return result;
         }
     }

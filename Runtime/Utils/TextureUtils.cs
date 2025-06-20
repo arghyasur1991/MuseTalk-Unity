@@ -377,7 +377,7 @@ namespace MuseTalk.Utils
         /// OPTIMIZED: Uses unsafe pointers, parallelization, and bulk memory operations for maximum performance
         /// CRITICAL FIX: Include RGB→BGR conversion and coordinate flipping to match Python decode_latents
         /// </summary>
-        public static unsafe Texture2D TensorToTexture2D(Tensor<float> tensor)
+        public static unsafe (byte[], int, int) TensorToBytes(Tensor<float> tensor)
         {
             if (tensor == null)
                 throw new ArgumentNullException(nameof(tensor));
@@ -411,87 +411,84 @@ namespace MuseTalk.Utils
                 throw new ArgumentException($"Expected 3 channels (RGB), got {channels}");
                 
             // Create texture with RGB24 format for maximum efficiency
-            Texture2D texture = new(width, height, TextureFormat.RGB24, false);
-            var pixelData = texture.GetPixelData<byte>(0);
+            var pixelData = new byte[width * height * 3];
             
             // Get tensor data array once for performance
             var tensorArray = tensor.ToArray();
             
             // Get unsafe pointer for direct memory operations
-            byte* pixelPtr = (byte*)pixelData.GetUnsafePtr();
-            
-            // Pre-calculate channel stride for performance
-            int channelStride = height * width;
-            int batchStride = channels * channelStride;
-            
-            // OPTIMIZED: Parallel processing of rows for maximum performance
-            // Python processing:
-            // 1. image = np.transpose(image, (0, 2, 3, 1))
-            // 2. image_float64 = image.astype(np.float64) 
-            // 3. image_normalized = (image_float64 / 2.0 + 0.5).clip(0.0, 1.0)
-            // 4. image_uint8 = np.round(image_normalized * 255.0).astype(np.uint8)
-            // 5. image_final = image_uint8[0]  # Remove batch dimension
-            // 6. image_final_bgr = image_final[...,::-1]  # RGB to BGR conversion
-            
-            System.Threading.Tasks.Parallel.For(0, height, y =>
+            fixed (byte* pixelPtr = pixelData)
             {
-                // Calculate Unity Y coordinate with flipping (Python uses (0,0) at top-left, Unity at bottom-left)
-                int unityY = height - 1 - y;
-                byte* rowPtr = pixelPtr + unityY * width * 3; // RGB24: 3 bytes per pixel
+                byte* pixelPtrLocal = pixelPtr;
+
+                // Pre-calculate channel stride for performance
+                int channelStride = height * width;
+                int batchStride = channels * channelStride;
                 
-                // Process entire row in chunks for better cache performance
-                for (int x = 0; x < width; x++)
+                // OPTIMIZED: Parallel processing of rows for maximum performance
+                // Python processing:
+                // 1. image = np.transpose(image, (0, 2, 3, 1))
+                // 2. image_float64 = image.astype(np.float64) 
+                // 3. image_normalized = (image_float64 / 2.0 + 0.5).clip(0.0, 1.0)
+                // 4. image_uint8 = np.round(image_normalized * 255.0).astype(np.uint8)
+                // 5. image_final = image_uint8[0]  # Remove batch dimension
+                // 6. image_final_bgr = image_final[...,::-1]  # RGB to BGR conversion
+                
+                System.Threading.Tasks.Parallel.For(0, height, y =>
                 {
-                    float r, g, b;
+                    byte* rowPtr = pixelPtrLocal + y * width * 3; // RGB24: 3 bytes per pixel
                     
-                    if (dimensions.Length == 4)
+                    // Process entire row in chunks for better cache performance
+                    for (int x = 0; x < width; x++)
                     {
-                        // [batch, channel, height, width] - pre-calculated indices for performance
-                        int baseIndex = batchOffset * batchStride + y * width + x;
-                        r = tensorArray[baseIndex];                    // Channel 0 (R)
-                        g = tensorArray[baseIndex + channelStride];    // Channel 1 (G)
-                        b = tensorArray[baseIndex + 2 * channelStride]; // Channel 2 (B)
+                        float r, g, b;
+                        
+                        if (dimensions.Length == 4)
+                        {
+                            // [batch, channel, height, width] - pre-calculated indices for performance
+                            int baseIndex = batchOffset * batchStride + y * width + x;
+                            r = tensorArray[baseIndex];                    // Channel 0 (R)
+                            g = tensorArray[baseIndex + channelStride];    // Channel 1 (G)
+                            b = tensorArray[baseIndex + 2 * channelStride]; // Channel 2 (B)
+                        }
+                        else
+                        {
+                            // [channel, height, width] - pre-calculated indices for performance
+                            int baseIndex = y * width + x;
+                            r = tensorArray[baseIndex];                    // Channel 0 (R)
+                            g = tensorArray[baseIndex + channelStride];    // Channel 1 (G)
+                            b = tensorArray[baseIndex + 2 * channelStride]; // Channel 2 (B)
+                        }
+                        
+                        // OPTIMIZED: Use direct float operations instead of double for better performance
+                        // Python: image_normalized = (image_float64 / 2.0 + 0.5).clip(0.0, 1.0)
+                        // Clamp to [0, 1] range with fast math operations
+                        r = Mathf.Clamp01(r * 0.5f + 0.5f);
+                        g = Mathf.Clamp01(g * 0.5f + 0.5f);
+                        b = Mathf.Clamp01(b * 0.5f + 0.5f);
+                        
+                        // Convert to byte range [0, 255] with proper rounding
+                        // Python: image_uint8 = np.round(image_normalized * 255.0).astype(np.uint8)
+                        byte rByte = (byte)Mathf.RoundToInt(r * 255f);
+                        byte gByte = (byte)Mathf.RoundToInt(g * 255f);
+                        byte bByte = (byte)Mathf.RoundToInt(b * 255f);
+                        
+                        // CRITICAL FIX: Proper color channel handling
+                        // Python VAE decoder outputs RGB tensor, then converts to BGR for OpenCV
+                        // Python: image_final_bgr = image_final[...,::-1]  # RGB to BGR
+                        // Unity expects RGB for display, so we use the original RGB from tensor
+                        // NO channel swapping needed - use original RGB values
+                        
+                        // Direct memory write using pointer arithmetic (fastest possible)
+                        byte* pixelPtr = rowPtr + x * 3;
+                        pixelPtr[0] = rByte; // R
+                        pixelPtr[1] = gByte; // G
+                        pixelPtr[2] = bByte; // B
                     }
-                    else
-                    {
-                        // [channel, height, width] - pre-calculated indices for performance
-                        int baseIndex = y * width + x;
-                        r = tensorArray[baseIndex];                    // Channel 0 (R)
-                        g = tensorArray[baseIndex + channelStride];    // Channel 1 (G)
-                        b = tensorArray[baseIndex + 2 * channelStride]; // Channel 2 (B)
-                    }
-                    
-                    // OPTIMIZED: Use direct float operations instead of double for better performance
-                    // Python: image_normalized = (image_float64 / 2.0 + 0.5).clip(0.0, 1.0)
-                    // Clamp to [0, 1] range with fast math operations
-                    r = Mathf.Clamp01(r * 0.5f + 0.5f);
-                    g = Mathf.Clamp01(g * 0.5f + 0.5f);
-                    b = Mathf.Clamp01(b * 0.5f + 0.5f);
-                    
-                    // Convert to byte range [0, 255] with proper rounding
-                    // Python: image_uint8 = np.round(image_normalized * 255.0).astype(np.uint8)
-                    byte rByte = (byte)Mathf.RoundToInt(r * 255f);
-                    byte gByte = (byte)Mathf.RoundToInt(g * 255f);
-                    byte bByte = (byte)Mathf.RoundToInt(b * 255f);
-                    
-                    // CRITICAL FIX: Proper color channel handling
-                    // Python VAE decoder outputs RGB tensor, then converts to BGR for OpenCV
-                    // Python: image_final_bgr = image_final[...,::-1]  # RGB to BGR
-                    // Unity expects RGB for display, so we use the original RGB from tensor
-                    // NO channel swapping needed - use original RGB values
-                    
-                    // Direct memory write using pointer arithmetic (fastest possible)
-                    byte* pixelPtr = rowPtr + x * 3;
-                    pixelPtr[0] = rByte; // R
-                    pixelPtr[1] = gByte; // G
-                    pixelPtr[2] = bByte; // B
-                }
-            });
+                });
+            }
             
-            // Apply changes to texture (no need for SetPixels since we wrote directly to pixel data)
-            texture.Apply();
-            
-            return texture;
+            return (pixelData, width, height);
         }
         
         /// <summary>

@@ -298,40 +298,28 @@ namespace MuseTalk.Core
             // OPTIMIZATION: Precompute all blending masks that are independent of faceTexture
             // These masks only depend on segmentation, face bbox, and crop box - all available now
             
-            // Convert segmentation mask byte array to texture for ImageBlendingHelper methods
-            var segmentationMask = TextureUtils.BytesToTexture2D(segmentationMaskData, segmentationMaskWidth, segmentationMaskHeight);
             
             // Step 1: Create mask_small by cropping BiSeNet mask to face bbox (matching Python)
-            var maskSmall = ImageBlendingHelper.CreateSmallMaskFromBiSeNet(segmentationMask, adjustedFaceBbox, cropRect);
+            var (maskSmallData, maskSmallWidth, maskSmallHeight) = ImageBlendingHelper.CreateSmallMaskFromBiSeNet(segmentationMaskData, segmentationMaskWidth, segmentationMaskHeight, adjustedFaceBbox, cropRect);
             
             // Step 2: Create full mask by pasting mask_small back into face_large dimensions (matching Python)
-            var fullMask = ImageBlendingHelper.CreateFullMask(segmentationMask, maskSmall, adjustedFaceBbox, cropRect);
+            var (fullMaskData, fullMaskWidth, fullMaskHeight) = ImageBlendingHelper.CreateFullMask(
+                segmentationMaskData, segmentationMaskWidth, segmentationMaskHeight,
+                maskSmallData, maskSmallWidth, maskSmallHeight, 
+                adjustedFaceBbox, cropRect);
             
             // Step 3: Apply upper boundary ratio to preserve upper face (matching Python)
             const float upperBoundaryRatio = 0.5f; // Standard value used in ApplySegmentationMask
-            var boundaryMask = ImageBlendingHelper.ApplyUpperBoundaryRatio(fullMask, upperBoundaryRatio);
+            var (boundaryMaskData, boundaryMaskWidth, boundaryMaskHeight) = ImageBlendingHelper.ApplyUpperBoundaryRatio(fullMaskData, fullMaskWidth, fullMaskHeight, upperBoundaryRatio);
             
             // Step 4: Apply Gaussian blur for smooth blending (matching Python)
-            var blurredMask = ImageBlendingHelper.ApplyGaussianBlurToMask(boundaryMask);
+            var (blurredMaskData, blurredMaskWidth, blurredMaskHeight) = ImageBlendingHelper.ApplyGaussianBlurToMask(boundaryMaskData, boundaryMaskWidth, boundaryMaskHeight);
             
             // Convert all textures to byte arrays for efficient storage
-            var (maskSmallData, maskSmallWidth, maskSmallHeight) = TextureUtils.Texture2DToBytes(maskSmall);
-            var (fullMaskData, fullMaskWidth, fullMaskHeight) = TextureUtils.Texture2DToBytes(fullMask);
-            var (boundaryMaskData, boundaryMaskWidth, boundaryMaskHeight) = TextureUtils.Texture2DToBytes(boundaryMask);
-            var (blurredMaskData, blurredMaskWidth, blurredMaskHeight) = TextureUtils.Texture2DToBytes(blurredMask);
-            
             // faceLarge is already byte array, so use it directly
             var faceLargeData = faceLarge;
             var faceLargeWidth = (int)cropRect.width;
             var faceLargeHeight = (int)cropRect.height;
-            
-            // Clean up temporary textures (segmentationMaskData is already byte array, so no cleanup needed for that)
-            UnityEngine.Object.Destroy(segmentationMask);
-            UnityEngine.Object.Destroy(maskSmall);
-            UnityEngine.Object.Destroy(fullMask);
-            UnityEngine.Object.Destroy(boundaryMask);
-            UnityEngine.Object.Destroy(blurredMask);
-            
             return new SegmentationData
             {
                 FaceLargeData = faceLargeData,
@@ -1174,7 +1162,7 @@ namespace MuseTalk.Core
                 int globalFrameIdx = globalStartIdx + i;
                 
                 // Step 1: Convert tensor to raw decoded texture
-                var rawDecodedTexture = TextureUtils.TensorToTexture2D(tensor);
+                var (rawDecodedTextureData, rawDecodedTextureWidth, rawDecodedTextureHeight) = TextureUtils.TensorToBytes(tensor);
                 
                 // Step 2: Resize to face crop dimensions (matching Python cv2.resize)
                 if (_avatarData != null && _avatarData.FaceRegions.Count > 0)
@@ -1202,19 +1190,14 @@ namespace MuseTalk.Core
                     }
                     
                     // Resize decoded frame to face crop size
-                    var resizedFrame = TextureUtils.ResizeTextureToExactSize(rawDecodedTexture, targetWidth, targetHeight);
+                    var resizedFrame = TextureUtils.ResizeTextureToExactSize(rawDecodedTextureData, rawDecodedTextureWidth, rawDecodedTextureHeight, targetWidth, targetHeight);
                     
                     // Step 3: Apply seamless face blending
                     if (faceData.OriginalTextureData == null)
                     {
-                        blendedFrames.Add(resizedFrame);
+                        blendedFrames.Add(TextureUtils.BytesToTexture2D(resizedFrame, targetWidth, targetHeight));
                         continue;
                     }
-                    
-                    // Convert byte arrays back to textures for blending (only when needed)
-                    var originalImage = TextureUtils.BytesToTexture2D(faceData.OriginalTextureData, faceData.OriginalWidth, faceData.OriginalHeight);
-                    var blurredMask = TextureUtils.BytesToTexture2D(faceData.BlurredMaskData, faceData.BlurredMaskWidth, faceData.BlurredMaskHeight);
-                    var faceLarge = TextureUtils.BytesToTexture2D(faceData.FaceLargeData, faceData.FaceLargeWidth, faceData.FaceLargeHeight);
                     
                     // Convert face bbox to Vector4 format for blending (x1, y1, x2, y2)
                     var faceBbox = new Vector4(bbox.x, bbox.y, bbox.x + bbox.width, bbox.y + bbox.height);
@@ -1224,38 +1207,28 @@ namespace MuseTalk.Core
                     {
                         // Use precomputed segmentation data for optimal performance
                         var blendedFrame = ImageBlendingHelper.BlendFaceWithOriginal(
-                            originalImage,
-                            resizedFrame,
+                            faceData.OriginalTextureData, faceData.OriginalWidth, faceData.OriginalHeight,
+                            resizedFrame, targetWidth, targetHeight,
                             faceBbox,
-                            blendingMode,
-                            faceData.CropBox, // Use cached crop box
-                            blurredMask, // Use precomputed blurred mask
-                            faceLarge); // Use precomputed face large
+                            faceData.CropBox,
+                            faceData.BlurredMaskData, faceData.BlurredMaskWidth, faceData.BlurredMaskHeight,
+                            faceData.FaceLargeData, faceData.FaceLargeWidth, faceData.FaceLargeHeight,
+                            blendingMode);
                         
-                        // Clean up temporary textures
-                        UnityEngine.Object.Destroy(originalImage);
-                        UnityEngine.Object.Destroy(blurredMask);
-                        UnityEngine.Object.Destroy(faceLarge);
-                        UnityEngine.Object.Destroy(resizedFrame);
-                        
-                        blendedFrames.Add(blendedFrame);
+                        blendedFrames.Add(TextureUtils.BytesToTexture2D(blendedFrame, faceData.OriginalWidth, faceData.OriginalHeight));
                     }
                     catch (Exception e)
                     {
                         Logger.LogError($"[MuseTalkInference] Frame processing failed for frame {globalFrameIdx}: {e.Message}");
                         
                         // Clean up temporary textures in case of error
-                        UnityEngine.Object.Destroy(originalImage);
-                        UnityEngine.Object.Destroy(blurredMask);
-                        UnityEngine.Object.Destroy(faceLarge);
-                        
-                        blendedFrames.Add(resizedFrame);
+                        blendedFrames.Add(TextureUtils.BytesToTexture2D(resizedFrame, targetWidth, targetHeight));
                     }
                 }
                 else
                 {
-                    blendedFrames.Add(rawDecodedTexture);
-                }    
+                    blendedFrames.Add(TextureUtils.BytesToTexture2D(rawDecodedTextureData, rawDecodedTextureWidth, rawDecodedTextureHeight));
+                }
             }
             
             return blendedFrames;
