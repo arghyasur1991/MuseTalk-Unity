@@ -3,9 +3,28 @@ using System.Linq;
 using UnityEngine;
 using Microsoft.ML.OnnxRuntime.Tensors;
 using Unity.Collections.LowLevel.Unsafe;
+using System.Runtime.InteropServices;
 
 namespace MuseTalk.Utils
 {
+    /// <summary>
+    /// RGB24 pixel struct for efficient 3-byte operations
+    /// </summary>
+    [StructLayout(LayoutKind.Sequential, Pack = 1)]
+    public struct RGB24 // Currently unused
+    {
+        public byte r;
+        public byte g;
+        public byte b;
+        
+        public RGB24(byte r, byte g, byte b)
+        {
+            this.r = r;
+            this.g = g;
+            this.b = b;
+        }
+    }
+
     /// <summary>
     /// Utility functions for texture processing in MuseTalk
     /// </summary>

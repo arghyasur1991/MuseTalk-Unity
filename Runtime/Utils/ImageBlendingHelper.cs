@@ -1,37 +1,14 @@
-using System;
 using UnityEngine;
 using Unity.Collections.LowLevel.Unsafe;
-using System.Runtime.InteropServices;
 
 namespace MuseTalk.Utils
 {
-    using Models;
-    /// <summary>
-    /// RGB24 pixel struct for efficient 3-byte operations
-    /// </summary>
-    [StructLayout(LayoutKind.Sequential, Pack = 1)]
-    public struct RGB24
-    {
-        public byte r;
-        public byte g;
-        public byte b;
-        
-        public RGB24(byte r, byte g, byte b)
-        {
-            this.r = r;
-            this.g = g;
-            this.b = b;
-        }
-    }
-
     /// <summary>
     /// Image blending helper that implements Python's get_image() functionality
     /// Provides seamless face composition with mask-based blending
     /// </summary>
     public static class ImageBlendingHelper
     {
-        private static readonly DebugLogger Logger = new();
-
         /// <summary>
         /// Blend face with original image using cached segmentation mask
         /// REFACTORED: Now works with byte arrays for better memory efficiency
@@ -45,8 +22,7 @@ namespace MuseTalk.Utils
             byte[] precomputedFaceLarge, int precomputedFaceLargeWidth, int precomputedFaceLargeHeight, 
             string mode = "raw")
         {
-            // Use precomputed blurred mask if available (optimal path)
-            if (precomputedBlurredMask != null && cropBox != default)
+            if (precomputedBlurredMask != null)
             {
                 // OPTIMAL PATH: Use precomputed blurred mask for maximum performance
                 Vector4 adjustedFaceBbox = faceBbox;
@@ -67,36 +43,8 @@ namespace MuseTalk.Utils
             }
             else
             {
-                // No fallback - throw exception if face segmentation fails
-                Logger.LogError("Face segmentation failed and no fallback is available");
-                return null;
+                throw new System.Exception("Precomputed blurred mask is null");
             }
-        }
-
-        /// <summary>
-        /// Calculate crop box with expansion factor (matching Python get_crop_box)
-        /// </summary>
-        private static Rect GetCropBox(Vector4 faceBbox, float expandFactor)
-        {
-            // Python: x, y, x1, y1 = box
-            float x = faceBbox.x;
-            float y = faceBbox.y;
-            float x1 = faceBbox.z;
-            float y1 = faceBbox.w;
-            
-            // Python: x_c, y_c = (x+x1)//2, (y+y1)//2 (integer division!)
-            int xCenter = (int)((x + x1) / 2);
-            int yCenter = (int)((y + y1) / 2);
-            
-            // Python: w, h = x1-x, y1-y
-            float width = x1 - x;
-            float height = y1 - y;
-            
-            // Python: s = int(max(w, h)//2*expand) (integer conversion!)
-            int s = (int)(Mathf.Max(width, height) / 2 * expandFactor);
-            
-            // Python: crop_box = [x_c-s, y_c-s, x_c+s, y_c+s]
-            return new Rect(xCenter - s, yCenter - s, 2 * s, 2 * s);
         }
 
         /// <summary>
@@ -120,8 +68,8 @@ namespace MuseTalk.Utils
         /// REFACTORED: Now works with byte arrays for better memory efficiency
         /// Matches Python: mask_small = mask_image.crop((x - x_s, y - y_s, x1 - x_s, y1 - y_s))
         /// </summary>
-        public static (byte[], int, int) CreateSmallMaskFromBiSeNet(
-            byte[] biSeNetMaskData, int maskWidth, int maskHeight,
+        public static (byte[], int, int) CreateSmallMask(
+            byte[] maskData, int maskWidth, int maskHeight,
             Vector4 faceBbox, Rect cropBox)
         {
             float x = faceBbox.x;
@@ -137,30 +85,6 @@ namespace MuseTalk.Utils
                 y - y_s,
                 x1 - x,  // width = x1 - x
                 y1 - y   // height = y1 - y
-            );
-            
-            return CropImage(biSeNetMaskData, maskWidth, maskHeight, cropRect);
-        }
-
-        /// <summary>
-        /// Create small mask cropped to face region (matching Python mask_small)
-        /// REFACTORED: Now works with byte arrays for better memory efficiency
-        /// </summary>
-        private static (byte[], int, int) CreateSmallMask(byte[] maskData, int maskWidth, int maskHeight, Vector4 faceBbox, Rect cropBox)
-        {
-            // Python: mask_small = mask_image.crop((x - x_s, y - y_s, x1 - x_s, y1 - y_s))
-            float x = faceBbox.x;
-            float y = faceBbox.y;
-            float x1 = faceBbox.z;
-            float y1 = faceBbox.w;
-            float x_s = cropBox.x;
-            float y_s = cropBox.y;
-            
-            Rect cropRect = new Rect(
-                x - x_s,
-                y - y_s,
-                x1 - x - (x - x_s),  // width = x1 - x
-                y1 - y - (y - y_s)   // height = y1 - y
             );
             
             return CropImage(maskData, maskWidth, maskHeight, cropRect);
@@ -393,7 +317,7 @@ namespace MuseTalk.Utils
         /// Apply segmentation mask to blend face with original image using precomputed masks
         /// OPTIMIZED: Uses precomputed masks for maximum performance
         /// </summary>
-        public static byte[] ApplySegmentationMaskWithPrecomputedMasks(
+        private static byte[] ApplySegmentationMaskWithPrecomputedMasks(
             byte[] originalImage, int originalWidth, int originalHeight, 
             byte[] faceTexture, int faceTextureWidth, int faceTextureHeight,  
             Vector4 faceBbox, Vector4 cropBox,

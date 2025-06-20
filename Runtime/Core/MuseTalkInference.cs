@@ -401,7 +401,7 @@ namespace MuseTalk.Core
             
             
             // Step 1: Create mask_small by cropping BiSeNet mask to face bbox (matching Python)
-            var (maskSmallData, maskSmallWidth, maskSmallHeight) = ImageBlendingHelper.CreateSmallMaskFromBiSeNet(segmentationMaskData, segmentationMaskWidth, segmentationMaskHeight, adjustedFaceBbox, cropRect);
+            var (maskSmallData, maskSmallWidth, maskSmallHeight) = ImageBlendingHelper.CreateSmallMask(segmentationMaskData, segmentationMaskWidth, segmentationMaskHeight, adjustedFaceBbox, cropRect);
             
             // Step 2: Create full mask by pasting mask_small back into face_large dimensions (matching Python)
             var (fullMaskData, fullMaskWidth, fullMaskHeight) = ImageBlendingHelper.CreateFullMask(
