@@ -94,56 +94,28 @@ namespace MuseTalk.Utils
             }
         }
         
-        private unsafe DenseTensor<float> PreprocessImageForBiSeNet(byte[] inputImageData, int width, int height)
+        private DenseTensor<float> PreprocessImageForBiSeNet(byte[] inputImageData, int width, int height)
         {
             // Resize to BiSeNet input size (512x512) - now uses optimized ResizeTextureToExactSize with byte arrays
             var resizedImageData = TextureUtils.ResizeTextureToExactSize(inputImageData, width, height, 512, 512, TextureUtils.SamplingMode.Bilinear);
             
-            // Create tensor data array - [batch, channels, height, width] = [1, 3, 512, 512]
-            var tensorData = new float[1 * 3 * 512 * 512];
+            // ImageNet normalization: (pixel/255 - mean) / std for each channel
+            // R: (pixel/255 - 0.485) / 0.229, G: (pixel/255 - 0.456) / 0.224, B: (pixel/255 - 0.406) / 0.225
+            // Transform to: pixel * (1/255/std) + (-mean/std)
+            var multipliers = new float[] 
+            { 
+                1.0f / (255.0f * 0.229f),  // R: 1/(255*0.229) 
+                1.0f / (255.0f * 0.224f),  // G: 1/(255*0.224)
+                1.0f / (255.0f * 0.225f)   // B: 1/(255*0.225)
+            };
+            var offsets = new float[] 
+            { 
+                -0.485f / 0.229f,  // R: -mean_r/std_r
+                -0.456f / 0.224f,  // G: -mean_g/std_g  
+                -0.406f / 0.225f   // B: -mean_b/std_b
+            };
             
-            // ImageNet normalization values used by BiSeNet (pre-calculated for performance)
-            const float meanR = 0.485f, meanG = 0.456f, meanB = 0.406f;
-            const float stdR = 0.229f, stdG = 0.224f, stdB = 0.225f;
-            const float invStdR = 1.0f / stdR, invStdG = 1.0f / stdG, invStdB = 1.0f / stdB;
-            
-            // Pre-calculate tensor offsets for each channel (CHW format)
-            const int imageSize = 512 * 512;
-            
-            // OPTIMIZED: Maximum parallelism across all 512×512 pixels (262,144-way parallelism)
-            // Process in CHW format (channels first) with stride-based coordinate calculation
-            fixed (byte* pixelPtrFixed = resizedImageData)
-            {
-                // Capture pointer in local variable to avoid lambda closure issues
-                byte* pixelPtrLocal = pixelPtrFixed;
-                
-                System.Threading.Tasks.Parallel.For(0, imageSize, pixelIndex =>
-                {
-                    // Calculate x, y coordinates from linear pixel index using stride arithmetic
-                    int y = pixelIndex >> 9;  // Divide by 512 (right shift 9 bits: 2^9 = 512) - faster than division
-                    int x = pixelIndex & 511; // Modulo 512 (bitwise AND with 511: 2^9-1 = 511) - faster than modulo
-                    
-                    // Calculate pointer for this specific pixel using stride arithmetic
-                    byte* pixelBytePtr = pixelPtrLocal + ((y << 9) + x) * 3; // unityY * 512 + x, then * 3 for RGB24
-                    
-                    // Process all 3 channels for this pixel with unrolled loop for maximum performance
-                    {
-                        // R channel (channel 0)
-                        float normalizedR = (pixelBytePtr[0] / 255.0f - meanR) * invStdR;
-                        tensorData[y * 512 + x] = normalizedR; // Channel 0 offset: 0 * imageSize
-                        
-                        // G channel (channel 1)  
-                        float normalizedG = (pixelBytePtr[1] / 255.0f - meanG) * invStdG;
-                        tensorData[imageSize + y * 512 + x] = normalizedG; // Channel 1 offset: 1 * imageSize
-                        
-                        // B channel (channel 2)
-                        float normalizedB = (pixelBytePtr[2] / 255.0f - meanB) * invStdB;
-                        tensorData[2 * imageSize + y * 512 + x] = normalizedB; // Channel 2 offset: 2 * imageSize
-                    }
-                });
-            }
-            
-            return new DenseTensor<float>(tensorData, new[] { 1, 3, 512, 512 });
+            return TextureUtils.PreprocessImageOptimized(resizedImageData, 512, 512, multipliers, offsets);
         }
         
         private unsafe int[,] RunBiSeNetInference(DenseTensor<float> inputTensor)

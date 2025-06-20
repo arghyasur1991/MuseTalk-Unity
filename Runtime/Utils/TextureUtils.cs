@@ -934,16 +934,35 @@ namespace MuseTalk.Utils
         /// </summary>
         public static unsafe DenseTensor<float> PreprocessImageOptimized(byte[] img, int width, int height, float multiplier, float offset)
         {
+            // Use per-channel version with same multiplier/offset for all channels
+            var multipliers = new float[] { multiplier, multiplier, multiplier };
+            var offsets = new float[] { offset, offset, offset };
+            return PreprocessImageOptimized(img, width, height, multipliers, offsets);
+        }
+        
+        /// <summary>
+        /// OPTIMIZED: Common image preprocessing with per-channel multiplier and offset support
+        /// Supports ImageNet normalization and other per-channel transformations
+        /// </summary>
+        public static unsafe DenseTensor<float> PreprocessImageOptimized(byte[] img, int width, int height, float[] multipliers, float[] offsets)
+        {
+            if (multipliers.Length != 3 || offsets.Length != 3)
+                throw new ArgumentException("Multipliers and offsets must have exactly 3 elements for RGB channels");
+                
             var tensorData = new float[1 * 3 * height * width];
             int imageSize = height * width;
             
             // OPTIMIZED: Use unsafe pointers for direct memory access
             fixed (byte* imgPtrFixed = img)
             fixed (float* tensorPtrFixed = tensorData)
+            fixed (float* multipliersPtr = multipliers)
+            fixed (float* offsetsPtr = offsets)
             {
                 // Capture pointers in local variables to avoid lambda closure issues
                 byte* imgPtrLocal = imgPtrFixed;
                 float* tensorPtrLocal = tensorPtrFixed;
+                float* multipliersLocal = multipliersPtr;
+                float* offsetsLocal = offsetsPtr;
                 
                 // MAXIMUM PERFORMANCE: Parallel processing across all pixels for maximum parallelism
                 // Process each pixel independently across all available CPU cores
@@ -958,8 +977,8 @@ namespace MuseTalk.Utils
                         // Calculate output position in CHW format: [channel][pixel]
                         float* outputPtr = tensorPtrLocal + c * imageSize + pixelIdx;
                         
-                        // OPTIMIZED: Configurable normalization with fast math
-                        *outputPtr = pixelValue * multiplier + offset;
+                        // OPTIMIZED: Per-channel normalization with fast math
+                        *outputPtr = pixelValue * multipliersLocal[c] + offsetsLocal[c];
                     }
                 });
             }
