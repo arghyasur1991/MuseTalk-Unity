@@ -1,0 +1,888 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using UnityEngine;
+using Microsoft.ML.OnnxRuntime;
+using Microsoft.ML.OnnxRuntime.Tensors;
+
+namespace MuseTalk.Utils
+{
+    using Models;
+
+    /// <summary>
+    /// Face detection result matching Python face_analysis output
+    /// </summary>
+    public class FaceDetectionResult
+    {
+        public Rect BoundingBox { get; set; }
+        public Vector2[] Keypoints5 { get; set; }  // 5 keypoints from detection
+        public Vector2[] Landmarks106 { get; set; }  // 106 landmarks
+        public float DetectionScore { get; set; }
+        
+        public override string ToString()
+        {
+            return $"Face(bbox={BoundingBox}, conf={DetectionScore:F3})";
+        }
+    }
+
+    /// <summary>
+    /// Detection candidate struct for efficient processing (value type for better cache performance)
+    /// </summary>
+    internal struct DetectionCandidate
+    {
+        public float x1, y1, x2, y2;
+        public float score;
+        public unsafe fixed float keypoints[10]; // 5 keypoints * 2 coords
+        
+        public DetectionCandidate(float x1, float y1, float x2, float y2, float score)
+        {
+            this.x1 = x1;
+            this.y1 = y1;
+            this.x2 = x2;
+            this.y2 = y2;
+            this.score = score;
+            // keypoints will be initialized separately
+        }
+    }
+
+    /// <summary>
+    /// Consolidated face analysis class that handles both detection and landmark extraction
+    /// Uses the cleaner implementation from LivePortraitInference
+    /// </summary>
+    public class FaceAnalysis : IDisposable
+    {
+        private static readonly DebugLogger Logger = new();
+        
+        // ONNX Models
+        private readonly InferenceSession _detFace;      // Face detection model
+        private readonly InferenceSession _landmark2d106; // 106 landmark detection model
+        private readonly InferenceSession _landmarkRunner; // Landmark refinement model
+        
+        // Configuration
+        private readonly MuseTalkConfig _config;
+        private bool _disposed = false;
+        
+        // Detection parameters - matching Python implementation exactly
+        private const float DetectionThreshold = 0.5f;
+        private const float NmsThreshold = 0.4f;
+        private const int InputSize = 512;
+        private const int FeatMapCount = 3;
+        private static readonly int[] FeatStrideFpn = { 8, 16, 32 };
+        
+        // Landmark parameters
+        private const int LandmarkInputSize = 192;
+        private const int LandmarkRunnerSize = 224;
+        
+        // Cache for anchor centers
+        private readonly Dictionary<string, float[,]> _centerCache = new();
+        
+        public bool IsInitialized { get; private set; }
+        
+        public FaceAnalysis(MuseTalkConfig config)
+        {
+            _config = config ?? throw new ArgumentNullException(nameof(config));
+            
+            try
+            {
+                // Load all required models
+                _detFace = ModelUtils.LoadModel(_config, "det_10g");
+                _landmark2d106 = ModelUtils.LoadModel(_config, "2d106det");
+                _landmarkRunner = ModelUtils.LoadModel(_config, "landmark");
+                
+                // Verify all models initialized
+                bool allInitialized = _detFace != null && _landmark2d106 != null && _landmarkRunner != null;
+                
+                if (!allInitialized)
+                {
+                    var failedModels = new List<string>();
+                    if (_detFace == null) failedModels.Add("DetFace");
+                    if (_landmark2d106 == null) failedModels.Add("Landmark106");
+                    if (_landmarkRunner == null) failedModels.Add("LandmarkRunner");
+                    
+                    throw new InvalidOperationException($"Failed to initialize face analysis models: {string.Join(", ", failedModels)}");
+                }
+                
+                IsInitialized = true;
+                Logger.Log("[FaceAnalysis] Initialized successfully");
+            }
+            catch (Exception e)
+            {
+                Logger.LogError($"[FaceAnalysis] Failed to initialize: {e.Message}");
+                IsInitialized = false;
+                throw;
+            }
+        }
+        
+        /// <summary>
+        /// Analyze faces in image - main entry point
+        /// Returns list of detected faces with landmarks, sorted by area (largest first)
+        /// </summary>
+        /// <summary>
+        /// EXACT MATCH to LivePortraitInference.FaceAnalysis method
+        /// </summary>
+        public List<FaceDetectionResult> AnalyzeFaces(byte[] img, int width, int height, int maxFaces = -1)
+        {
+            if (!IsInitialized)
+                throw new InvalidOperationException("FaceAnalysis not initialized");
+                
+            if (img == null || width <= 0 || height <= 0)
+                throw new ArgumentException("Invalid image parameters");
+            
+            // Process detection results exactly as in LivePortraitInference
+            var faces = DetectFaces(img, width, height);
+            
+            // Get landmarks for each face - EXACT MATCH to original
+            var finalFaces = new List<FaceDetectionResult>();
+            foreach (var face in faces)
+            {
+                var landmarks = GetLandmarks(img, width, height, face);
+                face.Landmarks106 = landmarks;
+                finalFaces.Add(face);
+            }
+            
+            // Python: src_face = sorted(ret, key=lambda face: (face["bbox"][2] - face["bbox"][0]) * (face["bbox"][3] - face["bbox"][1]), reverse=True)
+            finalFaces.Sort((a, b) => 
+            {
+                float areaA = a.BoundingBox.width * a.BoundingBox.height;
+                float areaB = b.BoundingBox.width * b.BoundingBox.height;
+                return areaB.CompareTo(areaA); // Descending order
+            });
+            
+            return finalFaces;
+        }
+        
+        /// <summary>
+        /// Detect faces in image using SCRFD model - EXACT MATCH to LivePortraitInference
+        /// </summary>
+        private List<FaceDetectionResult> DetectFaces(byte[] img, int width, int height)
+        {
+            // Python: face_analysis(img) - EXACT MATCH to LivePortraitInference implementation
+            int pythonHeight = height;  // This matches Python's img.shape[0]
+            int pythonWidth = width;    // This matches Python's img.shape[1]
+            
+            // Python: im_ratio = float(img.shape[0]) / img.shape[1]
+            float imRatio = (float)pythonHeight / pythonWidth;
+            
+            int newHeight, newWidth;
+            // Python: if im_ratio > 1: new_height = input_size; new_width = int(new_height / im_ratio)
+            if (imRatio > 1)
+            {
+                newHeight = InputSize;
+                newWidth = Mathf.FloorToInt(newHeight / imRatio);
+            }
+            else
+            {
+                // Python: else: new_width = input_size; new_height = int(new_width * im_ratio)
+                newWidth = InputSize;
+                newHeight = Mathf.FloorToInt(newWidth * imRatio);
+            }
+            
+            // Python: det_scale = float(new_height) / img.shape[0]
+            float detScale = (float)newHeight / pythonHeight;
+            
+            // Python: resized_img = cv2.resize(img, (new_width, new_height))
+            var resizedImg = TextureUtils.ResizeTextureToExactSize(img, width, height, newWidth, newHeight, TextureUtils.SamplingMode.Bilinear);
+            
+            // Python: det_img = np.zeros((input_size, input_size, 3), dtype=np.uint8)
+            // Python: det_img[:new_height, :new_width, :] = resized_img
+            var detImg = new byte[InputSize * InputSize * 3];
+            var resizedPixels = resizedImg;
+            
+            // OPTIMIZED: Fill with zeros using Array.Clear (faster than manual loop)
+            Array.Clear(detImg, 0, detImg.Length);
+            
+            // OPTIMIZED: Copy resized image to top-left with unsafe pointers and parallelization
+            // EXACT MATCH to LivePortraitInference implementation
+            unsafe
+            {
+                fixed (byte* srcPtrFixed = resizedPixels)
+                fixed (byte* dstPtrFixed = detImg)
+                {
+                    // Capture pointers in local variables to avoid lambda closure issues
+                    byte* srcPtrLocal = srcPtrFixed;
+                    byte* dstPtrLocal = dstPtrFixed;
+                    
+                    // MAXIMUM PERFORMANCE: Parallel row copying with bulk memory operations
+                    // Each row can be processed independently for perfect parallelization
+                    System.Threading.Tasks.Parallel.For(0, newHeight, y =>
+                    {
+                        // Calculate source and destination row pointers
+                        byte* srcRowPtr = srcPtrLocal + y * newWidth * 3;        // Source row (RGB24)
+                        byte* dstRowPtr = dstPtrLocal + y * InputSize * 3;       // Destination row (RGB24)
+                        
+                        // Bulk copy entire row in one operation (much faster than pixel-by-pixel)
+                        int rowBytes = newWidth * 3; // RGB24 = 3 bytes per pixel
+                        Buffer.MemoryCopy(srcRowPtr, dstRowPtr, rowBytes, rowBytes);
+                    });
+                }
+            }
+            
+            // Python: det_img = (det_img - 127.5) / 128
+            var inputTensor = PreprocessDetectionImage(detImg, InputSize);
+            
+            // Python: output = det_face.run(None, {"input.1": det_img})
+            // Use the actual input name from the model metadata - EXACT MATCH
+            var inputs = new List<Tensor<float>> { inputTensor };
+            var results = ModelUtils.RunModel("det_face", _detFace, inputs);
+            var outputs = results.ToArray();
+            
+            // Process detection results exactly as in LivePortraitInference
+            var faces = ProcessDetectionResults(outputs, detScale);
+            
+            return faces;
+        }
+        
+        /// <summary>
+        /// Python: get_landmark(img, face) - EXACT MATCH to LivePortraitInference
+        /// </summary>
+        private Vector2[] GetLandmarks(byte[] img, int width, int height, FaceDetectionResult face)
+        {
+            // Python: input_size = 192
+            const int inputSize = 192;
+            
+            // Python: bbox = face["bbox"]
+            var bbox = face.BoundingBox;
+            
+            // Bbox is already in OpenCV coordinates (top-left origin), use directly
+            // Python: w, h = (bbox[2] - bbox[0]), (bbox[3] - bbox[1])
+            float w = bbox.width;
+            float h = bbox.height;
+            
+            // Python: center = (bbox[2] + bbox[0]) / 2, (bbox[3] + bbox[1]) / 2
+            Vector2 center = new(bbox.x + w * 0.5f, bbox.y + h * 0.5f);
+            
+            // Python: rotate = 0
+            float rotate = 0f;
+            
+            // Python: _scale = input_size / (max(w, h) * 1.5)
+            float scale = inputSize / (Mathf.Max(w, h) * 1.5f);
+            
+            // Python: aimg, M = face_align(img, center, input_size, _scale, rotate)
+            var (alignedImg, transformMatrix) = FaceAlign(img, width, height, center, inputSize, scale, rotate);
+            
+            // Python: aimg = aimg.transpose(2, 0, 1)  # HWC -> CHW
+            // Python: aimg = np.expand_dims(aimg, axis=0)
+            // Python: aimg = aimg.astype(np.float32)
+            var inputTensor = PreprocessLandmarkImage(alignedImg, inputSize);
+            
+            // Python: output = landmark.run(None, {"data": aimg})
+            var inputs = new List<Tensor<float>> { inputTensor };
+            var results = ModelUtils.RunModel("landmark2d106", _landmark2d106, inputs);
+            var output = results.First().AsTensor<float>().ToArray();
+            
+            // Python: pred = output[0][0]
+            // Python: pred = pred.reshape((-1, 2))
+            var landmarks = new Vector2[output.Length / 2];
+            
+            // Python: pred[:, 0:2] += 1
+            // Python: pred[:, 0:2] *= input_size[0] // 2
+            for (int i = 0; i < landmarks.Length; i++)
+            {
+                float x = output[i * 2] + 1f;
+                float y = output[i * 2 + 1] + 1f;
+                x *= inputSize / 2f;
+                y *= inputSize / 2f;
+                landmarks[i] = new Vector2(x, y);
+            }
+            
+            // Python: IM = cv2.invertAffineTransform(M)
+            // Python: pred = trans_points2d(pred, IM)
+            var IM = transformMatrix.inverse;
+            landmarks = MathUtils.TransPoints2D(landmarks, IM);
+            
+            return landmarks;
+        }
+        
+        // Helper methods for image processing and transformations
+        
+        private unsafe DenseTensor<float> PreprocessDetectionImage(byte[] img, int inputSize)
+        {
+            var tensorData = new float[1 * 3 * inputSize * inputSize];
+            int imageSize = inputSize * inputSize;
+            
+            fixed (byte* imgPtrFixed = img)
+            fixed (float* tensorPtrFixed = tensorData)
+            {
+                // Capture pointers in local variables to avoid lambda closure issues
+                byte* imgPtrLocal = imgPtrFixed;
+                float* tensorPtrLocal = tensorPtrFixed;
+                
+                System.Threading.Tasks.Parallel.For(0, imageSize, pixelIdx =>
+                {
+                    for (int c = 0; c < 3; c++)
+                    {
+                        byte pixelValue = imgPtrLocal[pixelIdx * 3 + c];
+                        float* outputPtr = tensorPtrLocal + c * imageSize + pixelIdx;
+                        *outputPtr = (pixelValue - 127.5f) / 128.0f;
+                    }
+                });
+            }
+            
+            return new DenseTensor<float>(tensorData, new[] { 1, 3, inputSize, inputSize });
+        }
+        
+        private unsafe DenseTensor<float> PreprocessLandmarkImage(byte[] img, int inputSize)
+        {
+            var tensorData = new float[1 * 3 * inputSize * inputSize];
+            int imageSize = inputSize * inputSize;
+            
+            fixed (byte* imgPtrFixed = img)
+            fixed (float* tensorPtrFixed = tensorData)
+            {
+                // Capture pointers in local variables to avoid lambda closure issues
+                byte* imgPtrLocal = imgPtrFixed;
+                float* tensorPtrLocal = tensorPtrFixed;
+                
+                System.Threading.Tasks.Parallel.For(0, imageSize, pixelIdx =>
+                {
+                    for (int c = 0; c < 3; c++)
+                    {
+                        byte pixelValue = imgPtrLocal[pixelIdx * 3 + c];
+                        float* outputPtr = tensorPtrLocal + c * imageSize + pixelIdx;
+                        *outputPtr = pixelValue; // No normalization for landmark detection
+                    }
+                });
+            }
+            
+            return new DenseTensor<float>(tensorData, new[] { 1, 3, inputSize, inputSize });
+        }
+        
+        private unsafe DenseTensor<float> PreprocessLandmarkRunnerImage(byte[] img, int width, int height)
+        {
+            var tensorData = new float[1 * 3 * height * width];
+            int imageSize = height * width;
+            
+            fixed (byte* imgPtrFixed = img)
+            fixed (float* tensorPtrFixed = tensorData)
+            {
+                // Capture pointers in local variables to avoid lambda closure issues
+                byte* imgPtrLocal = imgPtrFixed;
+                float* tensorPtrLocal = tensorPtrFixed;
+                
+                System.Threading.Tasks.Parallel.For(0, imageSize, pixelIdx =>
+                {
+                    for (int c = 0; c < 3; c++)
+                    {
+                        byte pixelValue = imgPtrLocal[pixelIdx * 3 + c];
+                        float* outputPtr = tensorPtrLocal + c * imageSize + pixelIdx;
+                        *outputPtr = pixelValue / 255.0f; // Normalize to [0,1]
+                    }
+                });
+            }
+            
+            return new DenseTensor<float>(tensorData, new[] { 1, 3, height, width });
+        }
+        
+        private unsafe List<FaceDetectionResult> ProcessDetectionResults(NamedOnnxValue[] outputs, float detScale)
+        {
+            var validDetections = new List<DetectionCandidate>();
+            
+            // Process each stride level
+            for (int idx = 0; idx < FeatMapCount; idx++)
+            {
+                var scores = outputs[idx].AsTensor<float>().ToArray();
+                var bboxPreds = outputs[idx + FeatMapCount].AsTensor<float>().ToArray();
+                var kpsPreds = outputs[idx + FeatMapCount * 2].AsTensor<float>().ToArray();
+                
+                int stride = FeatStrideFpn[idx];
+                int height = InputSize / stride;
+                int width = InputSize / stride;
+                
+                // Scale predictions by stride
+                for (int i = 0; i < bboxPreds.Length; i++) bboxPreds[i] *= stride;
+                for (int i = 0; i < kpsPreds.Length; i++) kpsPreds[i] *= stride;
+                
+                // Get anchor centers
+                var anchorCenters = GetAnchorCenters(height, width, stride);
+                
+                // Find valid detections
+                for (int i = 0; i < scores.Length; i++)
+                {
+                    if (scores[i] >= DetectionThreshold)
+                    {
+                        float centerX = anchorCenters[i, 0];
+                        float centerY = anchorCenters[i, 1];
+                        
+                        float x1 = centerX - bboxPreds[i * 4 + 0];
+                        float y1 = centerY - bboxPreds[i * 4 + 1];
+                        float x2 = centerX + bboxPreds[i * 4 + 2];
+                        float y2 = centerY + bboxPreds[i * 4 + 3];
+                        
+                        var candidate = new DetectionCandidate(x1, y1, x2, y2, scores[i]);
+                        
+                        // Copy keypoints (keypoints is already a fixed array in the struct)
+                        unsafe
+                        {
+                            for (int k = 0; k < 10; k += 2)
+                            {
+                                candidate.keypoints[k] = centerX + kpsPreds[i * 10 + k];
+                                candidate.keypoints[k + 1] = centerY + kpsPreds[i * 10 + k + 1];
+                            }
+                        }
+                        
+                        validDetections.Add(candidate);
+                    }
+                }
+            }
+            
+            if (validDetections.Count == 0)
+                return new List<FaceDetectionResult>();
+            
+            // Scale by detection scale
+            float invDetScale = 1.0f / detScale;
+            for (int i = 0; i < validDetections.Count; i++)
+            {
+                var candidate = validDetections[i];
+                candidate.x1 *= invDetScale;
+                candidate.y1 *= invDetScale;
+                candidate.x2 *= invDetScale;
+                candidate.y2 *= invDetScale;
+                
+                unsafe
+                {
+                    // keypoints is already a fixed array in the struct
+                    for (int k = 0; k < 10; k++)
+                    {
+                        candidate.keypoints[k] *= invDetScale;
+                    }
+                }
+                validDetections[i] = candidate;
+            }
+            
+            // Sort by score and apply NMS
+            validDetections.Sort((a, b) => b.score.CompareTo(a.score));
+            var keepMask = new bool[validDetections.Count];
+            ApplyNMS(validDetections, keepMask);
+            
+            // Convert to final results
+            var faces = new List<FaceDetectionResult>();
+            for (int i = 0; i < validDetections.Count; i++)
+            {
+                if (keepMask[i])
+                {
+                    var candidate = validDetections[i];
+                    var face = new FaceDetectionResult
+                    {
+                        BoundingBox = new Rect(candidate.x1, candidate.y1, 
+                            candidate.x2 - candidate.x1, candidate.y2 - candidate.y1),
+                        DetectionScore = candidate.score,
+                        Keypoints5 = new Vector2[5]
+                    };
+                    
+                    unsafe
+                    {
+                        // keypoints is already a fixed array in the struct
+                        for (int k = 0; k < 5; k++)
+                        {
+                            face.Keypoints5[k] = new Vector2(candidate.keypoints[k * 2], candidate.keypoints[k * 2 + 1]);
+                        }
+                    }
+                    
+                    faces.Add(face);
+                }
+            }
+            
+            return faces;
+        }
+        
+        private float[,] GetAnchorCenters(int height, int width, int stride)
+        {
+            string key = $"{height}_{width}_{stride}";
+            
+            if (_centerCache.TryGetValue(key, out var cached))
+                return cached;
+            
+            const int numAnchors = 2;
+            int totalAnchors = height * width * numAnchors;
+            var centers = new float[totalAnchors, 2];
+            
+            int idx = 0;
+            for (int h = 0; h < height; h++)
+            {
+                for (int w = 0; w < width; w++)
+                {
+                    float x = w * stride;
+                    float y = h * stride;
+                    
+                    for (int a = 0; a < numAnchors; a++)
+                    {
+                        centers[idx, 0] = x;
+                        centers[idx, 1] = y;
+                        idx++;
+                    }
+                }
+            }
+            
+            if (_centerCache.Count < 100)
+                _centerCache[key] = centers;
+                
+            return centers;
+        }
+        
+        private void ApplyNMS(List<DetectionCandidate> candidates, bool[] keepMask)
+        {
+            for (int i = 0; i < candidates.Count; i++)
+                keepMask[i] = true;
+            
+            for (int i = 0; i < candidates.Count; i++)
+            {
+                if (!keepMask[i]) continue;
+                
+                var candidateA = candidates[i];
+                float areaA = (candidateA.x2 - candidateA.x1) * (candidateA.y2 - candidateA.y1);
+                
+                for (int j = i + 1; j < candidates.Count; j++)
+                {
+                    if (!keepMask[j]) continue;
+                    
+                    var candidateB = candidates[j];
+                    
+                    float intersectionX1 = Mathf.Max(candidateA.x1, candidateB.x1);
+                    float intersectionY1 = Mathf.Max(candidateA.y1, candidateB.y1);
+                    float intersectionX2 = Mathf.Min(candidateA.x2, candidateB.x2);
+                    float intersectionY2 = Mathf.Min(candidateA.y2, candidateB.y2);
+                    
+                    if (intersectionX1 < intersectionX2 && intersectionY1 < intersectionY2)
+                    {
+                        float intersectionArea = (intersectionX2 - intersectionX1) * (intersectionY2 - intersectionY1);
+                        float areaB = (candidateB.x2 - candidateB.x1) * (candidateB.y2 - candidateB.y1);
+                        float unionArea = areaA + areaB - intersectionArea;
+                        
+                        if (intersectionArea / unionArea >= NmsThreshold)
+                        {
+                            keepMask[j] = false;
+                        }
+                    }
+                }
+            }
+        }
+        
+        private (byte[], Matrix4x4) FaceAlign(byte[] img, int width, int height, Vector2 center, int outputSize, float scale, float rotate)
+        {
+            float scaleRatio = scale;
+            float rot = rotate * Mathf.Deg2Rad;
+            
+            float cosRot = Mathf.Cos(rot);
+            float sinRot = Mathf.Sin(rot);
+            float outputSizeHalf = outputSize * 0.5f;
+            
+            float m00 = scaleRatio * cosRot;
+            float m01 = -scaleRatio * sinRot;
+            float m02 = outputSizeHalf - center.x * m00 - center.y * m01;
+            
+            float m10 = scaleRatio * sinRot;
+            float m11 = scaleRatio * cosRot;
+            float m12 = outputSizeHalf - center.x * m10 - center.y * m11;
+
+            float[,] M = new float[,] {
+                { m00, m01, m02 },
+                { m10, m11, m12 }
+            };
+            
+            var cropped = TextureUtils.TransformImgExact(img, width, height, M, outputSize, outputSize);
+
+            var transform = new Matrix4x4
+            {
+                m00 = M[0, 0], m01 = M[0, 1], m02 = 0f, m03 = M[0, 2],
+                m10 = M[1, 0], m11 = M[1, 1], m12 = 0f, m13 = M[1, 2],
+                m20 = 0f, m21 = 0f, m22 = 1f, m23 = 0f,
+                m30 = 0f, m31 = 0f, m32 = 0f, m33 = 1f
+            };
+
+            return (cropped, transform);
+        }
+        
+
+        
+        private CropInfo CropImage(byte[] img, int width, int height, Vector2[] lmk, int dsize, float scale, float vyRatio)
+        {
+            var (MInv, _) = EstimateSimilarTransformFromPts(lmk, dsize, scale, 0f, vyRatio, true);
+            
+            var imgCrop = TextureUtils.TransformImgExact(img, width, height, MInv, dsize, dsize);
+            var ptCrop = MathUtils.TransformPts(lmk, MInv);
+            
+            var Mo2c = MathUtils.GetCropTransform(MInv);
+            var Mc2o = Mo2c.inverse;
+            
+            return new CropInfo
+            {
+                ImageCrop = imgCrop,
+                Transform = Mc2o,
+                InverseTransform = Mo2c,
+                LandmarksCrop = ptCrop
+            };
+        }
+        
+        private (float[,], float[,]) EstimateSimilarTransformFromPts(Vector2[] pts, int dsize, float scale, float vxRatio, float vyRatio, bool flagDoRot)
+        {
+            var (center, size, angle) = ParseRectFromLandmark(pts, scale, true, vxRatio, vyRatio, false);
+            
+            float s = dsize / size.x;
+            Vector2 tgtCenter = new(dsize / 2f, dsize / 2f);
+            
+            float[,] MInv;
+            
+            if (flagDoRot)
+            {
+                float costheta = Mathf.Cos(angle);
+                float sintheta = Mathf.Sin(angle);
+                float cx = center.x, cy = center.y;
+                float tcx = tgtCenter.x, tcy = tgtCenter.y;
+                
+                MInv = new float[,] {
+                    { s * costheta, s * sintheta, tcx - s * (costheta * cx + sintheta * cy) },
+                    { -s * sintheta, s * costheta, tcy - s * (-sintheta * cx + costheta * cy) }
+                };
+            }
+            else
+            {
+                MInv = new float[,] {
+                    { s, 0, tgtCenter.x - s * center.x },
+                    { 0, s, tgtCenter.y - s * center.y }
+                };
+            }
+            
+            var MInvH = new float[3, 3] {
+                { MInv[0, 0], MInv[0, 1], MInv[0, 2] },
+                { MInv[1, 0], MInv[1, 1], MInv[1, 2] },
+                { 0f, 0f, 1f }
+            };
+            
+            var M = MathUtils.InvertMatrix3x3(MInvH);
+            var M2x3 = new float[,] {
+                { M[0, 0], M[0, 1], M[0, 2] },
+                { M[1, 0], M[1, 1], M[1, 2] }
+            };
+
+            return (MInv, M2x3);
+        }
+        
+        private (Vector2, Vector2, float) ParseRectFromLandmark(Vector2[] pts, float scale, bool needSquare, float vxRatio, float vyRatio, bool useDegFlag)
+        {
+            var pt2 = ParsePt2FromPtX(pts, true);
+            
+            Vector2 uy = pt2[1] - pt2[0];
+            float l = uy.magnitude;
+            
+            if (l <= 1e-3f)
+            {
+                uy = new Vector2(0f, 1f);
+            }
+            else
+            {
+                uy /= l;
+            }
+            
+            Vector2 ux = new(uy.y, -uy.x);
+            
+            float angle = Mathf.Acos(ux.x);
+            if (ux.y < 0)
+            {
+                angle = -angle;
+            }
+            
+            float[,] M = new float[,] { { ux.x, ux.y }, { uy.x, uy.y } };
+            
+            Vector2 center0 = Vector2.zero;
+            for (int i = 0; i < pts.Length; i++)
+            {
+                center0 += pts[i];
+            }
+            center0 /= pts.Length;
+            
+            Vector2[] rpts = new Vector2[pts.Length];
+            for (int i = 0; i < pts.Length; i++)
+            {
+                Vector2 centered = pts[i] - center0;
+                rpts[i] = new Vector2(
+                    centered.x * M[0, 0] + centered.y * M[1, 0],
+                    centered.x * M[0, 1] + centered.y * M[1, 1]
+                );
+            }
+            
+            Vector2 ltPt = new(float.MaxValue, float.MaxValue);
+            Vector2 rbPt = new(float.MinValue, float.MinValue);
+            
+            for (int i = 0; i < rpts.Length; i++)
+            {
+                if (rpts[i].x < ltPt.x) ltPt.x = rpts[i].x;
+                if (rpts[i].y < ltPt.y) ltPt.y = rpts[i].y;
+                if (rpts[i].x > rbPt.x) rbPt.x = rpts[i].x;
+                if (rpts[i].y > rbPt.y) rbPt.y = rpts[i].y;
+            }
+            
+            Vector2 center1 = (ltPt + rbPt) / 2f;
+            Vector2 size = rbPt - ltPt;
+            
+            if (needSquare)
+            {
+                float m = Mathf.Max(size.x, size.y);
+                size.x = m;
+                size.y = m;
+            }
+            
+            size *= scale;
+            
+            Vector2 center = center0 + ux * center1.x + uy * center1.y;
+            center = center + ux * (vxRatio * size.x) + uy * (vyRatio * size.y);
+            
+            if (useDegFlag)
+            {
+                angle *= Mathf.Rad2Deg;
+            }
+            
+            return (center, size, angle);
+        }
+        
+        private Vector2[] ParsePt2FromPtX(Vector2[] pts, bool useLip)
+        {
+            var pt2 = ParsePt2FromPt106(pts, useLip);
+            
+            if (!useLip)
+            {
+                Vector2 v = pt2[1] - pt2[0];
+                pt2[1] = new Vector2(pt2[0].x - v.y, pt2[0].y + v.x);
+            }
+            
+            return pt2;
+        }
+        
+        private Vector2[] ParsePt2FromPt106(Vector2[] pt106, bool useLip)
+        {
+            Vector2 ptLeftEye = (pt106[33] + pt106[35] + pt106[40] + pt106[39]) / 4f;
+            Vector2 ptRightEye = (pt106[87] + pt106[89] + pt106[94] + pt106[93]) / 4f;
+            
+            Vector2[] pt2;
+            
+            if (useLip)
+            {
+                Vector2 ptCenterEye = (ptLeftEye + ptRightEye) / 2f;
+                Vector2 ptCenterLip = (pt106[52] + pt106[61]) / 2f;
+                pt2 = new Vector2[] { ptCenterEye, ptCenterLip };
+            }
+            else
+            {
+                pt2 = new Vector2[] { ptLeftEye, ptRightEye };
+            }
+            
+            return pt2;
+        }
+        
+        private Vector2[] TransformLandmarksWithMatrix(Vector2[] landmarks, Matrix4x4 transform)
+        {
+            var result = new Vector2[landmarks.Length];
+            for (int i = 0; i < landmarks.Length; i++)
+            {
+                var transformed = transform.MultiplyPoint3x4(new Vector3(landmarks[i].x, landmarks[i].y, 0));
+                result[i] = new Vector2(transformed.x, transformed.y);
+            }
+            return result;
+        }
+        
+        /// <summary>
+        /// Get landmark and bbox using the consolidated face analysis approach
+        /// Compatible with MuseTalkInference API
+        /// </summary>
+        public (List<Vector4>, List<Texture2D>) GetLandmarkAndBbox(Texture2D[] textures, int bboxShift = 0, string version = "v15", string debugDir = null)
+        {
+            var coordsList = new List<Vector4>();
+            var framesList = new List<Texture2D>(textures);
+            
+            if (!IsInitialized)
+            {
+                Logger.LogError("[FaceAnalysis] Models not initialized");
+                // Return placeholder coordinates for all frames
+                for (int i = 0; i < textures.Length; i++)
+                {
+                    coordsList.Add(Vector4.zero);
+                }
+                return (coordsList, framesList);
+            }
+            
+            Logger.Log($"[FaceAnalysis] Processing {textures.Length} images with consolidated face analysis approach");
+            
+            for (int idx = 0; idx < textures.Length; idx++)
+            {
+                var texture = textures[idx];
+                var (textureBytes, width, height) = TextureUtils.Texture2DToBytes(texture);
+                
+                // Analyze faces using the consolidated approach
+                var faces = AnalyzeFaces(textureBytes, width, height, 1);
+                
+                if (faces.Count == 0)
+                {
+                    Logger.LogWarning($"[FaceAnalysis] No face detected in image {idx} ({texture.width}x{texture.height})");
+                    coordsList.Add(Vector4.zero);
+                    continue;
+                }
+                
+                // Get the best detection
+                var face = faces[0];
+                var bbox = face.BoundingBox;
+                
+                // Convert to Vector4 format expected by MuseTalk
+                var finalBbox = new Vector4(bbox.x, bbox.y, bbox.x + bbox.width, bbox.y + bbox.height);
+                coordsList.Add(finalBbox);
+            }
+            
+            return (coordsList, framesList);
+        }
+        
+        /// <summary>
+        /// Crop face region using bbox
+        /// Compatible with MuseTalkInference API
+        /// </summary>
+        public Texture2D CropFaceRegion(Texture2D originalTexture, Vector4 bbox, string version)
+        {
+            if (originalTexture == null)
+                return null;
+                
+            // Convert Vector4 bbox to Rect
+            var rect = new Rect(bbox.x, bbox.y, bbox.z - bbox.x, bbox.w - bbox.y);
+            
+            // Ensure the crop rect is within bounds
+            rect.x = Mathf.Max(0, rect.x);
+            rect.y = Mathf.Max(0, rect.y);
+            rect.width = Mathf.Min(rect.width, originalTexture.width - rect.x);
+            rect.height = Mathf.Min(rect.height, originalTexture.height - rect.y);
+            
+            if (rect.width <= 0 || rect.height <= 0)
+            {
+                Logger.LogError($"[FaceAnalysis] Invalid crop dimensions: {rect.width}x{rect.height}");
+                return null;
+            }
+            
+            // Create cropped texture
+            var croppedTexture = new Texture2D((int)rect.width, (int)rect.height, TextureFormat.RGB24, false);
+            
+            var pixels = originalTexture.GetPixels((int)rect.x, (int)rect.y, (int)rect.width, (int)rect.height);
+            croppedTexture.SetPixels(pixels);
+            croppedTexture.Apply();
+            
+            return croppedTexture;
+        }
+        
+        public void Dispose()
+        {
+            if (!_disposed)
+            {
+                _detFace?.Dispose();
+                _landmark2d106?.Dispose();
+                _landmarkRunner?.Dispose();
+                _disposed = true;
+                Logger.Log("[FaceAnalysis] Disposed");
+            }
+        }
+    }
+    
+    /// <summary>
+    /// Crop information for image transformations
+    /// </summary>
+    public class CropInfo
+    {
+        public byte[] ImageCrop { get; set; }
+        public Vector2[] LandmarksCrop { get; set; }
+        public Matrix4x4 Transform { get; set; }
+        public Matrix4x4 InverseTransform { get; set; }
+    }
+} 

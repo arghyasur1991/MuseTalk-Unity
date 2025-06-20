@@ -12,9 +12,11 @@ namespace MuseTalk.Models
     using Utils;
 
     /// <summary>
-    /// SCRFD face detection model from InsightFace
+    /// DEPRECATED: Use FaceAnalysis class instead for consolidated face analysis functionality
+    /// Legacy SCRFD face detection model from InsightFace
     /// Provides accurate face detection with 5 facial keypoints
     /// </summary>
+    [Obsolete("Use FaceAnalysis class from MuseTalk.Utils instead")]
     public class ScrfdModel : IDisposable
     {
         private static readonly DebugLogger Logger = new();
@@ -568,9 +570,11 @@ namespace MuseTalk.Models
     }
     
     /// <summary>
-    /// 1k3d68 landmark detection model from InsightFace
+    /// DEPRECATED: Use FaceAnalysis class instead for consolidated face analysis functionality
+    /// Legacy 1k3d68 landmark detection model from InsightFace
     /// Provides 68-point facial landmarks from face crops
     /// </summary>
+    [Obsolete("Use FaceAnalysis class from MuseTalk.Utils instead")]
     public class Landmark68Model : IDisposable
     {
         private static readonly DebugLogger Logger = new();
@@ -1006,9 +1010,11 @@ namespace MuseTalk.Models
     }
     
     /// <summary>
-    /// Face detection result from SCRFD
+    /// DEPRECATED: Use FaceDetectionResult from MuseTalk.Utils instead
+    /// Legacy face detection result from SCRFD
     /// </summary>
     [Serializable]
+    [Obsolete("Use FaceDetectionResult from MuseTalk.Utils instead")]
     public class FaceDetection
     {
         public Rect BoundingBox;

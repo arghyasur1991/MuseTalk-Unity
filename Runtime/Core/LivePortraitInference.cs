@@ -88,8 +88,8 @@ namespace MuseTalk.Core
         private InferenceSession _stitching;  // keypoint stitching
         private InferenceSession _warpingSpade;  // neural warping
         
-        // Face analysis (reuse existing InsightFace)
-        private InsightFaceHelper _insightFaceHelper;
+        // Face analysis (using consolidated FaceAnalysis class)
+        private FaceAnalysis _faceAnalysis;
 
         private Texture2D _debugImage = null;
         
@@ -150,8 +150,8 @@ namespace MuseTalk.Core
             _stitching = ModelUtils.LoadModel(_config, "stitching");
             _warpingSpade = ModelUtils.LoadModel(_config, "warping_spade");
             
-            // Reuse existing InsightFace helper
-            _insightFaceHelper = new InsightFaceHelper(_config);
+            // Initialize consolidated face analysis
+            _faceAnalysis = new FaceAnalysis(_config);
             
             // Verify all models initialized
             bool allInitialized = _appearanceFeatureExtractor != null &&
@@ -161,7 +161,7 @@ namespace MuseTalk.Core
                                  _landmarkRunner != null &&
                                  _landmark2d106 != null &&
                                  _detFace != null &&
-                                 _insightFaceHelper.IsInitialized;
+                                 _faceAnalysis.IsInitialized;
             
             if (!allInitialized)
             {
@@ -173,7 +173,7 @@ namespace MuseTalk.Core
                 if (_landmarkRunner == null) failedModels.Add("LandmarkRunner");
                 if (_landmark2d106 == null) failedModels.Add("Landmark106");
                 if (_detFace == null) failedModels.Add("DetFace");
-                if (!_insightFaceHelper.IsInitialized) failedModels.Add("InsightFace");
+                if (!_faceAnalysis.IsInitialized) failedModels.Add("FaceAnalysis");
                 
                 throw new InvalidOperationException($"Failed to initialize models: {string.Join(", ", failedModels)}");
             }
@@ -361,9 +361,9 @@ namespace MuseTalk.Core
         /// </summary>
         private CropInfo CropSrcImage(byte[] img, int width, int height)
         {
-            // Python: face_analysis = models["face_analysis"]
-            // Python: src_face = face_analysis(img)
-            var srcFaces = FaceAnalysis(img, width, height);
+                            // Python: face_analysis = models["face_analysis"]
+                // Python: src_face = face_analysis(img)
+                var srcFaces = _faceAnalysis.AnalyzeFaces(img, width, height);
             
             // Python: if len(src_face) == 0: print("No face detected in the source image."); return None
             if (srcFaces.Count == 0)
@@ -403,9 +403,9 @@ namespace MuseTalk.Core
         }
         
         /// <summary>
-        /// Python: face_analysis(img) - EXACT MATCH
-        /// Implements the complete face detection pipeline from Python
+        /// DEPRECATED: Removed - now using consolidated FaceAnalysis class
         /// </summary>
+        [Obsolete("Use _faceAnalysis.AnalyzeFaces() instead")]
         private List<FaceDetectionResult> FaceAnalysis(byte[] img, int width, int height)
         {
             // Python: input_size = 512
@@ -954,7 +954,7 @@ namespace MuseTalk.Core
             {
                 // Python: face_analysis = models["face_analysis"]
                 // Python: src_face = face_analysis(img)
-                var srcFaces = FaceAnalysis(img, width, height);
+                var srcFaces = _faceAnalysis.AnalyzeFaces(img, width, height);
                 if (srcFaces.Count == 0)
                 {
                     throw new InvalidOperationException("No face detected in the frame");
@@ -2047,7 +2047,7 @@ namespace MuseTalk.Core
                 _motionExtractor?.Dispose();
                 _stitching?.Dispose();
                 _warpingSpade?.Dispose();
-                _insightFaceHelper?.Dispose();
+                _faceAnalysis?.Dispose();
                 
                 // Clean up mask template if it was loaded during initialization
                 if (_maskTemplate != null)

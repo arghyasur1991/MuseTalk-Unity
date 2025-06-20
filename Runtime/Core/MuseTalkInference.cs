@@ -97,8 +97,8 @@ namespace MuseTalk.Core
         // QUANTIZATION SUPPORT: INT8 configuration for CPU optimization
         private readonly bool _useINT8 = false;
         
-        // InsightFace utility for SCRFD+1k3d68 face processing
-        private readonly InsightFaceHelper _insightFaceHelper;
+        // Face analysis utility for SCRFD+1k3d68 face processing
+        private readonly FaceAnalysis _faceAnalysis;
         
         // Avatar data for blending
         private AvatarData _avatarData;
@@ -154,7 +154,7 @@ namespace MuseTalk.Core
             try
             {
                 InitializeModels();
-                _insightFaceHelper = new InsightFaceHelper(_config);
+                _faceAnalysis = new FaceAnalysis(_config);
                 
                 // Initialize Whisper model for audio processing
                 _whisperModel = new WhisperModel(_config);
@@ -545,7 +545,7 @@ namespace MuseTalk.Core
             var avatarData = new AvatarData();
             
             // Face Detection
-            var result = _insightFaceHelper.GetLandmarkAndBbox(
+            var result = _faceAnalysis.GetLandmarkAndBbox(
                 avatarTextures, 
                 bboxShift: 0,
                 version: _config.Version,
@@ -561,7 +561,7 @@ namespace MuseTalk.Core
             {
                 var bbox = coordsList[i];
                 
-                if (bbox == InsightFaceHelper.CoordPlaceholder)
+                if (bbox == Vector4.zero)
                 {
                     Logger.LogWarning($"[MuseTalkInference] No face detected in image {i}, skipping");
                     continue;
@@ -572,7 +572,7 @@ namespace MuseTalk.Core
                     var originalTexture = framesList[i];
                     
                     // Crop face region with version-specific margins
-                    var croppedTexture = _insightFaceHelper.CropFaceRegion(originalTexture, bbox, _config.Version);
+                    var croppedTexture = _faceAnalysis.CropFaceRegion(originalTexture, bbox, _config.Version);
                     
                     // Pre-compute segmentation mask and cached data for blending
                     var segmentationData = PrecomputeSegmentationData(originalTexture, bbox, _config.Version);
@@ -1261,7 +1261,7 @@ namespace MuseTalk.Core
                 _vaeDecoderSession?.Dispose();
                 _positionalEncodingSession?.Dispose();
                 _whisperModel?.Dispose();
-                _insightFaceHelper?.Dispose();
+                _faceAnalysis?.Dispose();
                 _reusableUNetResult?.Dispose();
                 _diskCache?.Dispose();
                 
