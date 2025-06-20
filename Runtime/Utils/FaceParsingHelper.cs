@@ -63,77 +63,41 @@ namespace MuseTalk.Utils
         }
         
         /// <summary>
-        /// Generate face segmentation mask using ONNX BiSeNet model
-        /// </summary>
-        public Texture2D GenerateFaceSegmentationMask(Texture2D inputImage, string mode = "jaw")
-        {
-            if (!_initialized)
-            {
-                Logger.LogError("[FaceParsingHelper] Model not initialized");
-                return null;
-            }
-            
-            try
-            {
-                // Step 1: Preprocess image for BiSeNet (512x512, normalized)
-                var preprocessedTensor = PreprocessImageForBiSeNet(inputImage);
-                
-                // Step 2: Run ONNX inference
-                var parsingResult = RunBiSeNetInference(preprocessedTensor);
-                
-                // Step 3: Post-process to create mask based on mode
-                var mask = PostProcessParsingResult(parsingResult, mode, inputImage.width, inputImage.height);
-                
-                return mask;
-            }
-            catch (Exception e)
-            {
-                Logger.LogError($"[FaceParsingHelper] Face parsing failed: {e.Message}");
-                return null;
-            }
-        }
-        
-        /// <summary>
         /// Generate face segmentation mask using ONNX BiSeNet model from byte array
+        /// OPTIMIZED: Works with byte arrays throughout the entire pipeline
         /// </summary>
-        public Texture2D GenerateFaceSegmentationMask(byte[] inputImageData, int width, int height, string mode = "jaw")
+        public (byte[], int, int) GenerateFaceSegmentationMask(byte[] inputImageData, int width, int height, string mode = "jaw")
         {
             if (!_initialized)
             {
                 Logger.LogError("[FaceParsingHelper] Model not initialized");
-                return null;
+                return (null, 0, 0);
             }
             
             try
             {
-                // Convert byte array to texture for processing
-                var inputTexture = TextureUtils.BytesToTexture2D(inputImageData, width, height);
-                
-                // Step 1: Preprocess image for BiSeNet (512x512, normalized)
-                var preprocessedTensor = PreprocessImageForBiSeNet(inputTexture);
+                // Step 1: Preprocess image for BiSeNet (512x512, normalized) directly from byte array
+                var preprocessedTensor = PreprocessImageForBiSeNet(inputImageData, width, height);
                 
                 // Step 2: Run ONNX inference
                 var parsingResult = RunBiSeNetInference(preprocessedTensor);
                 
-                // Step 3: Post-process to create mask based on mode
-                var mask = PostProcessParsingResult(parsingResult, mode, width, height);
+                // Step 3: Post-process to create mask based on mode, returning byte array
+                var (maskData, maskWidth, maskHeight) = PostProcessParsingResult(parsingResult, mode, width, height);
                 
-                // Clean up temporary texture
-                UnityEngine.Object.Destroy(inputTexture);
-                
-                return mask;
+                return (maskData, maskWidth, maskHeight);
             }
             catch (Exception e)
             {
                 Logger.LogError($"[FaceParsingHelper] Face parsing failed: {e.Message}");
-                return null;
+                return (null, 0, 0);
             }
         }
         
-        private unsafe DenseTensor<float> PreprocessImageForBiSeNet(Texture2D inputImage)
+        private unsafe DenseTensor<float> PreprocessImageForBiSeNet(byte[] inputImageData, int width, int height)
         {
-            // Resize to BiSeNet input size (512x512) - now uses optimized ResizeTextureToExactSize
-            var resizedImage = TextureUtils.ResizeTextureToExactSize(inputImage, 512, 512);
+            // Resize to BiSeNet input size (512x512) - now uses optimized ResizeTextureToExactSize with byte arrays
+            var resizedImageData = TextureUtils.ResizeTextureToExactSize(inputImageData, width, height, 512, 512, TextureUtils.SamplingMode.Bilinear);
             
             // Create tensor data array - [batch, channels, height, width] = [1, 3, 512, 512]
             var tensorData = new float[1 * 3 * 512 * 512];
@@ -143,43 +107,42 @@ namespace MuseTalk.Utils
             const float stdR = 0.229f, stdG = 0.224f, stdB = 0.225f;
             const float invStdR = 1.0f / stdR, invStdG = 1.0f / stdG, invStdB = 1.0f / stdB;
             
-            // Get direct access to resized image pixel data
-            var pixelData = resizedImage.GetPixelData<byte>(0);
-            byte* pixelPtr = (byte*)pixelData.GetUnsafeReadOnlyPtr();
-            
             // Pre-calculate tensor offsets for each channel (CHW format)
             const int imageSize = 512 * 512;
             
             // OPTIMIZED: Maximum parallelism across all 512×512 pixels (262,144-way parallelism)
             // Process in CHW format (channels first) with stride-based coordinate calculation
-            System.Threading.Tasks.Parallel.For(0, imageSize, pixelIndex =>
+            fixed (byte* pixelPtrFixed = resizedImageData)
             {
-                // Calculate x, y coordinates from linear pixel index using stride arithmetic
-                int y = pixelIndex >> 9;  // Divide by 512 (right shift 9 bits: 2^9 = 512) - faster than division
-                int x = pixelIndex & 511; // Modulo 512 (bitwise AND with 511: 2^9-1 = 511) - faster than modulo
+                // Capture pointer in local variable to avoid lambda closure issues
+                byte* pixelPtrLocal = pixelPtrFixed;
                 
-                // CRITICAL: Unity GetPixelData() is bottom-left origin, flip Y for ONNX (top-left)
-                int unityY = 511 - y; // Flip Y coordinate for ONNX coordinate system
-                
-                // Calculate pointer for this specific pixel using stride arithmetic
-                byte* pixelBytePtr = pixelPtr + ((unityY << 9) + x) * 3; // unityY * 512 + x, then * 3 for RGB24
-                
-                // Process all 3 channels for this pixel with unrolled loop for maximum performance
+                System.Threading.Tasks.Parallel.For(0, imageSize, pixelIndex =>
                 {
-                    // R channel (channel 0)
-                    float normalizedR = (pixelBytePtr[0] / 255.0f - meanR) * invStdR;
-                    tensorData[y * 512 + x] = normalizedR; // Channel 0 offset: 0 * imageSize
+                    // Calculate x, y coordinates from linear pixel index using stride arithmetic
+                    int y = pixelIndex >> 9;  // Divide by 512 (right shift 9 bits: 2^9 = 512) - faster than division
+                    int x = pixelIndex & 511; // Modulo 512 (bitwise AND with 511: 2^9-1 = 511) - faster than modulo
                     
-                    // G channel (channel 1)  
-                    float normalizedG = (pixelBytePtr[1] / 255.0f - meanG) * invStdG;
-                    tensorData[imageSize + y * 512 + x] = normalizedG; // Channel 1 offset: 1 * imageSize
+                    // Calculate pointer for this specific pixel using stride arithmetic
+                    byte* pixelBytePtr = pixelPtrLocal + ((y << 9) + x) * 3; // unityY * 512 + x, then * 3 for RGB24
                     
-                    // B channel (channel 2)
-                    float normalizedB = (pixelBytePtr[2] / 255.0f - meanB) * invStdB;
-                    tensorData[2 * imageSize + y * 512 + x] = normalizedB; // Channel 2 offset: 2 * imageSize
-                }
-            });
-            UnityEngine.Object.Destroy(resizedImage);
+                    // Process all 3 channels for this pixel with unrolled loop for maximum performance
+                    {
+                        // R channel (channel 0)
+                        float normalizedR = (pixelBytePtr[0] / 255.0f - meanR) * invStdR;
+                        tensorData[y * 512 + x] = normalizedR; // Channel 0 offset: 0 * imageSize
+                        
+                        // G channel (channel 1)  
+                        float normalizedG = (pixelBytePtr[1] / 255.0f - meanG) * invStdG;
+                        tensorData[imageSize + y * 512 + x] = normalizedG; // Channel 1 offset: 1 * imageSize
+                        
+                        // B channel (channel 2)
+                        float normalizedB = (pixelBytePtr[2] / 255.0f - meanB) * invStdB;
+                        tensorData[2 * imageSize + y * 512 + x] = normalizedB; // Channel 2 offset: 2 * imageSize
+                    }
+                });
+            }
+            
             return new DenseTensor<float>(tensorData, new[] { 1, 3, 512, 512 });
         }
         
@@ -250,7 +213,7 @@ namespace MuseTalk.Utils
             return parsingMap;
         }
         
-        private unsafe Texture2D PostProcessParsingResult(int[,] parsingMap, string mode, int targetWidth, int targetHeight)
+        private unsafe (byte[], int, int) PostProcessParsingResult(int[,] parsingMap, string mode, int targetWidth, int targetHeight)
         {
             // Create mask texture with RGB24 format for maximum efficiency
             var maskTexture = new Texture2D(512, 512, TextureFormat.RGB24, false);
@@ -320,39 +283,38 @@ namespace MuseTalk.Utils
             // Apply changes to texture (no need for SetPixels since we wrote directly to pixel data)
             maskTexture.Apply();
             
+            // Convert to byte array
+            var (maskData, maskWidth, maskHeight) = TextureUtils.Texture2DToBytes(maskTexture);
+            UnityEngine.Object.Destroy(maskTexture);
+            
             // Resize to target dimensions if needed using optimized resize
             if (targetWidth != 512 || targetHeight != 512)
             {
-                var resizedMask = TextureUtils.ResizeTextureToExactSize(maskTexture, targetWidth, targetHeight);
-                UnityEngine.Object.Destroy(maskTexture);
-                return resizedMask;
+                var resizedMaskData = TextureUtils.ResizeTextureToExactSize(maskData, maskWidth, maskHeight, targetWidth, targetHeight, TextureUtils.SamplingMode.Bilinear);
+                return (resizedMaskData, targetWidth, targetHeight);
             }
             
-            return maskTexture;
+            return (maskData, maskWidth, maskHeight);
         }
         
         /// <summary>
-        /// Create face mask with morphological operations (matching Python implementation)
+        /// Create face mask with morphological operations returning byte array (matching Python implementation)
+        /// OPTIMIZED: Returns byte array directly without creating temporary Texture2D objects
         /// </summary>
-        public Texture2D CreateFaceMaskWithMorphology(byte[] inputImage, int width, int height, string mode = "jaw")
+        public (byte[], int, int) CreateFaceMaskWithMorphology(byte[] inputImage, int width, int height, string mode = "jaw")
         {
-            var baseMask = GenerateFaceSegmentationMask(inputImage, width, height, mode);
-            if (baseMask == null) return null;
-            var smoothedMask = ApplyMorphologicalOperations(baseMask, mode);
-            UnityEngine.Object.Destroy(baseMask);
-            return smoothedMask;
+            var (baseMaskData, baseMaskWidth, baseMaskHeight) = GenerateFaceSegmentationMask(inputImage, width, height, mode);
+            if (baseMaskData == null) return (null, 0, 0);
+            
+            var (smoothedMaskData, smoothedMaskWidth, smoothedMaskHeight) = ApplyMorphologicalOperations(baseMaskData, baseMaskWidth, baseMaskHeight, mode);
+            
+            return (smoothedMaskData, smoothedMaskWidth, smoothedMaskHeight);
         }
         
-        private unsafe Texture2D ApplyMorphologicalOperations(Texture2D mask, string mode)
+        private unsafe (byte[], int, int) ApplyMorphologicalOperations(byte[] maskData, int width, int height, string mode)
         {
-            int width = mask.width;
-            int height = mask.height;
             int totalPixels = width * height;
             int totalBytes = totalPixels * 3; // RGB24: 3 bytes per pixel
-            
-            // Get input pixel data directly as bytes
-            var inputPixelData = mask.GetPixelData<byte>(0);
-            byte* inputPtr = (byte*)inputPixelData.GetUnsafeReadOnlyPtr();
             
             // Allocate working buffers
             byte* dilatedPtr = (byte*)UnsafeUtility.Malloc(totalBytes, 4, Unity.Collections.Allocator.Temp);
@@ -361,27 +323,28 @@ namespace MuseTalk.Utils
             
             try
             {
-                // Apply morphological operations using unsafe pointers
-                ApplyDilationUnsafe(inputPtr, dilatedPtr, width, height, 3);
-                ApplyErosionUnsafe(dilatedPtr, erodedPtr, width, height, 2);
-                
-                // Apply optimized Gaussian blur
-                float sigma = 1.0f;
-                int kernelSize = Mathf.RoundToInt(sigma * 6) | 1; // Ensure odd size
-                kernelSize = Mathf.Max(kernelSize, 3); // Minimum kernel size
-                
-                TextureUtils.ApplySimpleGaussianBlur(erodedPtr, blurredPtr, width, height, kernelSize);
-                
-                // Create result texture and copy data
-                var result = new Texture2D(width, height, TextureFormat.RGB24, false);
-                var resultPixelData = result.GetPixelData<byte>(0);
-                byte* resultPtr = (byte*)resultPixelData.GetUnsafePtr();
-                
-                // Copy final result
-                UnsafeUtility.MemCpy(resultPtr, blurredPtr, totalBytes);
-                
-                result.Apply();
-                return result;
+                fixed (byte* inputPtr = maskData)
+                {
+                    // Apply morphological operations using unsafe pointers
+                    ApplyDilationUnsafe(inputPtr, dilatedPtr, width, height, 3);
+                    ApplyErosionUnsafe(dilatedPtr, erodedPtr, width, height, 2);
+                    
+                    // Apply optimized Gaussian blur
+                    float sigma = 1.0f;
+                    int kernelSize = Mathf.RoundToInt(sigma * 6) | 1; // Ensure odd size
+                    kernelSize = Mathf.Max(kernelSize, 3); // Minimum kernel size
+                    
+                    TextureUtils.ApplySimpleGaussianBlur(erodedPtr, blurredPtr, width, height, kernelSize);
+                    
+                    // Create result byte array and copy data
+                    var result = new byte[totalBytes];
+                    fixed (byte* resultPtr = result)
+                    {
+                        UnsafeUtility.MemCpy(resultPtr, blurredPtr, totalBytes);
+                    }
+                    
+                    return (result, width, height);
+                }
             }
             finally
             {

@@ -290,13 +290,16 @@ namespace MuseTalk.Core
                 throw new InvalidOperationException("Failed to create face_large crop");
             
             // Generate face segmentation mask using BiSeNet on face_large
-            var segmentationMask = GenerateFaceSegmentationMaskCached(faceLarge, (int)cropRect.width, (int)cropRect.height);
+            var (segmentationMaskData, segmentationMaskWidth, segmentationMaskHeight) = GenerateFaceSegmentationMaskCached(faceLarge, (int)cropRect.width, (int)cropRect.height);
             
-            if (segmentationMask == null)
+            if (segmentationMaskData == null)
                 throw new InvalidOperationException("Failed to generate segmentation mask");
             
             // OPTIMIZATION: Precompute all blending masks that are independent of faceTexture
             // These masks only depend on segmentation, face bbox, and crop box - all available now
+            
+            // Convert segmentation mask byte array to texture for ImageBlendingHelper methods
+            var segmentationMask = TextureUtils.BytesToTexture2D(segmentationMaskData, segmentationMaskWidth, segmentationMaskHeight);
             
             // Step 1: Create mask_small by cropping BiSeNet mask to face bbox (matching Python)
             var maskSmall = ImageBlendingHelper.CreateSmallMaskFromBiSeNet(segmentationMask, adjustedFaceBbox, cropRect);
@@ -312,7 +315,6 @@ namespace MuseTalk.Core
             var blurredMask = ImageBlendingHelper.ApplyGaussianBlurToMask(boundaryMask);
             
             // Convert all textures to byte arrays for efficient storage
-            var (segmentationMaskData, segmentationMaskWidth, segmentationMaskHeight) = TextureUtils.Texture2DToBytes(segmentationMask);
             var (maskSmallData, maskSmallWidth, maskSmallHeight) = TextureUtils.Texture2DToBytes(maskSmall);
             var (fullMaskData, fullMaskWidth, fullMaskHeight) = TextureUtils.Texture2DToBytes(fullMask);
             var (boundaryMaskData, boundaryMaskWidth, boundaryMaskHeight) = TextureUtils.Texture2DToBytes(boundaryMask);
@@ -323,7 +325,7 @@ namespace MuseTalk.Core
             var faceLargeWidth = (int)cropRect.width;
             var faceLargeHeight = (int)cropRect.height;
             
-            // Clean up temporary textures (faceLarge is byte array, so no cleanup needed)
+            // Clean up temporary textures (segmentationMaskData is already byte array, so no cleanup needed for that)
             UnityEngine.Object.Destroy(segmentationMask);
             UnityEngine.Object.Destroy(maskSmall);
             UnityEngine.Object.Destroy(fullMask);
@@ -364,9 +366,10 @@ namespace MuseTalk.Core
         
         /// <summary>
         /// Generate segmentation mask for caching (extracted from ImageBlendingHelper logic)
+        /// OPTIMIZED: Returns byte array directly without creating temporary Texture2D objects
         /// FIXED: Runs on main thread to avoid Unity texture operation violations
         /// </summary>
-        private Texture2D GenerateFaceSegmentationMaskCached(byte[] faceLarge, int faceLargeWidth, int faceLargeHeight)
+        private (byte[], int, int) GenerateFaceSegmentationMaskCached(byte[] faceLarge, int faceLargeWidth, int faceLargeHeight)
         {
             // Must run on main thread due to Unity texture operations
             var onnxFaceParsing = GetOrCreateFaceParsingHelper();
@@ -374,19 +377,18 @@ namespace MuseTalk.Core
             {
                 try
                 {
-                    // Run BiSeNet directly on the face_large crop
-                    var biSeNetMask = onnxFaceParsing.CreateFaceMaskWithMorphology(faceLarge, faceLargeWidth, faceLargeHeight, "jaw");
+                    // Run BiSeNet directly on the face_large crop using byte array optimized method
+                    var (maskData, maskWidth, maskHeight) = onnxFaceParsing.CreateFaceMaskWithMorphology(faceLarge, faceLargeWidth, faceLargeHeight, "jaw");
                     
-                    if (biSeNetMask != null)
+                    if (maskData != null)
                     {
                         // Resize to target dimensions if needed
-                        if (biSeNetMask.width != faceLargeWidth || biSeNetMask.height != faceLargeHeight)
+                        if (maskWidth != faceLargeWidth || maskHeight != faceLargeHeight)
                         {
-                            var resizedMask = TextureUtils.ResizeTexture(biSeNetMask, faceLargeWidth, faceLargeHeight);
-                            UnityEngine.Object.Destroy(biSeNetMask);
-                            return resizedMask;
+                            var resizedMaskData = TextureUtils.ResizeTextureToExactSize(maskData, maskWidth, maskHeight, faceLargeWidth, faceLargeHeight, TextureUtils.SamplingMode.Bilinear);
+                            return (resizedMaskData, faceLargeWidth, faceLargeHeight);
                         }
-                        return biSeNetMask;
+                        return (maskData, maskWidth, maskHeight);
                     }
                 }
                 catch (Exception e)
