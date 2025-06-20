@@ -253,7 +253,7 @@ namespace MuseTalk.API
                 throw new ArgumentException("Invalid input: source image and driving frames path are required");
 
             // Get frame count first to estimate total frames
-            var frameFiles = GetDrivingFrameFiles(drivingFramesPath);
+            var frameFiles = FileUtils.GetFrameFiles(drivingFramesPath); // Send maxFrames > 0 to load some frames
             if (frameFiles.Length == 0)
             {
                 throw new ArgumentException($"No driving frames found in path: {drivingFramesPath}");
@@ -262,42 +262,14 @@ namespace MuseTalk.API
             Logger.Log($"[LivePortraitMuseTalkAPI] Starting pipelined processing: {frameFiles.Length} driving frames");
             
             var stream = new LivePortaitStream(frameFiles.Length);
-            _avatarController.StartCoroutine(GenerateAnimatedTexturesPipelined(sourceImage, drivingFramesPath, frameFiles, stream));
+            _avatarController.StartCoroutine(GenerateAnimatedTexturesPipelined(sourceImage, frameFiles, stream));
             return stream;
-        }
-
-        /// <summary>
-        /// Get driving frame file paths for counting and loading
-        /// </summary>
-        private string[] GetDrivingFrameFiles(string drivingFramesPath)
-        {
-            var supportedExtensions = new string[] { ".png", ".jpg", ".jpeg" };
-            string fullFolderPath = System.IO.Path.Combine(Application.streamingAssetsPath, drivingFramesPath);
-            
-            if (!System.IO.Directory.Exists(fullFolderPath))
-            {
-                return new string[0];
-            }
-
-            var allFiles = new List<string>();
-            foreach (string extension in supportedExtensions)
-            {
-                string[] files = System.IO.Directory.GetFiles(fullFolderPath, "*" + extension, System.IO.SearchOption.TopDirectoryOnly);
-                allFiles.AddRange(files);
-            }
-
-            // Sort files by name for consistent ordering
-            allFiles.Sort((a, b) => string.Compare(System.IO.Path.GetFileNameWithoutExtension(a), 
-                                                  System.IO.Path.GetFileNameWithoutExtension(b), 
-                                                  System.StringComparison.Ordinal));
-
-            return allFiles.ToArray();
         }
 
         /// <summary>
         /// Pipelined generation that starts source processing immediately and streams driving frames
         /// </summary>
-        private System.Collections.IEnumerator GenerateAnimatedTexturesPipelined(Texture2D sourceImage, string drivingFramesPath, string[] frameFiles, LivePortaitStream outputStream)
+        private System.Collections.IEnumerator GenerateAnimatedTexturesPipelined(Texture2D sourceImage, string[] frameFiles, LivePortaitStream outputStream)
         {
             // Step 1: Start source image processing immediately (async)
             var (srcImg, srcWidth, srcHeight) = TextureUtils.Texture2DToBytes(sourceImage);
@@ -317,7 +289,7 @@ namespace MuseTalk.API
 
             // Step 4: Process driving frames as they become available
             int processedFrames = 0;
-            var predInfo = new Core.LivePortraitPredInfo
+            var predInfo = new LivePortraitPredInfo
             {
                 Landmarks = null,
                 InitialMotionInfo = null

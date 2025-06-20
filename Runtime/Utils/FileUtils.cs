@@ -1,11 +1,44 @@
 using System.Collections.Generic;
 using System;
 using UnityEngine;
+using System.Linq;
 
 namespace MuseTalk.Utils
 {
     public static class FileUtils
     {
+        /// <summary>
+        /// Get driving frame file paths for counting and loading
+        /// </summary>
+        public static string[] GetFrameFiles(string framesFolderPath, int maxFrames = -1)
+        {
+            var supportedExtensions = new string[] { ".png", ".jpg", ".jpeg" };
+            string fullFolderPath = System.IO.Path.Combine(Application.streamingAssetsPath, framesFolderPath);
+            
+            if (!System.IO.Directory.Exists(fullFolderPath))
+            {
+                return new string[0];
+            }
+
+            var allFiles = new List<string>();
+            foreach (string extension in supportedExtensions)
+            {
+                string[] files = System.IO.Directory.GetFiles(fullFolderPath, "*" + extension, System.IO.SearchOption.TopDirectoryOnly);
+                allFiles.AddRange(files);
+            }
+
+            // Sort files by name for consistent ordering
+            allFiles.Sort((a, b) => string.Compare(System.IO.Path.GetFileNameWithoutExtension(a), 
+                                                  System.IO.Path.GetFileNameWithoutExtension(b), 
+                                                  System.StringComparison.Ordinal));
+
+            if (maxFrames > 0)
+            {
+                allFiles = allFiles.Take(maxFrames).ToList();
+            }
+
+            return allFiles.ToArray();
+        }
         public static List<Texture2D> LoadFramesFromFolder(string drivingFramesFolderPath)
         {
             var supportedExtensions = new string[] { ".png", ".jpg", ".jpeg" };
