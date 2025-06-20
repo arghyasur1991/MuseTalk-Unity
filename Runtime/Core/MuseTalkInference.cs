@@ -371,41 +371,31 @@ namespace MuseTalk.Core
         /// </summary>
         private (byte[], int, int) GenerateFaceSegmentationMaskCached(byte[] faceLarge, int faceLargeWidth, int faceLargeHeight)
         {
-            // Must run on main thread due to Unity texture operations
-            var onnxFaceParsing = GetOrCreateFaceParsingHelper();
-            if (onnxFaceParsing != null && onnxFaceParsing.IsInitialized)
+            try
             {
-                try
+                // Run BiSeNet directly on the face_large crop using byte array optimized method
+                var maskResult = _faceAnalysis.CreateFaceMaskWithMorphology(faceLarge, faceLargeWidth, faceLargeHeight, "jaw");
+                var maskData = maskResult.Item1;
+                var maskWidth = maskResult.Item2;
+                var maskHeight = maskResult.Item3;
+                
+                if (maskData != null)
                 {
-                    // Run BiSeNet directly on the face_large crop using byte array optimized method
-                    var (maskData, maskWidth, maskHeight) = onnxFaceParsing.CreateFaceMaskWithMorphology(faceLarge, faceLargeWidth, faceLargeHeight, "jaw");
-                    
-                    if (maskData != null)
+                    // Resize to target dimensions if needed
+                    if (maskWidth != faceLargeWidth || maskHeight != faceLargeHeight)
                     {
-                        // Resize to target dimensions if needed
-                        if (maskWidth != faceLargeWidth || maskHeight != faceLargeHeight)
-                        {
-                            var resizedMaskData = TextureUtils.ResizeTextureToExactSize(maskData, maskWidth, maskHeight, faceLargeWidth, faceLargeHeight, TextureUtils.SamplingMode.Bilinear);
-                            return (resizedMaskData, faceLargeWidth, faceLargeHeight);
-                        }
-                        return (maskData, maskWidth, maskHeight);
+                        var resizedMaskData = TextureUtils.ResizeTextureToExactSize(maskData, maskWidth, maskHeight, faceLargeWidth, faceLargeHeight, TextureUtils.SamplingMode.Bilinear);
+                        return (resizedMaskData, faceLargeWidth, faceLargeHeight);
                     }
+                    return (maskData, maskWidth, maskHeight);
                 }
-                catch (Exception e)
-                {
-                    Logger.LogError($"[MuseTalkInference] ONNX face parsing failed: {e.Message}");
-                }
+            }
+            catch (Exception e)
+            {
+                Logger.LogError($"[MuseTalkInference] ONNX face parsing failed: {e.Message}");
             }
             
             throw new InvalidOperationException("Face segmentation failed and no fallback is available");
-        }
-        
-        /// <summary>
-        /// Get or create the ONNX face parsing helper instance (singleton pattern)
-        /// </summary>
-        private FaceParsingHelper GetOrCreateFaceParsingHelper()
-        {
-            return ImageBlendingHelper.GetOrCreateFaceParsingHelper(_config);
         }
         
         /// <summary>

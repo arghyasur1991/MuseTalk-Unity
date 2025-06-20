@@ -31,54 +31,6 @@ namespace MuseTalk.Utils
     public static class ImageBlendingHelper
     {
         private static readonly DebugLogger Logger = new();
-        private static FaceParsingHelper _FaceParsingHelper;
-        
-        /// <summary>
-        /// Get or create the ONNX face parsing helper instance (singleton pattern)
-        /// </summary>
-        public static FaceParsingHelper GetOrCreateFaceParsingHelper(MuseTalkConfig config)
-        {
-            if (_FaceParsingHelper == null)
-            {
-                try
-                {
-                    _FaceParsingHelper = new FaceParsingHelper(config);
-                }
-                catch (Exception e)
-                {
-                    Logger.LogError($"[ImageBlendingHelper] Failed to initialize ONNX Face Parsing: {e.Message}");
-                    _FaceParsingHelper = null;
-                }
-            }
-            return _FaceParsingHelper;
-        }
-        
-        /// <summary>
-        /// Extract face region from original image using bounding box
-        /// </summary>
-        private static Texture2D ExtractFaceRegion(Texture2D originalImage, Vector4 faceBbox)
-        {
-            int x1 = Mathf.Max(0, (int)faceBbox.x);
-            int y1 = Mathf.Max(0, (int)faceBbox.y);
-            int x2 = Mathf.Min(originalImage.width, (int)faceBbox.z);
-            int y2 = Mathf.Min(originalImage.height, (int)faceBbox.w);
-            
-            int faceWidth = x2 - x1;
-            int faceHeight = y2 - y1;
-            
-            if (faceWidth <= 0 || faceHeight <= 0)
-            {
-                Logger.LogError("[ImageBlendingHelper] Invalid face bbox for extraction");
-                return null;
-            }
-            
-            var faceRegion = new Texture2D(faceWidth, faceHeight, TextureFormat.RGBA32, false);
-            var pixels = originalImage.GetPixels(x1, y1, faceWidth, faceHeight);
-            faceRegion.SetPixels(pixels);
-            faceRegion.Apply();
-            
-            return faceRegion;
-        }
 
         /// <summary>
         /// Blend face with original image using cached segmentation mask
