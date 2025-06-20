@@ -615,8 +615,101 @@ namespace MuseTalk.Utils
         }
         
         /// <summary>
+        /// Blur direction for consolidated blur pass function
+        /// </summary>
+        public enum BlurDirection
+        {
+            /// <summary>
+            /// Horizontal blur - samples along X axis
+            /// </summary>
+            Horizontal,
+            /// <summary>
+            /// Vertical blur - samples along Y axis
+            /// </summary>
+            Vertical
+        }
+
+        /// <summary>
+        /// Consolidated blur pass function to eliminate code duplication
+        /// OPTIMIZED: Single unified implementation for both horizontal and vertical passes
+        /// REFACTORED: Eliminates if/else duplication by abstracting coordinate calculations
+        /// </summary>
+        /// <param name="inputPtr">Input image pointer</param>
+        /// <param name="outputPtr">Output image pointer</param>
+        /// <param name="width">Image width</param>
+        /// <param name="height">Image height</param>
+        /// <param name="kernel">Normalized Gaussian kernel weights</param>
+        /// <param name="direction">Blur direction (horizontal or vertical)</param>
+        private static unsafe void ApplyBlurPass(byte* inputPtr, byte* outputPtr, int width, int height, float[] kernel, BlurDirection direction)
+        {
+            int kernelSize = kernel.Length;
+            int halfKernel = kernelSize / 2;
+            bool isHorizontal = direction == BlurDirection.Horizontal;
+            
+            // Direction-specific parameters
+            int parallelCount = isHorizontal ? height : width;  // What to parallelize over
+            int innerCount = isHorizontal ? width : height;     // Inner loop count
+            int maxCoord = isHorizontal ? width - 1 : height - 1; // Max coordinate for clamping
+            
+            // UNIFIED: Single parallel loop that works for both directions
+            System.Threading.Tasks.Parallel.For(0, parallelCount, outerIndex =>
+            {
+                for (int innerIndex = 0; innerIndex < innerCount; innerIndex++)
+                {
+                    float r = 0, g = 0, b = 0;
+                    
+                    // Apply kernel along the blur axis
+                    for (int k = 0; k < kernelSize; k++)
+                    {
+                        // Calculate sample coordinate with clamping
+                        int sampleCoord = Mathf.Clamp(innerIndex + k - halfKernel, 0, maxCoord);
+                        
+                        // Calculate pixel pointer based on direction
+                        RGB24* samplePixel;
+                        if (isHorizontal)
+                        {
+                            // Horizontal: outerIndex=y, innerIndex=x, sampleCoord=sampleX
+                            samplePixel = (RGB24*)(inputPtr + outerIndex * width * 3) + sampleCoord;
+                        }
+                        else
+                        {
+                            // Vertical: outerIndex=x, innerIndex=y, sampleCoord=sampleY
+                            samplePixel = (RGB24*)(inputPtr + sampleCoord * width * 3) + outerIndex;
+                        }
+                        
+                        float weight = kernel[k];
+                        
+                        // Accumulate weighted RGB values
+                        r += samplePixel->r * weight;
+                        g += samplePixel->g * weight;
+                        b += samplePixel->b * weight;
+                    }
+                    
+                    // Calculate output pixel pointer based on direction
+                    RGB24* targetPixel;
+                    if (isHorizontal)
+                    {
+                        // Horizontal: outerIndex=y, innerIndex=x
+                        targetPixel = (RGB24*)(outputPtr + outerIndex * width * 3) + innerIndex;
+                    }
+                    else
+                    {
+                        // Vertical: outerIndex=x, innerIndex=y
+                        targetPixel = (RGB24*)(outputPtr + innerIndex * width * 3) + outerIndex;
+                    }
+                    
+                    // Write result to output
+                    targetPixel->r = (byte)Mathf.Clamp(r, 0, 255);
+                    targetPixel->g = (byte)Mathf.Clamp(g, 0, 255);
+                    targetPixel->b = (byte)Mathf.Clamp(b, 0, 255);
+                }
+            });
+        }
+
+        /// <summary>
         /// Unsafe optimized Gaussian blur implementation using raw pointers
         /// UNSAFE OPTIMIZED: Direct pointer-to-pointer processing for maximum performance
+        /// REFACTORED: Uses consolidated ApplyBlurPass to eliminate code duplication
         /// </summary>
         public static unsafe void ApplySimpleGaussianBlur(byte* inputPtr, byte* outputPtr, int width, int height, int kernelSize)
         {
@@ -659,63 +752,10 @@ namespace MuseTalk.Utils
             try
             {
                 // Step 1: Horizontal blur pass (input -> temp)
-                System.Threading.Tasks.Parallel.For(0, height, y =>
-                {
-                    RGB24* inputRowPtr = (RGB24*)(inputPtr + y * width * 3);
-                    RGB24* tempRowPtr = (RGB24*)(tempPtr + y * width * 3);
-                    
-                    for (int x = 0; x < width; x++)
-                    {
-                        float r = 0, g = 0, b = 0;
-                        
-                        // Apply horizontal kernel - direct RGB24 struct access
-                        for (int k = 0; k < kernelSize; k++)
-                        {
-                            int sampleX = Mathf.Clamp(x + k - halfKernel, 0, width - 1);
-                            RGB24* samplePixel = inputRowPtr + sampleX;
-                            float weight = kernel[k];
-                            
-                            // Direct struct member access
-                            r += samplePixel->r * weight;
-                            g += samplePixel->g * weight;
-                            b += samplePixel->b * weight;
-                        }
-                        
-                        // Direct struct write to temp buffer
-                        RGB24* targetPixel = tempRowPtr + x;
-                        targetPixel->r = (byte)Mathf.Clamp(r, 0, 255);
-                        targetPixel->g = (byte)Mathf.Clamp(g, 0, 255);
-                        targetPixel->b = (byte)Mathf.Clamp(b, 0, 255);
-                    }
-                });
+                ApplyBlurPass(inputPtr, tempPtr, width, height, kernel, BlurDirection.Horizontal);
                 
                 // Step 2: Vertical blur pass (temp -> output)
-                System.Threading.Tasks.Parallel.For(0, width, x =>
-                {
-                    for (int y = 0; y < height; y++)
-                    {
-                        float r = 0, g = 0, b = 0;
-                        
-                        // Apply vertical kernel - direct RGB24 struct access
-                        for (int k = 0; k < kernelSize; k++)
-                        {
-                            int sampleY = Mathf.Clamp(y + k - halfKernel, 0, height - 1);
-                            RGB24* samplePixel = (RGB24*)(tempPtr + sampleY * width * 3) + x;
-                            float weight = kernel[k];
-                            
-                            // Direct struct member access
-                            r += samplePixel->r * weight;
-                            g += samplePixel->g * weight;
-                            b += samplePixel->b * weight;
-                        }
-                        
-                        // Direct struct write to output
-                        RGB24* targetPixel = (RGB24*)(outputPtr + y * width * 3) + x;
-                        targetPixel->r = (byte)Mathf.Clamp(r, 0, 255);
-                        targetPixel->g = (byte)Mathf.Clamp(g, 0, 255);
-                        targetPixel->b = (byte)Mathf.Clamp(b, 0, 255);
-                    }
-                });
+                ApplyBlurPass(tempPtr, outputPtr, width, height, kernel, BlurDirection.Vertical);
             }
             finally
             {
