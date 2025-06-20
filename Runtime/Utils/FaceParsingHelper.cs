@@ -295,7 +295,6 @@ namespace MuseTalk.Utils
         
         /// <summary>
         /// Create face mask with morphological operations returning byte array (matching Python implementation)
-        /// OPTIMIZED: Returns byte array directly without creating temporary Texture2D objects
         /// </summary>
         public (byte[], int, int) CreateFaceMaskWithMorphology(byte[] inputImage, int width, int height, string mode = "jaw")
         {
