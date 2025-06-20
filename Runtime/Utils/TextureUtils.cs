@@ -908,5 +908,28 @@ namespace MuseTalk.Utils
             return result;
         }
         
+        /// <summary>
+        /// Generate a content-based hash for a texture
+        /// </summary>
+        public static string GenerateTextureHash(Texture2D texture)
+        {
+            // Use texture properties and a sample of pixels for hashing
+            // This is faster than hashing all pixels but still provides good uniqueness
+            unchecked
+            {
+                int hash = texture.width.GetHashCode();
+                hash = hash * 31 + texture.height.GetHashCode();
+                hash = hash * 31 + texture.format.GetHashCode();
+                
+                // Sample a few pixels for content-based hashing (much faster than full texture)
+                var pixels = texture.GetPixels(0, 0, Math.Min(32, texture.width), Math.Min(32, texture.height));
+                for (int i = 0; i < Math.Min(100, pixels.Length); i += 10) // Sample every 10th pixel
+                {
+                    hash = hash * 31 + pixels[i].GetHashCode();
+                }
+                
+                return hash.ToString("X8");
+            }
+        }
     }
 }
