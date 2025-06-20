@@ -269,14 +269,14 @@ namespace MuseTalk.Core
         /// This includes face_large crop, BiSeNet segmentation mask, and all blending masks
         /// REFACTORED: Uses byte arrays internally for better memory efficiency
         /// </summary>
-        private SegmentationData PrecomputeSegmentationData(Texture2D originalImage, Vector4 faceBbox, string version)
+        private SegmentationData PrecomputeSegmentationData(byte[] originalImage, int originalWidth, int originalHeight, Vector4 faceBbox, string version)
         {
             // Apply version-specific adjustments to face bbox (matching BlendFaceWithOriginal logic)
             Vector4 adjustedFaceBbox = faceBbox;
             if (version == "v15") // v15 mode
             {
                 // Apply v15 extra margin to y2 (bottom of face bbox)
-                adjustedFaceBbox.w = Mathf.Min(adjustedFaceBbox.w + 10f, originalImage.height);
+                adjustedFaceBbox.w = Mathf.Min(adjustedFaceBbox.w + 10f, originalHeight);
             }
             
             // Calculate expanded crop box for face_large (matching Python's crop_box calculation)
@@ -284,13 +284,13 @@ namespace MuseTalk.Core
             var cropBox = new Vector4(cropRect.x, cropRect.y, cropRect.x + cropRect.width, cropRect.y + cropRect.height);
             
             // Create face_large crop (matching Python's face_large = body.crop(crop_box))
-            var faceLarge = CropImage(originalImage, cropRect);
+            var faceLarge = CropImage(originalImage, originalWidth, originalHeight, cropRect);
             
             if (faceLarge == null)
                 throw new InvalidOperationException("Failed to create face_large crop");
             
             // Generate face segmentation mask using BiSeNet on face_large
-            var segmentationMask = GenerateFaceSegmentationMaskCached(faceLarge);
+            var segmentationMask = GenerateFaceSegmentationMaskCached(faceLarge, (int)cropRect.width, (int)cropRect.height);
             
             if (segmentationMask == null)
                 throw new InvalidOperationException("Failed to generate segmentation mask");
@@ -312,15 +312,18 @@ namespace MuseTalk.Core
             var blurredMask = ImageBlendingHelper.ApplyGaussianBlurToMask(boundaryMask);
             
             // Convert all textures to byte arrays for efficient storage
-            var (faceLargeData, faceLargeWidth, faceLargeHeight) = TextureUtils.Texture2DToBytes(faceLarge);
             var (segmentationMaskData, segmentationMaskWidth, segmentationMaskHeight) = TextureUtils.Texture2DToBytes(segmentationMask);
             var (maskSmallData, maskSmallWidth, maskSmallHeight) = TextureUtils.Texture2DToBytes(maskSmall);
             var (fullMaskData, fullMaskWidth, fullMaskHeight) = TextureUtils.Texture2DToBytes(fullMask);
             var (boundaryMaskData, boundaryMaskWidth, boundaryMaskHeight) = TextureUtils.Texture2DToBytes(boundaryMask);
             var (blurredMaskData, blurredMaskWidth, blurredMaskHeight) = TextureUtils.Texture2DToBytes(blurredMask);
             
-            // Clean up temporary textures
-            UnityEngine.Object.Destroy(faceLarge);
+            // faceLarge is already byte array, so use it directly
+            var faceLargeData = faceLarge;
+            var faceLargeWidth = (int)cropRect.width;
+            var faceLargeHeight = (int)cropRect.height;
+            
+            // Clean up temporary textures (faceLarge is byte array, so no cleanup needed)
             UnityEngine.Object.Destroy(segmentationMask);
             UnityEngine.Object.Destroy(maskSmall);
             UnityEngine.Object.Destroy(fullMask);
@@ -363,7 +366,7 @@ namespace MuseTalk.Core
         /// Generate segmentation mask for caching (extracted from ImageBlendingHelper logic)
         /// FIXED: Runs on main thread to avoid Unity texture operation violations
         /// </summary>
-        private Texture2D GenerateFaceSegmentationMaskCached(Texture2D faceLarge)
+        private Texture2D GenerateFaceSegmentationMaskCached(byte[] faceLarge, int faceLargeWidth, int faceLargeHeight)
         {
             // Must run on main thread due to Unity texture operations
             var onnxFaceParsing = GetOrCreateFaceParsingHelper();
@@ -372,14 +375,14 @@ namespace MuseTalk.Core
                 try
                 {
                     // Run BiSeNet directly on the face_large crop
-                    var biSeNetMask = onnxFaceParsing.CreateFaceMaskWithMorphology(faceLarge, "jaw");
+                    var biSeNetMask = onnxFaceParsing.CreateFaceMaskWithMorphology(faceLarge, faceLargeWidth, faceLargeHeight, "jaw");
                     
                     if (biSeNetMask != null)
                     {
                         // Resize to target dimensions if needed
-                        if (biSeNetMask.width != faceLarge.width || biSeNetMask.height != faceLarge.height)
+                        if (biSeNetMask.width != faceLargeWidth || biSeNetMask.height != faceLargeHeight)
                         {
-                            var resizedMask = TextureUtils.ResizeTexture(biSeNetMask, faceLarge.width, faceLarge.height);
+                            var resizedMask = TextureUtils.ResizeTexture(biSeNetMask, faceLargeWidth, faceLargeHeight);
                             UnityEngine.Object.Destroy(biSeNetMask);
                             return resizedMask;
                         }
@@ -432,15 +435,15 @@ namespace MuseTalk.Core
         /// <summary>
         /// Crop image to specified rectangle
         /// </summary>
-        private Texture2D CropImage(Texture2D source, Rect cropRect)
+        private byte[] CropImage(byte[] source, int sourceWidth, int sourceHeight, Rect cropRect)
         {
             // Ensure crop bounds are within image
             cropRect.x = Mathf.Max(0, cropRect.x);
             cropRect.y = Mathf.Max(0, cropRect.y);
-            cropRect.width = Mathf.Min(cropRect.width, source.width - cropRect.x);
-            cropRect.height = Mathf.Min(cropRect.height, source.height - cropRect.y);
+            cropRect.width = Mathf.Min(cropRect.width, sourceWidth - cropRect.x);
+            cropRect.height = Mathf.Min(cropRect.height, sourceHeight - cropRect.y);
             
-            return TextureUtils.CropTexture(source, cropRect);
+            return TextureUtils.CropTexture(source, sourceWidth, sourceHeight, cropRect);
         }
 
         
@@ -569,16 +572,22 @@ namespace MuseTalk.Core
             Logger.Log($"[MuseTalkInference] Processing new avatar animation sequence with {avatarTextures.Length} textures");
             
             var avatarData = new AvatarData();
+
+            var textures = new List<byte[]>();
+            foreach (var texture in avatarTextures)
+            {
+                var (textureBytes, _, _) = TextureUtils.Texture2DToBytes(texture);
+                textures.Add(textureBytes);
+            }
             
             // Face Detection
             var result = _faceAnalysis.GetLandmarkAndBbox(
-                avatarTextures, 
-                bboxShift: 0,
-                version: _config.Version,
-                debugDir: null
+                textures, 
+                avatarTextures[0].width,
+                avatarTextures[0].height
             );
             List<Vector4> coordsList = result.Item1;
-            List<Texture2D> framesList = result.Item2;
+            List<byte[]> framesList = result.Item2;
             
             Logger.Log($"[MuseTalkInference] Face detection completed: {coordsList.Count} results for {avatarTextures.Length} input textures");
             
@@ -598,18 +607,17 @@ namespace MuseTalk.Core
                     var originalTexture = framesList[i];
                     
                     // Crop face region with version-specific margins
-                    var croppedTexture = _faceAnalysis.CropFaceRegion(originalTexture, bbox, _config.Version);
+                    int originalWidth = avatarTextures[0].width;
+                    int originalHeight = avatarTextures[0].height;
+                    var croppedTextureData = _faceAnalysis.CropFaceRegion(originalTexture, originalWidth, originalHeight, bbox, _config.Version);
+                    
+                    // Standard face crop dimensions (matching MuseTalk expectations)
+                    int croppedWidth = 256;
+                    int croppedHeight = 256;
                     
                     // Pre-compute segmentation mask and cached data for blending
-                    var segmentationData = PrecomputeSegmentationData(originalTexture, bbox, _config.Version);
-                    
-                    // Convert textures to byte arrays for efficient storage
-                    var (croppedTextureData, croppedWidth, croppedHeight) = TextureUtils.Texture2DToBytes(croppedTexture);
-                    var (originalTextureData, originalWidth, originalHeight) = TextureUtils.Texture2DToBytes(originalTexture);
-                    
-                    // Clean up temporary textures
-                    UnityEngine.Object.Destroy(croppedTexture);
-                    
+                    var segmentationData = PrecomputeSegmentationData(originalTexture, originalWidth, originalHeight, bbox, _config.Version);
+                   
                     // Create face data for this region using byte arrays
                     var faceData = new FaceData
                     {
@@ -621,7 +629,7 @@ namespace MuseTalk.Core
                         CroppedFaceWidth = croppedWidth,
                         CroppedFaceHeight = croppedHeight,
                         
-                        OriginalTextureData = originalTextureData,
+                        OriginalTextureData = originalTexture,
                         OriginalWidth = originalWidth,
                         OriginalHeight = originalHeight,
                         

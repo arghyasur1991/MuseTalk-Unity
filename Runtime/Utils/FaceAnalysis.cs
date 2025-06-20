@@ -783,39 +783,38 @@ namespace MuseTalk.Utils
         /// Get landmark and bbox using hybrid SCRFD+106landmark approach (matches InsightFaceHelper logic exactly)
         /// Compatible with MuseTalkInference API
         /// </summary>
-        public (List<Vector4>, List<Texture2D>) GetLandmarkAndBbox(Texture2D[] textures, int bboxShift = 0, string version = "v15", string debugDir = null)
+        public (List<Vector4>, List<byte[]>) GetLandmarkAndBbox(List<byte[]> textures, int width, int height, int bboxShift = 0)
         {
             var coordsList = new List<Vector4>();
-            var framesList = new List<Texture2D>(textures);
+            var framesList = new List<byte[]>();
             var CoordPlaceholder = Vector4.zero; // Matching InsightFaceHelper.CoordPlaceholder
             
             if (!IsInitialized)
             {
                 Logger.LogError("[FaceAnalysis] Models not initialized");
                 // Return placeholder coordinates for all frames
-                for (int i = 0; i < textures.Length; i++)
+                for (int i = 0; i < textures.Count; i++)
                 {
                     coordsList.Add(CoordPlaceholder);
                 }
                 return (coordsList, framesList);
             }
             
-            Logger.Log($"[FaceAnalysis] Processing {textures.Length} images with hybrid SCRFD+106landmark approach");
+            Logger.Log($"[FaceAnalysis] Processing {textures.Count} images with hybrid SCRFD+106landmark approach");
             
             var averageRangeMinus = new List<float>();
             var averageRangePlus = new List<float>();
             
-            for (int idx = 0; idx < textures.Length; idx++)
+            for (int idx = 0; idx < textures.Count; idx++)
             {
-                var texture = textures[idx];
-                var (textureBytes, width, height) = TextureUtils.Texture2DToBytes(texture);
+                var textureBytes = textures[idx];
                 
                 // Step 1: Detect faces using SCRFD (matching InsightFaceHelper exactly)
-                var faces = DetectFaces(textureBytes, width, height);
+                var faces = DetectFaces(textureBytes, width, height);   
 
                 if (faces.Count == 0)
                 {
-                    Logger.LogWarning($"[FaceAnalysis] No face detected in image {idx} ({texture.width}x{texture.height})");
+                    Logger.LogWarning($"[FaceAnalysis] No face detected in image {idx} ({width}x{height})");
                     coordsList.Add(CoordPlaceholder);
                     continue;
                 }
@@ -868,7 +867,7 @@ namespace MuseTalk.Utils
                 }
                 
                 // Store the processed data
-                framesList.Add(texture);
+                framesList.Add(textureBytes);
             }
             
             return (coordsList, framesList);
@@ -978,7 +977,7 @@ namespace MuseTalk.Utils
         /// Crop face region with version-specific margins (matches InsightFaceHelper.CropFaceRegion exactly)
         /// Compatible with MuseTalkInference API
         /// </summary>
-        public Texture2D CropFaceRegion(Texture2D originalTexture, Vector4 bbox, string version)
+        public byte[] CropFaceRegion(byte[] originalTexture, int width, int height, Vector4 bbox, string version)
         {
             if (originalTexture == null)
                 return null;
@@ -992,28 +991,23 @@ namespace MuseTalk.Utils
             if (version == "v15")
             {
                 y2 += 10; // extra margin for v15
-                y2 = Mathf.Min(y2, originalTexture.height);
+                y2 = Mathf.Min(y2, height);
             }
             
-            int width = x2 - x1;
-            int height = y2 - y1;
+            int cropWidth = x2 - x1;
+            int cropHeight = y2 - y1;
             
             if (width <= 0 || height <= 0)
             {
-                Logger.LogError($"[FaceAnalysis] Invalid crop dimensions: {width}x{height}");
-                throw new Exception($"[FaceAnalysis] Invalid crop dimensions: {width}x{height}");
+                Logger.LogError($"[FaceAnalysis] Invalid crop dimensions: {cropWidth}x{cropHeight}");
+                throw new Exception($"[FaceAnalysis] Invalid crop dimensions: {cropWidth}x{cropHeight}");
             }
-            
+
             // Extract face region (matching InsightFaceHelper coordinate system)
-            var pixels = originalTexture.GetPixels(x1, originalTexture.height - y2, width, height);
-            var croppedTexture = new Texture2D(width, height, TextureFormat.RGB24, false);
-            croppedTexture.SetPixels(pixels);
-            croppedTexture.Apply();
+            var croppedTexture = TextureUtils.CropTexture(originalTexture, width, height, new Rect(x1, y1, cropWidth, cropHeight));
             
             // Resize to standard size (256x256 for MuseTalk, matching InsightFaceHelper)
-            var resizedTexture = TextureUtils.ResizeTexture(croppedTexture, 256, 256);
-            UnityEngine.Object.DestroyImmediate(croppedTexture);
-            
+            var resizedTexture = TextureUtils.ResizeTextureToExactSize(croppedTexture, cropWidth, cropHeight, 256, 256);            
             return resizedTexture;
         }
         

@@ -287,7 +287,53 @@ namespace MuseTalk.Utils
             resizedTexture.Apply();
             return resizedTexture;
         }
-        
+
+        /// <summary>
+        /// Crop byte array image data to specified rectangle
+        /// OPTIMIZED: Uses unsafe pointers for maximum performance
+        /// </summary>
+        public static unsafe byte[] CropTexture(byte[] sourceData, int sourceWidth, int sourceHeight, Rect cropRect)
+        {
+            if (sourceData == null)
+                throw new ArgumentNullException(nameof(sourceData));
+            
+            if (sourceData.Length != sourceWidth * sourceHeight * 3)
+                throw new ArgumentException($"Source data size {sourceData.Length} doesn't match expected size {sourceWidth * sourceHeight * 3} for RGB24 format");
+            
+            // Ensure crop bounds are within source image
+            int x = Mathf.Max(0, (int)cropRect.x);
+            int y = Mathf.Max(0, (int)cropRect.y);
+            int width = Mathf.Min((int)cropRect.width, sourceWidth - x);
+            int height = Mathf.Min((int)cropRect.height, sourceHeight - y);
+            
+            if (width <= 0 || height <= 0)
+                throw new ArgumentException("Invalid crop rectangle");
+            
+            var croppedData = new byte[width * height * 3];
+            
+            fixed (byte* srcPtr = sourceData)
+            fixed (byte* dstPtr = croppedData)
+            {
+                // Capture pointers in local variables to avoid lambda closure issues
+                byte* srcPtrLocal = srcPtr;
+                byte* dstPtrLocal = dstPtr;
+                
+                // OPTIMIZED: Parallel row copying for maximum performance
+                System.Threading.Tasks.Parallel.For(0, height, row =>
+                {
+                    // Calculate source and destination row pointers
+                    byte* srcRowPtr = srcPtrLocal + ((y + row) * sourceWidth + x) * 3; // RGB24: 3 bytes per pixel
+                    byte* dstRowPtr = dstPtrLocal + row * width * 3;
+                    
+                    // Bulk copy entire row in one operation
+                    int rowBytes = width * 3;
+                    Buffer.MemoryCopy(srcRowPtr, dstRowPtr, rowBytes, rowBytes);
+                });
+            }
+            
+            return croppedData;
+        }
+
         /// <summary>
         /// Crop texture to specified rectangle
         /// </summary>

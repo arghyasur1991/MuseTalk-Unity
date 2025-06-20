@@ -93,6 +93,43 @@ namespace MuseTalk.Utils
             }
         }
         
+        /// <summary>
+        /// Generate face segmentation mask using ONNX BiSeNet model from byte array
+        /// </summary>
+        public Texture2D GenerateFaceSegmentationMask(byte[] inputImageData, int width, int height, string mode = "jaw")
+        {
+            if (!_initialized)
+            {
+                Logger.LogError("[FaceParsingHelper] Model not initialized");
+                return null;
+            }
+            
+            try
+            {
+                // Convert byte array to texture for processing
+                var inputTexture = TextureUtils.BytesToTexture2D(inputImageData, width, height);
+                
+                // Step 1: Preprocess image for BiSeNet (512x512, normalized)
+                var preprocessedTensor = PreprocessImageForBiSeNet(inputTexture);
+                
+                // Step 2: Run ONNX inference
+                var parsingResult = RunBiSeNetInference(preprocessedTensor);
+                
+                // Step 3: Post-process to create mask based on mode
+                var mask = PostProcessParsingResult(parsingResult, mode, width, height);
+                
+                // Clean up temporary texture
+                UnityEngine.Object.Destroy(inputTexture);
+                
+                return mask;
+            }
+            catch (Exception e)
+            {
+                Logger.LogError($"[FaceParsingHelper] Face parsing failed: {e.Message}");
+                return null;
+            }
+        }
+        
         private unsafe DenseTensor<float> PreprocessImageForBiSeNet(Texture2D inputImage)
         {
             // Resize to BiSeNet input size (512x512) - now uses optimized ResizeTextureToExactSize
@@ -297,11 +334,12 @@ namespace MuseTalk.Utils
         /// <summary>
         /// Create face mask with morphological operations (matching Python implementation)
         /// </summary>
-        public Texture2D CreateFaceMaskWithMorphology(Texture2D inputImage, string mode = "jaw")
+        public Texture2D CreateFaceMaskWithMorphology(byte[] inputImage, int width, int height, string mode = "jaw")
         {
-            var baseMask = GenerateFaceSegmentationMask(inputImage, mode);
+            var baseMask = GenerateFaceSegmentationMask(inputImage, width, height, mode);
             if (baseMask == null) return null;
             var smoothedMask = ApplyMorphologicalOperations(baseMask, mode);
+            UnityEngine.Object.Destroy(baseMask);
             return smoothedMask;
         }
         
