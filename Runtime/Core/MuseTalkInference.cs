@@ -1,7 +1,10 @@
 using System;
 using System.Buffers;
+using System.Collections;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using UnityEngine;
 using Microsoft.ML.OnnxRuntime;
@@ -9,6 +12,7 @@ using Microsoft.ML.OnnxRuntime.Tensors;
 
 namespace MuseTalk.Core
 {
+    using API;
     using Utils;
     using Models;
 
@@ -80,6 +84,64 @@ namespace MuseTalk.Core
                 }
                 return hash;
             }
+        }
+    }
+
+    /// <summary>
+    /// Stream for MuseTalk output frames - similar to LivePortraitStream
+    /// </summary>
+    public sealed class MuseTalkStream
+    {
+        public int TotalExpectedFrames { get; set; }
+
+        public MuseTalkStream(int totalExpectedFrames)
+        {
+            TotalExpectedFrames = totalExpectedFrames;
+        }
+
+        internal readonly ConcurrentQueue<Texture2D> queue = new();
+        internal CancellationTokenSource cts = new();
+
+        public bool Finished { get; internal set; }
+
+        /// Non-blocking poll. Returns false if no frame is ready yet.
+        public bool TryGetNext(out Texture2D tex) => queue.TryDequeue(out tex);
+
+        /// Yield instruction that waits until the *next* frame exists,
+        /// then exposes it through the .Texture property.
+        public FrameAwaiter WaitForNext() => new(queue);
+    }
+
+    /// <summary>
+    /// Input for MuseTalk inference - simplified for streaming
+    /// </summary>
+    public class MuseTalkInput
+    {
+        /// <summary>
+        /// Avatar images for talking head generation
+        /// </summary>
+        public Texture2D[] AvatarTextures { get; set; }
+        
+        /// <summary>
+        /// Audio clip for lip sync
+        /// </summary>
+        public AudioClip AudioClip { get; set; }
+        
+        /// <summary>
+        /// Batch size for processing
+        /// </summary>
+        public int BatchSize { get; set; } = 4;
+        
+        public MuseTalkInput(Texture2D avatarTexture, AudioClip audioClip)
+        {
+            AvatarTextures = new[] { avatarTexture ?? throw new ArgumentNullException(nameof(avatarTexture)) };
+            AudioClip = audioClip ?? throw new ArgumentNullException(nameof(audioClip));
+        }
+        
+        public MuseTalkInput(Texture2D[] avatarTextures, AudioClip audioClip)
+        {
+            AvatarTextures = avatarTextures ?? throw new ArgumentNullException(nameof(avatarTextures));
+            AudioClip = audioClip ?? throw new ArgumentNullException(nameof(audioClip));
         }
     }
 
@@ -210,7 +272,47 @@ namespace MuseTalk.Core
         }
 
         /// <summary>
-        /// Generate talking head video frames from avatar images and audio
+        /// Generate talking head video frames from avatar images and audio (STREAMING)
+        /// Matches LivePortrait's streaming approach - yields frames as they're generated
+        /// MAIN THREAD ONLY for correctness
+        /// </summary>
+        public IEnumerator GenerateAsync(MuseTalkInput input, MuseTalkStream stream)
+        {
+            if (!_initialized)
+                throw new InvalidOperationException("MuseTalk inference not initialized");
+                
+            if (input == null)
+                throw new ArgumentNullException(nameof(input));
+                
+            Logger.Log($"[MuseTalkInference] === STARTING MUSETALK STREAMING GENERATION ===");
+            Logger.Log($"[MuseTalkInference] Version: {_config.Version}, Batch Size: {input.BatchSize}");
+            Logger.Log($"[MuseTalkInference] Avatar Images: {input.AvatarTextures.Length}, Audio: {input.AudioClip.name} ({input.AudioClip.length:F2}s)");
+            
+            // Step 1: Process avatar images and extract face regions
+            Logger.Log("[MuseTalkInference] STAGE 1: Processing avatar images...");
+            var avatarTask = ProcessAvatarImages(input.AvatarTextures);
+            yield return new WaitUntil(() => avatarTask.IsCompleted);
+            var avatarData = avatarTask.Result;
+            Logger.Log($"[MuseTalkInference] Stage 1 completed - Processed {avatarData.FaceRegions.Count} faces");
+            
+            // Step 2: Process audio and extract features
+            Logger.Log("[MuseTalkInference] STAGE 2: Processing audio...");
+            var audioTask = ProcessAudio(input.AudioClip);
+            yield return new WaitUntil(() => audioTask.IsCompleted);
+            var audioFeatures = audioTask.Result;
+            Logger.Log($"[MuseTalkInference] Stage 2 completed - Generated {audioFeatures.FeatureChunks.Count} audio chunks");
+            
+            // Step 3: Generate video frames in streaming mode
+            Logger.Log("[MuseTalkInference] STAGE 3: Generating video frames (streaming)...");
+            yield return GenerateFramesStreaming(avatarData, audioFeatures, input.BatchSize, stream);
+            
+            stream.Finished = true;
+            Logger.Log($"[MuseTalkInference] === STREAMING GENERATION COMPLETED ===");
+        }
+
+        /// <summary>
+        /// Generate talking head video frames from avatar images and audio (LEGACY)
+        /// For backward compatibility - returns all frames at once
         /// </summary>
         public async Task<MuseTalkResult> GenerateAsync(MuseTalkInput input)
         {
@@ -869,7 +971,73 @@ namespace MuseTalk.Core
         }
         
         /// <summary>
-        /// Generate video frames using UNet and VAE decoder
+        /// Generate video frames using UNet and VAE decoder (STREAMING)
+        /// Similar to LivePortrait - yields frames as they're generated for real-time feedback
+        /// </summary>
+        private IEnumerator GenerateFramesStreaming(AvatarData avatarData, AudioFeatures audioFeatures, int batchSize, MuseTalkStream stream)
+        {
+            // Use audio length to determine frame count (like Python implementation)
+            int numFrames = audioFeatures.FeatureChunks.Count;
+            int numBatches = Mathf.CeilToInt((float)numFrames / batchSize);
+            
+            if (avatarData.Latents.Count == 0)
+            {
+                Logger.LogError("[MuseTalkInference] No avatar latents available for frame generation");
+                yield break;
+            }
+            
+            Logger.Log($"[MuseTalkInference] Processing {numFrames} frames in {numBatches} batches of {batchSize}");
+            
+            // Create cycled latent list for smooth animation
+            var cycleDLatents = new List<float[]>(avatarData.Latents);
+            var reversedLatents = new List<float[]>(avatarData.Latents);
+            reversedLatents.Reverse();
+            cycleDLatents.AddRange(reversedLatents);
+            
+            for (int batchIdx = 0; batchIdx < numBatches; batchIdx++)
+            {   
+                int startIdx = batchIdx * batchSize;
+                int endIdx = Math.Min(startIdx + batchSize, numFrames);
+                int actualBatchSize = endIdx - startIdx;
+                
+                Logger.Log($"[MuseTalkInference] Processing batch {batchIdx + 1}/{numBatches} (frames {startIdx}-{endIdx - 1})");
+                
+                // Prepare batch data using the frame index to cycle through latents
+                var latentBatch = PrepareLatentBatchWithCycling(cycleDLatents, startIdx, actualBatchSize);
+                var audioBatch = PrepareAudioBatch(audioFeatures.FeatureChunks, startIdx, actualBatchSize);
+                
+                // Add positional encoding to audio (async)
+                var audioWithPETask = AddPositionalEncoding(audioBatch);
+                yield return new WaitUntil(() => audioWithPETask.IsCompleted);
+                var audioWithPE = audioWithPETask.Result;
+                
+                // Run UNet inference (async)
+                var predictedLatentsTask = RunUNet(latentBatch, audioWithPE);
+                yield return new WaitUntil(() => predictedLatentsTask.IsCompleted);
+                var predictedLatents = predictedLatentsTask.Result;
+                
+                // Decode latents to images (async)
+                var batchFramesTask = DecodeLatents(predictedLatents, actualBatchSize, startIdx);
+                yield return new WaitUntil(() => batchFramesTask.IsCompleted);
+                var batchFrames = batchFramesTask.Result;
+                
+                // Stream frames to output as they're generated
+                foreach (var frame in batchFrames)
+                {
+                    stream.queue.Enqueue(frame);
+                }
+                
+                // Log batch performance
+                Logger.Log($"[MuseTalkInference] Batch {batchIdx} completed ({actualBatchSize} frames) - streamed to output");
+                
+                // Yield control back to allow processing/rendering
+                yield return null;
+            }
+        }
+
+        /// <summary>
+        /// Generate video frames using UNet and VAE decoder (LEGACY)
+        /// For backward compatibility - returns all frames at once
         /// </summary>
         private async Task<List<Texture2D>> GenerateFrames(AvatarData avatarData, AudioFeatures audioFeatures, int batchSize)
         {
