@@ -195,7 +195,7 @@ namespace MuseTalk.Core
                 var xSInfo = GetKpInfo(Is);
                 
                 // Python: R_s = get_rotation_matrix(x_s_info["pitch"], x_s_info["yaw"], x_s_info["roll"])
-                var Rs = GetRotationMatrix(xSInfo.Pitch, xSInfo.Yaw, xSInfo.Roll);
+                var Rs = MathUtils.GetRotationMatrix(xSInfo.Pitch, xSInfo.Yaw, xSInfo.Roll);
                 
                 // Python: f_s = extract_feature_3d(self.models, I_s)
                 var fs = ExtractFeature3d(Is);
@@ -577,7 +577,7 @@ namespace MuseTalk.Core
             // Python: pred = trans_points2d(pred, IM)
             var IM = transformMatrix.inverse;// InvertAffineTransformToMatrix(transformMatrix);
             
-            landmarks = TransPoints2D(landmarks, IM);
+            landmarks = MathUtils.TransPoints2D(landmarks, IM);
             
             // UnityEngine.Object.DestroyImmediate(alignedImg);
             
@@ -851,7 +851,7 @@ namespace MuseTalk.Core
             int numKp = kp.Length / 3;
             
             // Python: rot_mat = get_rotation_matrix(pitch, yaw, roll)  # (bs, 3, 3)
-            var rotMat = GetRotationMatrix(pitch, yaw, roll);
+            var rotMat = MathUtils.GetRotationMatrix(pitch, yaw, roll);
             
             // Python: kp_transformed = kp.reshape(bs, num_kp, 3) @ rot_mat + exp.reshape(bs, num_kp, 3)
             var kpTransformed = new float[kp.Length];
@@ -1017,7 +1017,7 @@ namespace MuseTalk.Core
             var xDInfo = GetKpInfo(Id);
 
             // Python: R_d = get_rotation_matrix(x_d_info["pitch"], x_d_info["yaw"], x_d_info["roll"])
-            var Rd = GetRotationMatrix(xDInfo.Pitch, xDInfo.Yaw, xDInfo.Roll);
+            var Rd = MathUtils.GetRotationMatrix(xDInfo.Pitch, xDInfo.Yaw, xDInfo.Roll);
             
             // CRITICAL FIX: Python restructures x_d_info to only contain specific fields with explicit float32 conversion
             // Python: x_d_info = {
@@ -1059,21 +1059,21 @@ namespace MuseTalk.Core
             // Python: R_new = (R_d @ R_d_0.transpose(0, 2, 1)) @ R_s
             // CRITICAL FIX: Python transpose(0, 2, 1) swaps last two dimensions for batch matrices
             // For 3x3 matrices, this is equivalent to standard matrix transpose
-            var Rd0Transposed = TransposeMatrix(Rd0);
-            var RdTimesRd0T = MatrixMultiply(Rd, Rd0Transposed);
-            var RNew = MatrixMultiply(RdTimesRd0T, Rs);
+            var Rd0Transposed = MathUtils.TransposeMatrix(Rd0);
+            var RdTimesRd0T = MathUtils.MatrixMultiply(Rd, Rd0Transposed);
+            var RNew = MathUtils.MatrixMultiply(RdTimesRd0T, Rs);
             
             // Python: delta_new = x_s_info["exp"] + (x_d_info["exp"] - x_d_0_info["exp"])
-            var expDiff = SubtractArrays(xDInfo.Expression, xD0Info.Expression);
-            var deltaNew = AddArrays(xSInfo.Expression, expDiff);
+            var expDiff = MathUtils.SubtractArrays(xDInfo.Expression, xD0Info.Expression);
+            var deltaNew = MathUtils.AddArrays(xSInfo.Expression, expDiff);
             
             // Python: scale_new = x_s_info["scale"] * (x_d_info["scale"] / x_d_0_info["scale"])
-            var scaleDiff = DivideArrays(xDInfo.Scale, xD0Info.Scale);
-            var scaleNew = MultiplyArrays(xSInfo.Scale, scaleDiff);
+            var scaleDiff = MathUtils.DivideArrays(xDInfo.Scale, xD0Info.Scale);
+            var scaleNew = MathUtils.MultiplyArrays(xSInfo.Scale, scaleDiff);
             
             // Python: t_new = x_s_info["t"] + (x_d_info["t"] - x_d_0_info["t"])
-            var tDiff = SubtractArrays(xDInfo.Translation, xD0Info.Translation);
-            var tNew = AddArrays(xSInfo.Translation, tDiff);
+            var tDiff = MathUtils.SubtractArrays(xDInfo.Translation, xD0Info.Translation);
+            var tNew = MathUtils.AddArrays(xSInfo.Translation, tDiff);
             
             // Python: t_new[..., 2] = 0  # zero tz
             if (tNew.Length >= 3) tNew[2] = 0;
@@ -1224,8 +1224,8 @@ namespace MuseTalk.Core
             // Python: crop_image(img, pts: np.ndarray, dsize=224, scale=1.5, vy_ratio=-0.1) - EXACT MATCH
             var (MInv, _) = EstimateSimilarTransformFromPts(lmk, dsize, scale, 0f, vyRatio, true);
             
-            var imgCrop = TransformImgExact(img, width, height, MInv, dsize, dsize);
-            var ptCrop = TransformPts(lmk, MInv);
+            var imgCrop = TextureUtils.TransformImgExact(img, width, height, MInv, dsize, dsize);
+            var ptCrop = MathUtils.TransformPts(lmk, MInv);
             
             // Python: M_o2c = np.vstack([M_INV, np.array([0, 0, 1], dtype=np.float32)])
             var Mo2c = Matrix4x4.identity;
@@ -1269,54 +1269,7 @@ namespace MuseTalk.Core
             
             return exps;
         }
-        
-        /// <summary>
-        /// Python: get_rotation_matrix(pitch, yaw, roll) - EXACT MATCH
-        /// </summary>
-        private float[,] GetRotationMatrix(float[] pitch, float[] yaw, float[] roll)
-        {
-            // Python: pitch, yaw, roll are Bx1 arrays. Here they are float[] of length 1.
-            float p = pitch[0] * Mathf.Deg2Rad;
-            float y = yaw[0] * Mathf.Deg2Rad;
-            float r = roll[0] * Mathf.Deg2Rad;
-            
-            // Python: x, y, z = pitch, yaw, roll
-            float cos_p = Mathf.Cos(p);
-            float sin_p = Mathf.Sin(p);
-            float cos_y = Mathf.Cos(y);
-            float sin_y = Mathf.Sin(y);
-            float cos_r = Mathf.Cos(r);
-            float sin_r = Mathf.Sin(r);
-            
-            // Python: rot_x
-            var rotX = new float[3, 3] {
-                { 1, 0, 0 },
-                { 0, cos_p, -sin_p },
-                { 0, sin_p, cos_p }
-            };
-            
-            // Python: rot_y
-            var rotY = new float[3, 3] {
-                { cos_y, 0, sin_y },
-                { 0, 1, 0 },
-                { -sin_y, 0, cos_y }
-            };
 
-            // Python: rot_z
-            var rotZ = new float[3, 3] {
-                { cos_r, -sin_r, 0 },
-                { sin_r, cos_r, 0 },
-                { 0, 0, 1 }
-            };
-            
-            // Python: rot = rot_z @ rot_y @ rot_x
-            var rotZY = MatrixMultiply(rotZ, rotY);
-            var rot = MatrixMultiply(rotZY, rotX);
-            
-            // Python: return rot.transpose(0, 2, 1)
-            return TransposeMatrix(rot);
-        }
-        
         /// <summary>
         /// Python: parse_pt2_from_pt106() - EXACT MATCH
         /// Parsing the 2 points according to the 106 points
@@ -1369,7 +1322,8 @@ namespace MuseTalk.Core
             
             return pt2;
         }
-        
+
+                        
         /// <summary>
         /// Python: parse_rect_from_landmark() - EXACT MATCH
         /// Parsing center, size, angle from landmarks
@@ -1471,7 +1425,7 @@ namespace MuseTalk.Core
             
             return (center, size, angle);
         }
-        
+
         /// <summary>
         /// Python: _estimate_similar_transform_from_pts() - EXACT MATCH
         /// Calculate the affine matrix of the cropped image from sparse points
@@ -1519,7 +1473,7 @@ namespace MuseTalk.Core
                 { 0f, 0f, 1f }
             };
             
-            var M = InvertMatrix3x3(MInvH);
+            var M = MathUtils.InvertMatrix3x3(MInvH);
             var M2x3 = new float[,] {
                 { M[0, 0], M[0, 1], M[0, 2] },
                 { M[1, 0], M[1, 1], M[1, 2] }
@@ -1528,141 +1482,7 @@ namespace MuseTalk.Core
             // Python: return M_INV, M[:2, ...]
             return (MInv, M2x3);
         }
-        
-        /// <summary>
-        /// Matrix operations matching Python numpy - EXACT MATCH
-        /// </summary>
-        private float[,] MatrixMultiply(float[,] a, float[,] b)
-        {
-            int rows = a.GetLength(0);
-            int cols = b.GetLength(1);
-            int inner = a.GetLength(1);
-            
-            var result = new float[rows, cols];
-            for (int i = 0; i < rows; i++)
-            {
-                for (int j = 0; j < cols; j++)
-                {
-                    for (int k = 0; k < inner; k++)
-                    {
-                        result[i, j] += a[i, k] * b[k, j];
-                    }
-                }
-            }
-            return result;
-        }
-        
-        private float[,] TransposeMatrix(float[,] matrix)
-        {
-            int rows = matrix.GetLength(0);
-            int cols = matrix.GetLength(1);
-            var result = new float[cols, rows];
-            
-            for (int i = 0; i < rows; i++)
-            {
-                for (int j = 0; j < cols; j++)
-                {
-                    result[j, i] = matrix[i, j];
-                }
-            }
-            return result;
-        }
-        
-        /// <summary>
-        /// Python: _transform_pts() - EXACT MATCH
-        /// Conduct similarity or affine transformation to the pts
-        /// </summary>
-        private Vector2[] TransformPts(Vector2[] pts, float[,] M)
-        {
-            // Python: return pts @ M[:2, :2].T + M[:2, 2]
-            var result = new Vector2[pts.Length];
-            
-            for (int i = 0; i < pts.Length; i++)
-            {
-                result[i] = new Vector2(
-                    pts[i].x * M[0, 0] + pts[i].y * M[0, 1] + M[0, 2],
-                    pts[i].x * M[1, 0] + pts[i].y * M[1, 1] + M[1, 2]
-                );
-            }
-            
-            return result;
-        }
-        
-        /// <summary>
-        /// Invert 3x3 matrix - EXACT MATCH with numpy.linalg.inv
-        /// </summary>
-        private float[,] InvertMatrix3x3(float[,] matrix)
-        {
-            float[,] result = new float[3, 3];
-            
-            // Calculate determinant
-            float det = matrix[0, 0] * (matrix[1, 1] * matrix[2, 2] - matrix[1, 2] * matrix[2, 1])
-                      - matrix[0, 1] * (matrix[1, 0] * matrix[2, 2] - matrix[1, 2] * matrix[2, 0])
-                      + matrix[0, 2] * (matrix[1, 0] * matrix[2, 1] - matrix[1, 1] * matrix[2, 0]);
-            
-            if (Mathf.Abs(det) < 1e-6f)
-            {
-                throw new InvalidOperationException("Matrix is singular and cannot be inverted");
-            }
-            
-            float invDet = 1.0f / det;
-            
-            // Calculate adjugate matrix and multiply by 1/det
-            result[0, 0] = (matrix[1, 1] * matrix[2, 2] - matrix[1, 2] * matrix[2, 1]) * invDet;
-            result[0, 1] = (matrix[0, 2] * matrix[2, 1] - matrix[0, 1] * matrix[2, 2]) * invDet;
-            result[0, 2] = (matrix[0, 1] * matrix[1, 2] - matrix[0, 2] * matrix[1, 1]) * invDet;
-            
-            result[1, 0] = (matrix[1, 2] * matrix[2, 0] - matrix[1, 0] * matrix[2, 2]) * invDet;
-            result[1, 1] = (matrix[0, 0] * matrix[2, 2] - matrix[0, 2] * matrix[2, 0]) * invDet;
-            result[1, 2] = (matrix[0, 2] * matrix[1, 0] - matrix[0, 0] * matrix[1, 2]) * invDet;
-            
-            result[2, 0] = (matrix[1, 0] * matrix[2, 1] - matrix[1, 1] * matrix[2, 0]) * invDet;
-            result[2, 1] = (matrix[0, 1] * matrix[2, 0] - matrix[0, 0] * matrix[2, 1]) * invDet;
-            result[2, 2] = (matrix[0, 0] * matrix[1, 1] - matrix[0, 1] * matrix[1, 0]) * invDet;
-            
-            return result;
-        }
-        
-        private float[] AddArrays(float[] a, float[] b)
-        {
-            var result = new float[a.Length];
-            for (int i = 0; i < a.Length; i++)
-            {
-                result[i] = a[i] + b[i];
-            }
-            return result;
-        }
-        
-        private float[] SubtractArrays(float[] a, float[] b)
-        {
-            var result = new float[a.Length];
-            for (int i = 0; i < a.Length; i++)
-            {
-                result[i] = a[i] - b[i];
-            }
-            return result;
-        }
-        
-        private float[] MultiplyArrays(float[] a, float[] b)
-        {
-            var result = new float[a.Length];
-            for (int i = 0; i < a.Length; i++)
-            {
-                result[i] = a[i] * b[i];
-            }
-            return result;
-        }
-        
-        private float[] DivideArrays(float[] a, float[] b)
-        {
-            var result = new float[a.Length];
-            for (int i = 0; i < a.Length; i++)
-            {
-                result[i] = a[i] / b[i];
-            }
-            return result;
-        }
-        
+
         /// <summary>
         /// Python: x_d_new = scale_new * (x_c_s @ R_new + delta_new) + t_new - EXACT MATCH
         /// </summary>
@@ -2163,7 +1983,7 @@ namespace MuseTalk.Core
             };
             
             // Python: cropped = cv2.warpAffine(data, M, (output_size, output_size), borderValue=0.0)
-            var cropped = TransformImgExact(img, width, height, M, inputSize, inputSize);
+            var cropped = TextureUtils.TransformImgExact(img, width, height, M, inputSize, inputSize);
 
             // Convert to Matrix4x4 for Unity compatibility
             var transform = new Matrix4x4
@@ -2199,43 +2019,6 @@ namespace MuseTalk.Core
             return PreprocessImageOptimized(img, inputSize, inputSize, 1.0f, 0.0f);
         }
         
-
-        
-        /// <summary>
-        /// Python: cv2.invertAffineTransform(M) - EXACT MATCH
-        /// Invert a 2x3 affine transformation matrix
-        /// </summary>
-        private float[,] InvertAffineTransform(float[,] M)
-        {
-            // For 2x3 matrix [[a, b, c], [d, e, f]], the inverse is:
-            // det = a*e - b*d
-            // inv = [[e/det, -b/det, (b*f-c*e)/det], [-d/det, a/det, (c*d-a*f)/det]]
-            
-            float a = M[0, 0], b = M[0, 1], c = M[0, 2];
-            float d = M[1, 0], e = M[1, 1], f = M[1, 2];
-            
-            float det = a * e - b * d;
-            
-            if (Mathf.Abs(det) < 1e-6f)
-            {
-                throw new InvalidOperationException("Affine matrix is singular and cannot be inverted");
-            }
-            
-            float[,] inv = new float[2, 3];
-            inv[0, 0] = e / det;
-            inv[0, 1] = -b / det;
-            inv[0, 2] = (b * f - c * e) / det;
-            inv[1, 0] = -d / det;
-            inv[1, 1] = a / det;
-            inv[1, 2] = (c * d - a * f) / det;
-            
-            return inv;
-        }
-        
-
-        
-
-        
         /// <summary>
         /// OPTIMIZED: Landmark runner image preprocessing - matches Python exactly
         /// Python: img_crop = img_crop / 255 = pixelValue * (1/255) + 0
@@ -2256,145 +2039,6 @@ namespace MuseTalk.Core
             }
             return result;
         }
-        
-        /// <summary>
-        /// Python: trans_points2d() - EXACT MATCH
-        /// </summary>
-        private Vector2[] TransPoints2D(Vector2[] pts, Matrix4x4 M)
-        {
-            var result = new Vector2[pts.Length];
-            
-            for (int i = 0; i < pts.Length; i++)
-            {
-                Vector2 pt = pts[i];
-                // Python: new_pt = np.array([pt[0], pt[1], 1.0], dtype=np.float32)
-                // Python: new_pt = np.dot(M, new_pt)
-                // Python: new_pts[i] = new_pt[0:2]
-                Vector3 newPt = new Vector3(pt.x, pt.y, 1.0f);
-                Vector3 transformed = M.MultiplyPoint3x4(newPt);
-                result[i] = new Vector2(transformed.x, transformed.y);
-            }
-            
-            return result;
-        }
-        
-        /// <summary>
-        /// Python: trans_points2d() with 2x3 matrix - EXACT MATCH
-        /// </summary>
-        private Vector2[] TransPoints2D(Vector2[] pts, float[,] M)
-        {
-            var result = new Vector2[pts.Length];
-            
-            for (int i = 0; i < pts.Length; i++)
-            {
-                Vector2 pt = pts[i];
-                // Python: new_pt = np.array([pt[0], pt[1], 1.0], dtype=np.float32)
-                // Python: new_pt = np.dot(M, new_pt)
-                result[i] = new Vector2(
-                    M[0, 0] * pt.x + M[0, 1] * pt.y + M[0, 2],
-                    M[1, 0] * pt.x + M[1, 1] * pt.y + M[1, 2]
-                );
-            }
-            
-            return result;
-        }
-        
-        /// <summary>
-        /// Python: cv2.warpAffine() - EXACT MATCH
-        /// This is the corrected version that matches OpenCV's warpAffine exactly
-        /// CRITICAL: Handles coordinate systems correctly
-        /// OPTIMIZED: Uses unsafe pointers and parallelization for maximum performance
-        /// </summary>
-        private unsafe byte[] TransformImgExact(byte[] img, int width, int height, float[,] M, int dstWidth, int dstHeight)
-        {
-            // Create result texture - MUST use RGB24 format for consistent processing
-            var result = new byte[dstWidth * dstHeight * 3];
-
-            int srcWidth = width;
-            int srcHeight = height;
-
-            // Invert the transformation matrix M to get the mapping from destination to source
-            float[,] invM = InvertAffineTransform(M);
-            
-            // Pre-calculate matrix elements for performance (avoid repeated 2D array access)
-            float m00 = invM[0, 0], m01 = invM[0, 1], m02 = invM[0, 2];
-            float m10 = invM[1, 0], m11 = invM[1, 1], m12 = invM[1, 2];
-
-            // OPTIMIZED: Use unsafe pointers for direct memory access (compatible with Parallel.For)
-            fixed (byte* resultPtr = result)
-            {
-                // Get source pointer using fixed for direct access
-                fixed (byte* srcPtrFixed = img)
-                {
-                    // MAXIMUM PERFORMANCE: Parallel processing across all destination pixels
-                    // Each pixel can be processed independently for perfect parallelization
-                    int totalPixels = dstWidth * dstHeight;
-                    
-                    // Capture pointers in local variables to avoid lambda closure issues
-                    byte* srcPtrLocal = srcPtrFixed;
-                    byte* resultPtrLocal = resultPtr;
-                    
-                    System.Threading.Tasks.Parallel.For(0, totalPixels, pixelIndex =>
-                    {
-                        // Calculate x, y coordinates from linear pixel index
-                        int dstY = pixelIndex / dstWidth;
-                        int dstX = pixelIndex % dstWidth;
-
-                        // Apply inverse transformation matrix to find source coordinates
-                        // OPTIMIZED: Use pre-calculated matrix elements
-                        float srcX = m00 * dstX + m01 * dstY + m02;
-                        float srcY = m10 * dstX + m11 * dstY + m12;
-
-                        // Get integer and fractional parts for bilinear interpolation
-                        int x0 = (int)srcX; // Faster than Mathf.FloorToInt for positive values
-                        int y0 = (int)srcY;
-
-                        float fx = srcX - x0;
-                        float fy = srcY - y0;
-
-                        // Default to black (borderValue=0.0 in OpenCV)
-                        byte r = 0, g = 0, b = 0;
-
-                        // Bounds check for bilinear interpolation
-                        if (x0 >= 0 && (x0 + 1) < srcWidth && y0 >= 0 && (y0 + 1) < srcHeight)
-                        {
-                            // OPTIMIZED: Direct pointer arithmetic for pixel access
-                            byte* c00Ptr = srcPtrLocal + (y0 * srcWidth + x0) * 3;           // Top-left
-                            byte* c10Ptr = srcPtrLocal + (y0 * srcWidth + x0 + 1) * 3;       // Top-right
-                            byte* c01Ptr = srcPtrLocal + ((y0 + 1) * srcWidth + x0) * 3;     // Bottom-left
-                            byte* c11Ptr = srcPtrLocal + ((y0 + 1) * srcWidth + x0 + 1) * 3; // Bottom-right
-
-                            // Pre-calculate bilinear interpolation weights
-                            float inv_fx = 1.0f - fx;
-                            float inv_fy = 1.0f - fy;
-                            float w00 = inv_fx * inv_fy; // Top-left weight
-                            float w10 = fx * inv_fy;     // Top-right weight
-                            float w01 = inv_fx * fy;     // Bottom-left weight
-                            float w11 = fx * fy;         // Bottom-right weight
-                            
-                            // OPTIMIZED: Direct pointer access with unrolled RGB channels
-                            float r_float = w00 * c00Ptr[0] + w10 * c10Ptr[0] + w01 * c01Ptr[0] + w11 * c11Ptr[0];
-                            float g_float = w00 * c00Ptr[1] + w10 * c10Ptr[1] + w01 * c01Ptr[1] + w11 * c11Ptr[1];
-                            float b_float = w00 * c00Ptr[2] + w10 * c10Ptr[2] + w01 * c01Ptr[2] + w11 * c11Ptr[2];
-
-                            // Fast clamping using direct comparison (faster than Mathf.Clamp)
-                            r = (byte)(r_float < 0f ? 0 : r_float > 255f ? 255 : r_float);
-                            g = (byte)(g_float < 0f ? 0 : g_float > 255f ? 255 : g_float);
-                            b = (byte)(b_float < 0f ? 0 : b_float > 255f ? 255 : b_float);
-                        }
-
-                        // OPTIMIZED: Direct pointer write to result
-                        byte* resultPixelPtr = resultPtrLocal + pixelIndex * 3;
-                        resultPixelPtr[0] = r; // R
-                        resultPixelPtr[1] = g; // G
-                        resultPixelPtr[2] = b; // B
-                    });
-                }
-            }
-
-            return result;
-        }
-        
         public void Dispose()
         {
             if (_disposed) return;
@@ -2444,7 +2088,7 @@ namespace MuseTalk.Core
                 { cropMc2o.m10, cropMc2o.m11, cropMc2o.m13 }
             };
             
-            var maskOri = TransformImgExact(_maskTemplate, _maskTemplateWidth, _maskTemplateHeight, M, width, height);
+            var maskOri = TextureUtils.TransformImgExact(_maskTemplate, _maskTemplateWidth, _maskTemplateHeight, M, width, height);
             return maskOri;
         }
         
@@ -2470,7 +2114,7 @@ namespace MuseTalk.Core
                 { Mc2o.m00, Mc2o.m01, Mc2o.m03 },
                 { Mc2o.m10, Mc2o.m11, Mc2o.m13 }
             };
-            var warped = TransformImgExact(imgCrop, imgCropWidth, imgCropHeight, M, dsize_w, dsize_h);
+            var warped = TextureUtils.TransformImgExact(imgCrop, imgCropWidth, imgCropHeight, M, dsize_w, dsize_h);
             
             // Python: result = np.clip(mask_ori * result + (1 - mask_ori) * img_ori, 0, 255).astype(np.uint8)
             var result = new byte[dsize_w * dsize_h * 3];

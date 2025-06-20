@@ -253,7 +253,7 @@ namespace MuseTalk.API
                 throw new ArgumentException("Invalid input: source image and driving frames path are required");
 
             // Get frame count first to estimate total frames
-            var frameFiles = FileUtils.GetFrameFiles(drivingFramesPath); // Send maxFrames > 0 to load some frames
+            var frameFiles = FileUtils.GetFrameFiles(drivingFramesPath, 20); // Send maxFrames > 0 to load some frames
             if (frameFiles.Length == 0)
             {
                 throw new ArgumentException($"No driving frames found in path: {drivingFramesPath}");
@@ -367,7 +367,7 @@ namespace MuseTalk.API
                     }
                     
                     byte[] fileData = loadFileTask.Result;
-                    Texture2D texture = new Texture2D(2, 2);
+                    Texture2D texture = new(2, 2);
                     
                     if (texture.LoadImage(fileData))
                     {
