@@ -825,8 +825,8 @@ namespace MuseTalk.Utils
                 var scrfdKps = face.Keypoints5;
                 
                 // Step 2: Extract 106 landmarks using face-aligned crop (matching InsightFaceHelper flow)
-                Vector2[] landmarks106 = null;
-                Vector4 finalBbox = CoordPlaceholder;
+                Vector2[] landmarks106;
+                Vector4 finalBbox;
                 
                 if (scrfdKps != null && scrfdKps.Length >= 5)
                 {
@@ -835,7 +835,7 @@ namespace MuseTalk.Utils
                     if (landmarks106 != null && landmarks106.Length >= 106)
                     {
                         // Calculate final bbox using hybrid approach (adapted for 106 landmarks)
-                        finalBbox = CalculateHybridBbox106(landmarks106, bbox, scrfdKps, bboxShift);
+                        finalBbox = CalculateHybridBbox106(landmarks106, bbox, bboxShift);
                         
                         // Calculate range information (adapted for 106 landmarks)
                         var (rangeMinus, rangePlus) = CalculateLandmarkRanges106(landmarks106);
@@ -877,7 +877,7 @@ namespace MuseTalk.Utils
         /// Calculate hybrid bbox using landmark center + SCRFD-like dimensions (adapted for 106 landmarks)
         /// Matches InsightFaceHelper.CalculateHybridBbox exactly but using 106 landmark indices
         /// </summary>
-        private Vector4 CalculateHybridBbox106(Vector2[] landmarks106, Rect originalBbox, Vector2[] scrfdKps, int bboxShift)
+        private Vector4 CalculateHybridBbox106(Vector2[] landmarks106, Rect originalBbox, int bboxShift)
         {
             // MATCH PYTHON EXACTLY: Get landmark center and bounds
             // landmark_center_x = np.mean(face_land_mark[:, 0])
