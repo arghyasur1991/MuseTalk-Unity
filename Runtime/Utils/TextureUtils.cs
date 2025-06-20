@@ -160,7 +160,10 @@ namespace MuseTalk.Utils
         /// Resize RGB24 byte array to exact target dimensions (matching Python cv2.resize with LANCZOS4)
         /// OPTIMIZED: Uses unsafe pointers, parallelization, and optimized interpolation for maximum performance
         /// </summary>
-        public static unsafe byte[] ResizeTextureToExactSize(byte[] sourceData, int sourceWidth, int sourceHeight, int targetWidth, int targetHeight, SamplingMode samplingMode = SamplingMode.Bilinear)
+        public static unsafe byte[] ResizeTextureToExactSize(
+            byte[] sourceData, int sourceWidth, int sourceHeight, 
+            int targetWidth, int targetHeight, 
+            SamplingMode samplingMode = SamplingMode.Bilinear)
         {
             if (sourceData == null)
                 throw new ArgumentNullException(nameof(sourceData));
@@ -272,40 +275,6 @@ namespace MuseTalk.Utils
             
             return targetData;
         }
-        
-        /// <summary>
-        /// Resize texture to exact target dimensions (matching Python cv2.resize with LANCZOS4)
-        /// OPTIMIZED: Uses the byte array overload internally to eliminate code duplication
-        /// </summary>
-        public static unsafe Texture2D ResizeTextureToExactSize(Texture2D source, int targetWidth, int targetHeight, SamplingMode samplingMode = SamplingMode.Bilinear)
-        {
-            if (source == null)
-                throw new ArgumentNullException(nameof(source));
-                
-            if (targetWidth <= 0 || targetHeight <= 0)
-                throw new ArgumentException("Target dimensions must be positive");
-            
-            // Convert source texture to byte array (assumes RGB24 format)
-            var sourcePixelData = source.GetPixelData<byte>(0);
-            var sourceBytes = new byte[sourcePixelData.Length];
-            sourcePixelData.CopyTo(sourceBytes);
-            
-            // Use the byte array resize method (contains the actual resize logic)
-            var resizedBytes = ResizeTextureToExactSize(sourceBytes, source.width, source.height, targetWidth, targetHeight, samplingMode);
-            
-            // Convert result back to texture
-            var resizedTexture = new Texture2D(targetWidth, targetHeight, TextureFormat.RGB24, false);
-            var resizedPixelData = resizedTexture.GetPixelData<byte>(0);
-            
-            // Copy resized bytes to texture
-            for (int i = 0; i < resizedBytes.Length; i++)
-            {
-                resizedPixelData[i] = resizedBytes[i];
-            }
-            
-            resizedTexture.Apply();
-            return resizedTexture;
-        }
 
         /// <summary>
         /// Crop byte array image data to specified rectangle
@@ -353,44 +322,6 @@ namespace MuseTalk.Utils
             return croppedData;
         }
 
-        /// <summary>
-        /// Crop texture to specified rectangle
-        /// </summary>
-        public static Texture2D CropTexture(Texture2D source, Rect cropRect)
-        {
-            if (source == null)
-                throw new ArgumentNullException(nameof(source));
-            
-            // Ensure texture is readable
-            if (!source.isReadable)
-            {
-                source = MakeTextureReadable(source);
-            }
-            
-            int x = (int)cropRect.x;
-            int y = (int)cropRect.y;
-            int width = (int)cropRect.width;
-            int height = (int)cropRect.height;
-            
-            y = source.height - y - height; // Flip Y coordinate
-            
-            // Ensure crop bounds are within texture
-            x = Mathf.Clamp(x, 0, source.width - 1);
-            y = Mathf.Clamp(y, 0, source.height - 1);
-            width = Mathf.Clamp(width, 1, source.width - x);
-            height = Mathf.Clamp(height, 1, source.height - y);
-            
-            // Create cropped texture
-            Texture2D croppedTexture = new Texture2D(width, height, TextureFormat.RGB24, false);
-            
-            // Copy pixels
-            Color[] pixels = source.GetPixels(x, y, width, height);
-            croppedTexture.SetPixels(pixels);
-            croppedTexture.Apply();
-            
-            return croppedTexture;
-        }
-        
         /// <summary>
         /// Convert ONNX tensor output to Texture2D matching Python VAE decoder exactly
         /// OPTIMIZED: Uses unsafe pointers, parallelization, and bulk memory operations for maximum performance
@@ -509,7 +440,7 @@ namespace MuseTalk.Utils
             
             return (pixelData, width, height);
         }
-        
+
         public static Texture2D ConvertTexture2DToRGB24(Texture2D texture)
         {
             if (texture.format != TextureFormat.RGB24)
