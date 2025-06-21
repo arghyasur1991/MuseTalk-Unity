@@ -32,9 +32,7 @@ namespace LiveTalk.Core
     }
 
     /// <summary>
-    /// Core LivePortrait inference engine that matches onnx_inference.py EXACTLY
-    /// ALL OPERATIONS ON MAIN THREAD FOR CORRECTNESS FIRST
-    /// COMPLETELY SELF-SUFFICIENT - NO EXTERNAL DEPENDENCIES
+    /// Core LivePortrait inference engine
     /// </summary>
     internal class LivePortraitInference : IDisposable
     {
