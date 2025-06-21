@@ -204,7 +204,7 @@ namespace LiveTalk.API
         /// <param name="audioClip">Speech audio clip</param>
         /// <param name="batchSize">Processing batch size (default: 4)</param>
         /// <returns>MuseTalkStream for receiving frames as they're generated</returns>
-        public OutputStream GenerateTalkingHeadAsync(Texture2D avatarTexture, AudioClip audioClip, int batchSize = 4)
+        public OutputStream GenerateTalkingHeadAsync(Texture2D avatarTexture, string talkingHeadFolderPath, AudioClip audioClip, int batchSize = 4)
         {
             if (!_initialized)
                 throw new InvalidOperationException("Factory is not initialized. Call Initialize() first.");
@@ -216,8 +216,13 @@ namespace LiveTalk.API
                 throw new ArgumentException("Avatar texture and audio clip are required");
                 
             Logger.Log($"[MuseTalkFactory] Starting streaming generation: {audioClip.name} ({audioClip.length:F2}s)");
-            
-            var input = new MuseTalkInput(avatarTexture, audioClip)
+            List<Texture2D> avatarTextures = FileUtils.LoadFramesFromFolder(talkingHeadFolderPath);
+            if (avatarTextures == null || avatarTextures.Count == 0)
+            {
+                avatarTextures = new List<Texture2D> { avatarTexture };
+            }
+
+            var input = new MuseTalkInput(avatarTextures.ToArray(), audioClip)
             {
                 BatchSize = batchSize
             };
