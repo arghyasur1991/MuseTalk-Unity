@@ -11,40 +11,6 @@ namespace LiveTalk.API
     using Utils;
 
     /// <summary>
-    /// Input for MuseTalk inference - simplified for streaming
-    /// </summary>
-    public class MuseTalkInput
-    {
-        /// <summary>
-        /// Avatar images for talking head generation
-        /// </summary>
-        public Texture2D[] AvatarTextures { get; set; }
-        
-        /// <summary>
-        /// Audio clip for lip sync
-        /// </summary>
-        public AudioClip AudioClip { get; set; }
-        
-        /// <summary>
-        /// Batch size for processing
-        /// </summary>
-        public int BatchSize { get; set; } = 4;
-        
-        public MuseTalkInput(Texture2D avatarTexture, AudioClip audioClip)
-        {
-            AvatarTextures = new[] { avatarTexture ?? throw new ArgumentNullException(nameof(avatarTexture)) };
-            AudioClip = audioClip ?? throw new ArgumentNullException(nameof(audioClip));
-        }
-        
-        public MuseTalkInput(Texture2D[] avatarTextures, AudioClip audioClip)
-        {
-            AvatarTextures = avatarTextures ?? throw new ArgumentNullException(nameof(avatarTextures));
-            AudioClip = audioClip ?? throw new ArgumentNullException(nameof(audioClip));
-        }
-    }
-    
-
-    /// <summary>
     /// Result from MuseTalk generation
     /// </summary>
     public class MuseTalkResult
@@ -302,67 +268,6 @@ namespace LiveTalk.API
             
             _avatarController.StartCoroutine(_museTalk.GenerateAsync(input, stream));
             return stream;
-        }
-
-        /// <summary>
-        /// Generate talking head video with custom input configuration (STREAMING)
-        /// </summary>
-        /// <param name="input">Complete MuseTalk input configuration</param>
-        /// <returns>OutputStream for receiving frames as they're generated</returns>
-        public OutputStream GenerateStreamingAsync(MuseTalkInput input)
-        {
-            if (!_initialized)
-                throw new InvalidOperationException("Factory is not initialized. Call Initialize() first.");
-                
-            if (_avatarController == null)
-                throw new InvalidOperationException("Avatar controller is required for streaming operations. Use constructor with AvatarController parameter.");
-                
-            if (input == null)
-                throw new ArgumentException("Input configuration is required");
-                
-            Logger.Log($"[MuseTalkFactory] Starting streaming generation: {input.AvatarTextures.Length} avatars, {input.AudioClip.name} ({input.AudioClip.length:F2}s)");
-            
-            // Estimate frame count based on audio length (approximation)
-            int estimatedFrames = Mathf.CeilToInt(input.AudioClip.length * 25f); // ~25 FPS estimate
-            var stream = new OutputStream(estimatedFrames);
-            
-            _avatarController.StartCoroutine(_museTalk.GenerateAsync(input, stream));
-            return stream;
-        }
-
-        /// <summary>
-        /// Generate talking head video with custom input configuration (LEGACY)
-        /// For backward compatibility - returns all frames at once
-        /// </summary>
-        /// <param name="input">Complete MuseTalk input configuration</param>
-        /// <returns>MuseTalkResult containing generated frames</returns>
-        public async Task<MuseTalkResult> GenerateAsync(MuseTalkInput input)
-        {
-            if (!_initialized)
-            {
-                Logger.LogError("[MuseTalkFactory] Factory is not initialized. Call Initialize() first.");
-                return new MuseTalkResult { Success = false, ErrorMessage = "Factory not initialized" };
-            }
-            
-            if (input == null)
-            {
-                Logger.LogError("[MuseTalkFactory] Input configuration is required.");
-                return new MuseTalkResult { Success = false, ErrorMessage = "Input is null" };
-            }
-            
-            try
-            {
-                return await _museTalk.GenerateAsync(input);
-            }
-            catch (Exception e)
-            {
-                Logger.LogError($"[MuseTalkFactory] Exception during generation: {e.Message}\n{e.StackTrace}");
-                return new MuseTalkResult 
-                { 
-                    Success = false, 
-                    ErrorMessage = e.Message 
-                };
-            }
         }
         
         /// <summary>

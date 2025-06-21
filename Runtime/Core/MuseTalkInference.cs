@@ -15,6 +15,40 @@ namespace LiveTalk.Core
     using API;
     using Utils;
 
+
+    /// <summary>
+    /// Input for MuseTalk inference - simplified for streaming
+    /// </summary>
+    internal class MuseTalkInput
+    {
+        /// <summary>
+        /// Avatar images for talking head generation
+        /// </summary>
+        public Texture2D[] AvatarTextures { get; set; }
+        
+        /// <summary>
+        /// Audio clip for lip sync
+        /// </summary>
+        public AudioClip AudioClip { get; set; }
+        
+        /// <summary>
+        /// Batch size for processing
+        /// </summary>
+        public int BatchSize { get; set; } = 4;
+        
+        public MuseTalkInput(Texture2D avatarTexture, AudioClip audioClip)
+        {
+            AvatarTextures = new[] { avatarTexture ?? throw new ArgumentNullException(nameof(avatarTexture)) };
+            AudioClip = audioClip ?? throw new ArgumentNullException(nameof(audioClip));
+        }
+        
+        public MuseTalkInput(Texture2D[] avatarTextures, AudioClip audioClip)
+        {
+            AvatarTextures = avatarTextures ?? throw new ArgumentNullException(nameof(avatarTextures));
+            AudioClip = audioClip ?? throw new ArgumentNullException(nameof(audioClip));
+        }
+    }
+
     /// <summary>
     /// Avatar animation cache key based on texture content hashes
     /// </summary>
