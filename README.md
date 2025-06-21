@@ -1,10 +1,10 @@
-# MuseTalk-Unity
+# LiveTalk-Unity
 
-Unity package for using MuseTalk on-device models for real-time talking head generation. This is a C# port of [MuseTalk](https://github.com/TMElyralab/MuseTalk) and uses converted ONNX models instead of the PyTorch models in the original repo.
+Unity package for using LiveTalk on-device models for real-time talking head generation.
 
-## What is MuseTalk?
+## What is LiveTalk?
 
-MuseTalk is an open-source real-time high quality talking head generation system that can generate natural-looking talking head videos from avatar images and audio input. This Unity package makes it easy to incorporate this technology into your Unity projects for AI-driven character animation.
+LiveTalk is an open-source real-time high quality talking head generation system that can generate natural-looking talking head videos from avatar images and audio input. This Unity package makes it easy to incorporate this technology into your Unity projects for AI-driven character animation.
 
 ## Key Features:
 
@@ -31,7 +31,7 @@ MuseTalk is an open-source real-time high quality talking head generation system
 2. Open the Package Manager (Window > Package Manager)
 3. Click the "+" button in the top-left corner
 4. Select "Add package from git URL..."
-5. Enter the repository URL: `https://github.com/arghyasur1991/MuseTalk-Unity.git`
+5. Enter the repository URL: `https://github.com/arghyasur1991/LiveTalk-Unity.git`
 6. Click "Add"
 
 ### Manual Installation
@@ -61,24 +61,18 @@ Some dependencies require additional scoped registry configuration. Add the foll
     }
   ],
   "dependencies": {
-    "com.genesis.musetalk.unity": "file:/path/to/MuseTalk-Unity",
+    "com.genesis.LiveTalk.unity": "file:/path/to/LiveTalk-Unity",
     // ... other dependencies
   }
 }
 ```
 
-**Note**: Replace `/path/to/MuseTalk-Unity` with the actual path to your MuseTalk-Unity package folder.
+**Note**: Replace `/path/to/LiveTalk-Unity` with the actual path to your LiveTalk-Unity package folder.
 
 ## Features
 
 - Real-time talking head generation from avatar images and audio
-- Support for multiple avatar poses and expressions
-- Face detection and landmark extraction using InsightFace
-- Whisper-based audio feature extraction
-- UNet and VAE-based video frame generation
-- Seamless face blending with original images
-- Memory optimization with tensor pooling and caching
-- INT8 quantization support for improved performance
+- WIP
 
 ## Usage
 
@@ -86,89 +80,23 @@ Some dependencies require additional scoped registry configuration. Add the foll
 
 ```csharp
 using UnityEngine;
-using MuseTalk.Core;
-using MuseTalk.Models;
+using LiveTalk.Core;
+using LiveTalk.Models;
 using System.Threading.Tasks;
 
-public class MuseTalkExample : MonoBehaviour
+public class LiveTalkExample : MonoBehaviour
 {
-    [SerializeField] private Texture2D[] avatarImages;
-    [SerializeField] private AudioClip audioClip;
-    [SerializeField] private MuseTalkConfig config;
-    
-    private MuseTalkInference museTalkInference;
-    private RawImage displayImage;
-
-    async void Start()
-    {
-        // Initialize MuseTalk
-        museTalkInference = new MuseTalkInference(config);
-        
-        if (!museTalkInference.IsInitialized)
-        {
-            Debug.LogError("Failed to initialize MuseTalk");
-            return;
-        }
-        
-        // Get display component
-        displayImage = GetComponent<RawImage>();
-        
-        // Generate talking head animation
-        await GenerateTalkingHead();
-    }
-    
-    private async Task GenerateTalkingHead()
-    {
-        var input = new MuseTalkInput
-        {
-            AvatarTextures = avatarImages,
-            AudioClip = audioClip,
-            BatchSize = 4 // Process 4 frames at a time
-        };
-        
-        var result = await museTalkInference.GenerateAsync(input);
-        
-        if (result.Success)
-        {
-            Debug.Log($"Generated {result.FrameCount} frames in {result.ProcessingTime:F2}s");
-            
-            // Play the generated frames as an animation
-            await PlayFrameSequence(result.GeneratedFrames);
-        }
-        else
-        {
-            Debug.LogError($"Generation failed: {result.ErrorMessage}");
-        }
-    }
-    
-    private async Task PlayFrameSequence(List<Texture2D> frames)
-    {
-        foreach (var frame in frames)
-        {
-            if (displayImage != null)
-            {
-                displayImage.texture = frame;
-            }
-            
-            // Wait for next frame (assuming 25 FPS)
-            await Task.Delay(40);
-        }
-    }
-    
-    private void OnDestroy()
-    {
-        museTalkInference?.Dispose();
-    }
+    // WIP
 }
 ```
 
 ### Advanced Configuration
 
 ```csharp
-using MuseTalk.Models;
+using LiveTalk.Models;
 
-// Create configuration for MuseTalk
-var config = new MuseTalkConfig
+// Create configuration for LiveTalk
+var config = new LiveTalkConfig
 {
     ModelPath = "path/to/onnx/models",
     Version = "v15", // or "v13"
@@ -178,27 +106,27 @@ var config = new MuseTalkConfig
 };
 
 // Initialize with custom configuration
-var museTalk = new MuseTalkInference(config);
+var LiveTalk = new LiveTalkInference(config);
 ```
 
 ### Performance Monitoring
 
 ```csharp
 // Enable detailed performance monitoring
-MuseTalkInference.EnablePerformanceMonitoring = true;
-MuseTalkInference.LogTiming = true;
+LiveTalkInference.EnablePerformanceMonitoring = true;
+LiveTalkInference.LogTiming = true;
 
 // Check quantization status
-Debug.Log($"Using quantization: {museTalk.QuantizationMode}");
-Debug.Log($"INT8 enabled: {museTalk.IsUsingINT8}");
+Debug.Log($"Using quantization: {LiveTalk.QuantizationMode}");
+Debug.Log($"INT8 enabled: {LiveTalk.IsUsingINT8}");
 ```
 
 ## Model Setup
 
-This package requires MuseTalk ONNX models in the following location:
+This package requires LiveTalk ONNX models in the following location:
 
 ```
-Assets/StreamingAssets/MuseTalk/
+Assets/StreamingAssets/LiveTalk/
   ├── WIP
   ├── WIP
   └── WIP
@@ -209,14 +137,14 @@ Assets/StreamingAssets/MuseTalk/
 For better performance, you can also include INT8 quantized versions:
 
 ```
-Assets/StreamingAssets/MuseTalk/
+Assets/StreamingAssets/LiveTalk/
   ├── WIP
   └── ... (other INT8 models)
 ```
 
 ### Exporting Models
 
-You can obtain these models by using the conversion scripts from the original MuseTalk repository and converting them to ONNX format using :
+You can obtain these models by using the conversion scripts from the original LiveTalk repository and converting them to ONNX format using :
 
 1. WIP
 
@@ -226,7 +154,7 @@ Pre-exported ONNX models will be made available for download. Check the releases
 
 ## Configuration Options
 
-### MuseTalkConfig Properties
+### LiveTalkConfig Properties
 
 - **ModelPath**: Path to the ONNX models directory
 - **UseINT8**: Enable INT8 quantization for performance
@@ -244,8 +172,7 @@ Pre-exported ONNX models will be made available for download. Check the releases
 
 - Unity 6000.0 or later
 - Platforms: MacOS (CPU only), Windows (Not tested)
-- Minimum 8GB RAM recommended
-- GPU acceleration recommended for real-time performance
+- Minimum _GB RAM recommended
 
 ## Performance
 
@@ -256,7 +183,7 @@ Typical performance on modern hardware:
 
 ### Common Issues
 
-1. **Models not found**: Ensure ONNX models are in StreamingAssets/MuseTalk/
+1. **Models not found**: Ensure ONNX models are in StreamingAssets/LiveTalk/
 2. **Out of memory**: Reduce batch size or enable INT8 quantization
 3. **Slow performance**: Enable INT8 models
 4. **Face detection fails**: Ensure input images contain clear, frontal faces
@@ -271,7 +198,6 @@ Contributions are welcome! Please read our contributing guidelines and submit pu
 
 ## Credits
 
-- Original MuseTalk: [TMElyralab/MuseTalk](https://github.com/TMElyralab/MuseTalk)
 - InsightFace integration for face processing
 - ONNX Runtime for model inference
 - Unity ML integration and optimization
