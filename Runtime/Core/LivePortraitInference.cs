@@ -966,28 +966,6 @@ namespace MuseTalk.Core
             
             return cropInfo;
         }
-        
-
-        
-        private float[] Softmax(float[] logits)
-        {
-            var maxVal = logits.Max();
-            var exps = new float[logits.Length];
-            float sum = 0f;
-            
-            for (int i = 0; i < logits.Length; i++)
-            {
-                exps[i] = Mathf.Exp(logits[i] - maxVal);
-                sum += exps[i];
-            }
-            
-            for (int i = 0; i < exps.Length; i++)
-            {
-                exps[i] /= sum;
-            }
-            
-            return exps;
-        }
 
         /// <summary>
         /// Python: parse_pt2_from_pt106() - EXACT MATCH
