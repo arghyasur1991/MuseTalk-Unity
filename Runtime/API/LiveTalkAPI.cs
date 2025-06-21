@@ -283,8 +283,9 @@ namespace LiveTalk.API
         /// <summary>
         /// Create an instance of the integrated API with default configuration
         /// </summary>
-        public static LiveTalkAPI Create(LiveTalkController avatarController,string modelPath = "MuseTalk")
+        public static LiveTalkAPI Create(LiveTalkController avatarController, string modelPath = "LiveTalk")
         {
+            modelPath = Application.streamingAssetsPath + "/" + modelPath;
             var config = new LiveTalkConfig(modelPath);
             return new LiveTalkAPI(config, avatarController);
         }
@@ -292,8 +293,9 @@ namespace LiveTalk.API
         /// <summary>
         /// Create an instance optimized for performance
         /// </summary>
-        public static LiveTalkAPI CreateOptimized(LiveTalkController avatarController, string modelPath = "MuseTalk")
+        public static LiveTalkAPI CreateOptimized(LiveTalkController avatarController, string modelPath = "LiveTalk")
         {
+            modelPath = Application.streamingAssetsPath + "/" + modelPath;
             var config = LiveTalkConfig.CreateOptimized(modelPath);
             return new LiveTalkAPI(config, avatarController);
         }
@@ -301,8 +303,9 @@ namespace LiveTalk.API
         /// <summary>
         /// Create an instance optimized for development/debugging
         /// </summary>
-        public static LiveTalkAPI CreateForDevelopment(LiveTalkController avatarController, string modelPath = "MuseTalk")
+        public static LiveTalkAPI CreateForDevelopment(LiveTalkController avatarController, string modelPath = "LiveTalk")
         {
+            modelPath = Application.streamingAssetsPath + "/" + modelPath;
             var config = LiveTalkConfig.CreateForDevelopment(modelPath);
             return new LiveTalkAPI(config, avatarController);
         }

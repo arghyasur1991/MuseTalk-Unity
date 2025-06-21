@@ -40,7 +40,7 @@ namespace LiveTalk.API
         /// <summary>
         /// Create configuration optimized for performance with disk caching
         /// </summary>
-        public static LiveTalkConfig CreateOptimized(string modelPath = "MuseTalk")
+        public static LiveTalkConfig CreateOptimized(string modelPath)
         {
             return new LiveTalkConfig(modelPath)
             {
@@ -54,11 +54,11 @@ namespace LiveTalk.API
         /// <summary>
         /// Create configuration for development/debugging with full texture caching
         /// </summary>
-        public static LiveTalkConfig CreateForDevelopment(string modelPath = "MuseTalk")
+        public static LiveTalkConfig CreateForDevelopment(string modelPath)
         {
             return new LiveTalkConfig(modelPath)
             {
-                EnableDiskCache = true,
+                EnableDiskCache = false,
                 CacheLatentsOnly = false, // Full texture caching for debugging
                 MaxCacheSizeMB = 512, // Smaller cache for development
                 UseINT8 = false // Full precision for better quality debugging
