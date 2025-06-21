@@ -249,7 +249,7 @@ namespace MuseTalk.Core
             }
             
             // Python: det_img = (det_img - 127.5) / 128
-            var inputTensor = PreprocessDetectionImage(detImg, InputSize);
+            var inputTensor = FrameUtils.FrameToTensor(detImg, 0.0078125f, -0.99609375f);
             
             // Python: output = det_face.run(None, {"input.1": det_img})
             // Use the actual input name from the model metadata - EXACT MATCH
@@ -294,7 +294,7 @@ namespace MuseTalk.Core
             // Python: aimg = aimg.transpose(2, 0, 1)  # HWC -> CHW
             // Python: aimg = np.expand_dims(aimg, axis=0)
             // Python: aimg = aimg.astype(np.float32)
-            var inputTensor = PreprocessLandmarkImage(alignedFrame, inputSize);
+            var inputTensor = FrameUtils.FrameToTensor(alignedFrame, 1.0f, 0.0f);
             
             // Python: output = landmark.run(None, {"data": aimg})
             var inputs = new List<Tensor<float>> { inputTensor };
@@ -323,87 +323,54 @@ namespace MuseTalk.Core
             
             return landmarks;
         }
-        
-        // Helper methods for image processing and transformations
-        
-        private unsafe DenseTensor<float> PreprocessDetectionImage(Frame frame, int inputSize)
+
+        /// <summary>
+        /// </summary>
+        public Vector2[] LandmarkRunner(Frame img, Vector2[] lmk)
         {
-            var tensorData = new float[1 * 3 * inputSize * inputSize];
-            int imageSize = inputSize * inputSize;
+            // Python: crop_dct = crop_image(img, lmk, dsize=224, scale=1.5, vy_ratio=-0.1)
+            var cropSize = 224;
+            var cropDct = CropImage(img, lmk, cropSize, 1.5f, -0.1f);
+            var imgCrop = cropDct.ImageCrop;
             
-            fixed (byte* imgPtrFixed = frame.data)
-            fixed (float* tensorPtrFixed = tensorData)
+            // Python: img_crop = img_crop / 255
+            // Python: img_crop = img_crop.transpose(2, 0, 1)  # HWC -> CHW
+            // Python: img_crop = np.expand_dims(img_crop, axis=0)
+            // Python: img_crop = img_crop.astype(np.float32)
+            var inputTensor = FrameUtils.FrameToTensor(imgCrop, 1.0f / 255.0f, 0.0f);
+            
+            // Python: net = models["landmark_runner"]
+            // Python: output = net.run(None, {"input": img_crop})
+            var inputs = new List<Tensor<float>>
             {
-                // Capture pointers in local variables to avoid lambda closure issues
-                byte* imgPtrLocal = imgPtrFixed;
-                float* tensorPtrLocal = tensorPtrFixed;
-                
-                System.Threading.Tasks.Parallel.For(0, imageSize, pixelIdx =>
-                {
-                    for (int c = 0; c < 3; c++)
-                    {
-                        byte pixelValue = imgPtrLocal[pixelIdx * 3 + c];
-                        float* outputPtr = tensorPtrLocal + c * imageSize + pixelIdx;
-                        *outputPtr = (pixelValue - 127.5f) / 128.0f;
-                    }
-                });
+                inputTensor
+            };
+            
+            var results = ModelUtils.RunModel("landmark_runner", _landmarkRunner, inputs);
+            var outputs = results.ToArray();
+            
+            // Python: out_pts = output[2]
+            var outPts = outputs[2].AsTensor<float>().ToArray();
+            
+            // Python: lmk = out_pts[0].reshape(-1, 2) * 224  # scale to 0-224
+            var refinedLmk = new Vector2[outPts.Length / 2];
+            for (int i = 0; i < refinedLmk.Length; i++)
+            {
+                refinedLmk[i] = new Vector2(outPts[i * 2] * cropSize, outPts[i * 2 + 1] * cropSize);
             }
             
-            return new DenseTensor<float>(tensorData, new[] { 1, 3, inputSize, inputSize });
+            // Python: M = crop_dct["M_c2o"]
+            // Python: lmk = lmk @ M[:2, :2].T + M[:2, 2]
+            refinedLmk = TransformLandmarksWithMatrix(refinedLmk, cropDct.Transform);
+            
+            // UnityEngine.Object.DestroyImmediate(imgCrop);
+            
+            return refinedLmk;
         }
         
-        private unsafe DenseTensor<float> PreprocessLandmarkImage(Frame frame, int inputSize)
-        {
-            var tensorData = new float[1 * 3 * inputSize * inputSize];
-            int imageSize = inputSize * inputSize;
-            
-            fixed (byte* imgPtrFixed = frame.data)
-            fixed (float* tensorPtrFixed = tensorData)
-            {
-                // Capture pointers in local variables to avoid lambda closure issues
-                byte* imgPtrLocal = imgPtrFixed;
-                float* tensorPtrLocal = tensorPtrFixed;
-                
-                System.Threading.Tasks.Parallel.For(0, imageSize, pixelIdx =>
-                {
-                    for (int c = 0; c < 3; c++)
-                    {
-                        byte pixelValue = imgPtrLocal[pixelIdx * 3 + c];
-                        float* outputPtr = tensorPtrLocal + c * imageSize + pixelIdx;
-                        *outputPtr = pixelValue; // No normalization for landmark detection
-                    }
-                });
-            }
-            
-            return new DenseTensor<float>(tensorData, new[] { 1, 3, inputSize, inputSize });
-        }
-        
-        private unsafe DenseTensor<float> PreprocessLandmarkRunnerImage(Frame frame, int width, int height)
-        {
-            var tensorData = new float[1 * 3 * height * width];
-            int imageSize = height * width;
-            
-            fixed (byte* imgPtrFixed = frame.data)
-            fixed (float* tensorPtrFixed = tensorData)
-            {
-                // Capture pointers in local variables to avoid lambda closure issues
-                byte* imgPtrLocal = imgPtrFixed;
-                float* tensorPtrLocal = tensorPtrFixed;
-                
-                System.Threading.Tasks.Parallel.For(0, imageSize, pixelIdx =>
-                {
-                    for (int c = 0; c < 3; c++)
-                    {
-                        byte pixelValue = imgPtrLocal[pixelIdx * 3 + c];
-                        float* outputPtr = tensorPtrLocal + c * imageSize + pixelIdx;
-                        *outputPtr = pixelValue / 255.0f; // Normalize to [0,1]
-                    }
-                });
-            }
-            
-            return new DenseTensor<float>(tensorData, new[] { 1, 3, height, width });
-        }
-        
+        /// <summary>
+        /// Process detection results exactly as in LivePortraitInference
+        /// </summary>
         private unsafe List<FaceDetectionResult> ProcessDetectionResults(NamedOnnxValue[] outputs, float detScale)
         {
             var validDetections = new List<DetectionCandidate>();

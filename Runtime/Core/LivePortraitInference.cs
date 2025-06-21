@@ -66,9 +66,6 @@ namespace MuseTalk.Core
         private static readonly DebugLogger Logger = new();
         
         // LivePortrait ONNX models - matches Python models dict exactly
-        private InferenceSession _detFace;  // face detection
-        private InferenceSession _landmark2d106;  // 106 landmark detection
-        private InferenceSession _landmarkRunner;  // landmark refinement
         private InferenceSession _appearanceFeatureExtractor;  // feature extraction
         private InferenceSession _motionExtractor;  // motion parameters
         private InferenceSession _stitching;  // keypoint stitching
@@ -119,10 +116,6 @@ namespace MuseTalk.Core
         
         private void InitializeModels()
         {
-            // Load all ONNX models exactly as in Python
-            _detFace = ModelUtils.LoadModel(_config, "det_10g");
-            _landmark2d106 = ModelUtils.LoadModel(_config, "2d106det");
-            _landmarkRunner = ModelUtils.LoadModel(_config, "landmark");
             _appearanceFeatureExtractor = ModelUtils.LoadModel(_config, "appearance_feature_extractor");
             _motionExtractor = ModelUtils.LoadModel(_config, "motion_extractor");
             _stitching = ModelUtils.LoadModel(_config, "stitching");
@@ -136,9 +129,6 @@ namespace MuseTalk.Core
                                  _motionExtractor != null &&
                                  _warpingSpade != null &&
                                  _stitching != null &&
-                                 _landmarkRunner != null &&
-                                 _landmark2d106 != null &&
-                                 _detFace != null &&
                                  _faceAnalysis.IsInitialized;
             
             if (!allInitialized)
@@ -148,9 +138,6 @@ namespace MuseTalk.Core
                 if (_motionExtractor == null) failedModels.Add("MotionExtractor");
                 if (_warpingSpade == null) failedModels.Add("WarpingSPADE");
                 if (_stitching == null) failedModels.Add("Stitching");
-                if (_landmarkRunner == null) failedModels.Add("LandmarkRunner");
-                if (_landmark2d106 == null) failedModels.Add("Landmark106");
-                if (_detFace == null) failedModels.Add("DetFace");
                 if (!_faceAnalysis.IsInitialized) failedModels.Add("FaceAnalysis");
                 
                 throw new InvalidOperationException($"Failed to initialize models: {string.Join(", ", failedModels)}");
@@ -360,7 +347,7 @@ namespace MuseTalk.Core
             var cropInfo = CropImage(frame, lmk, cropSize, 2.3f, -0.125f);
 
             // Python: lmk = landmark_runner(models, img, lmk)
-            lmk = LandmarkRunner(frame, lmk);
+            lmk = _faceAnalysis.LandmarkRunner(frame, lmk);
             
             // Python: crop_info["lmk_crop"] = lmk
             cropInfo.LandmarksCrop = lmk;
@@ -372,121 +359,6 @@ namespace MuseTalk.Core
             cropInfo.LandmarksCrop256x256 = ScaleLandmarks(cropInfo.LandmarksCrop, 256f / 512f);
             
             return cropInfo;
-        }
-
-        /// <summary>
-        /// Python: get_landmark(img, face) - EXACT MATCH
-        /// </summary>
-        private Vector2[] GetLandmark(Frame img, FaceDetectionResult face)
-        {
-            // Python: input_size = 192
-            const int inputSize = 192;
-            
-            // Python: bbox = face["bbox"]
-            var bbox = face.BoundingBox;
-            
-            // Bbox is already in OpenCV coordinates (top-left origin), use directly
-            // Python: w, h = (bbox[2] - bbox[0]), (bbox[3] - bbox[1])
-            float w = bbox.width;
-            float h = bbox.height;
-            
-            // Python: center = (bbox[2] + bbox[0]) / 2, (bbox[3] + bbox[1]) / 2
-            Vector2 center = new(bbox.x + w * 0.5f, bbox.y + h * 0.5f);
-            
-            // Python: rotate = 0
-            float rotate = 0f;
-            
-            // Python: _scale = input_size / (max(w, h) * 1.5)
-            float scale = inputSize / (Mathf.Max(w, h) * 1.5f);
-            
-            // Python: aimg, M = face_align(img, center, input_size, _scale, rotate)
-            var (alignedImg, transformMatrix) = FaceAlign(img, center, inputSize, scale, rotate);
-            
-            // Format transform matrix to match Python exactly
-            
-            // Python: aimg = aimg.transpose(2, 0, 1)  # HWC -> CHW
-            // Python: aimg = np.expand_dims(aimg, axis=0)
-            // Python: aimg = aimg.astype(np.float32)
-            var inputTensor = PreprocessLandmarkImage(alignedImg);
-            
-            // Python: output = landmark.run(None, {"data": aimg})
-            var inputs = new List<Tensor<float>>
-            {
-                inputTensor
-            };
-            
-            var results = ModelUtils.RunModel("landmark2d106", _landmark2d106, inputs);
-            var output = results.First().AsTensor<float>().ToArray();
-            
-            // Python: pred = output[0][0]
-            // Python: pred = pred.reshape((-1, 2))
-            var landmarks = new Vector2[output.Length / 2];
-            
-            // Python: pred[:, 0:2] += 1
-            // Python: pred[:, 0:2] *= input_size[0] // 2
-            for (int i = 0; i < landmarks.Length; i++)
-            {
-                float x = output[i * 2] + 1f;
-                float y = output[i * 2 + 1] + 1f;
-                x *= inputSize / 2f;
-                y *= inputSize / 2f;
-                landmarks[i] = new Vector2(x, y);
-            }
-            
-            // Python: IM = cv2.invertAffineTransform(M)
-            // Python: pred = trans_points2d(pred, IM)
-            var IM = transformMatrix.inverse;// InvertAffineTransformToMatrix(transformMatrix);
-            
-            landmarks = MathUtils.TransPoints2D(landmarks, IM);
-            
-            // UnityEngine.Object.DestroyImmediate(alignedImg);
-            
-            return landmarks;
-        }
-        
-        /// <summary>
-        /// Python: landmark_runner(models, img, lmk) - EXACT MATCH
-        /// </summary>
-        private Vector2[] LandmarkRunner(Frame img, Vector2[] lmk)
-        {
-            // Python: crop_dct = crop_image(img, lmk, dsize=224, scale=1.5, vy_ratio=-0.1)
-            var cropSize = 224;
-            var cropDct = CropImage(img, lmk, cropSize, 1.5f, -0.1f);
-            var imgCrop = cropDct.ImageCrop;
-            
-            // Python: img_crop = img_crop / 255
-            // Python: img_crop = img_crop.transpose(2, 0, 1)  # HWC -> CHW
-            // Python: img_crop = np.expand_dims(img_crop, axis=0)
-            // Python: img_crop = img_crop.astype(np.float32)
-            var inputTensor = PreprocessLandmarkRunnerImage(imgCrop);
-            
-            // Python: net = models["landmark_runner"]
-            // Python: output = net.run(None, {"input": img_crop})
-            var inputs = new List<Tensor<float>>
-            {
-                inputTensor
-            };
-            
-            var results = ModelUtils.RunModel("landmark_runner", _landmarkRunner, inputs);
-            var outputs = results.ToArray();
-            
-            // Python: out_pts = output[2]
-            var outPts = outputs[2].AsTensor<float>().ToArray();
-            
-            // Python: lmk = out_pts[0].reshape(-1, 2) * 224  # scale to 0-224
-            var refinedLmk = new Vector2[outPts.Length / 2];
-            for (int i = 0; i < refinedLmk.Length; i++)
-            {
-                refinedLmk[i] = new Vector2(outPts[i * 2] * cropSize, outPts[i * 2 + 1] * cropSize);
-            }
-            
-            // Python: M = crop_dct["M_c2o"]
-            // Python: lmk = lmk @ M[:2, :2].T + M[:2, 2]
-            refinedLmk = TransformLandmarksWithMatrix(refinedLmk, cropDct.Transform);
-            
-            // UnityEngine.Object.DestroyImmediate(imgCrop);
-            
-            return refinedLmk;
         }
         
         /// <summary>
@@ -823,12 +695,12 @@ namespace MuseTalk.Core
                 lmk = srcFace.Landmarks106;
                 
                 // Python: lmk = landmark_runner(models, img, lmk)
-                lmk = LandmarkRunner(img, lmk);
+                lmk = _faceAnalysis.LandmarkRunner(img, lmk);
             }
             else
             {
                 // Python: lmk = landmark_runner(models, img, pred_info['lmk'])
-                lmk = LandmarkRunner(img, predInfo.Landmarks);
+                lmk = _faceAnalysis.LandmarkRunner(img, predInfo.Landmarks);
             }
             
             // Python: pred_info['lmk'] = lmk
@@ -1438,16 +1310,6 @@ namespace MuseTalk.Core
             
             return new Frame(result, width, height);
         }
-
-        /// <summary>
-        /// OPTIMIZED: Detection image preprocessing - matches Python exactly
-        /// Python: (det_img - 127.5) / 128 = pixelValue * (1/128) - 127.5/128
-        /// </summary>
-        private DenseTensor<float> PreprocessDetectionImage(Frame img)
-        {
-            // Pre-calculated constants: (pixelValue - 127.5) / 128 = pixelValue * 0.0078125 - 0.99609375
-            return FrameUtils.FrameToTensor(img, 0.0078125f, -0.99609375f);
-        }
         
         /// <summary>
         /// OPTIMIZED: Process detection results with unsafe pointers and parallelization for maximum performance
@@ -1816,26 +1678,6 @@ namespace MuseTalk.Core
             return (cropped, transform);
         }
         
-        /// <summary>
-        /// OPTIMIZED: Landmark image preprocessing - matches Python exactly
-        /// Python does NOT normalize for landmark detection - keep pixel values in [0,255] range
-        /// </summary>
-        private DenseTensor<float> PreprocessLandmarkImage(Frame img)
-        {
-            // No normalization: pixelValue = pixelValue * 1.0 + 0.0
-            return FrameUtils.FrameToTensor(img, 1.0f, 0.0f);
-        }
-        
-        /// <summary>
-        /// OPTIMIZED: Landmark runner image preprocessing - matches Python exactly
-        /// Python: img_crop = img_crop / 255 = pixelValue * (1/255) + 0
-        /// </summary>
-        private DenseTensor<float> PreprocessLandmarkRunnerImage(Frame img)
-        {
-            // Normalize to [0,1]: pixelValue / 255 = pixelValue * 0.00392157 + 0
-            return FrameUtils.FrameToTensor(img, 0.00392157f, 0.0f);  // 1/255 = 0.00392157
-        }
-        
         private Vector2[] TransformLandmarksWithMatrix(Vector2[] landmarks, Matrix4x4 transform)
         {
             var result = new Vector2[landmarks.Length];
@@ -1852,9 +1694,6 @@ namespace MuseTalk.Core
             
             try
             {
-                _detFace?.Dispose();
-                _landmark2d106?.Dispose();
-                _landmarkRunner?.Dispose();
                 _appearanceFeatureExtractor?.Dispose();
                 _motionExtractor?.Dispose();
                 _stitching?.Dispose();
