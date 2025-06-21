@@ -2,12 +2,12 @@ using Microsoft.ML.OnnxRuntime;
 using Microsoft.ML.OnnxRuntime.Tensors;
 using System;
 using System.Collections.Generic;
-using System.IO;
 using System.Linq;
 using UnityEngine;
 
-namespace MuseTalk.Models
+namespace MuseTalk.Core
 {
+    using API;
     using Utils;
     
     /// <summary>

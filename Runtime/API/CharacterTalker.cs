@@ -2,10 +2,10 @@ using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using UnityEngine;
-using MuseTalk.Models;
 
-namespace MuseTalk
+namespace MuseTalk.API
 {
+    using Core;
     using Utils;
 
     /// <summary>

@@ -1,93 +1,117 @@
 using System;
 using System.Collections.Generic;
+using System.Runtime.InteropServices;
 using UnityEngine;
 
-namespace MuseTalk.Models
+namespace MuseTalk.Core
 {
-    using Utils;
-    
-    /// <summary>
-    /// Configuration for MuseTalk inference
-    /// </summary>
-    [Serializable]
-    public class MuseTalkConfig
+    public struct Frame
     {
-        public string ModelPath = "MuseTalk";
-        public string Version = "v15"; // only v15 is supported
-        public string Device = "cpu"; // "cpu" or "cuda"
-        public int BatchSize = 4;
-        public float ExtraMargin = 10f; // Additional margin for v15
-        public bool UseINT8 = true; // Enable INT8 quantization (CPU-optimized, default for Mac)
-        
-        // Disk caching configuration
-        public bool EnableDiskCache = true; // Enable persistent disk caching for avatar processing
-        public string CacheDirectory = ""; // Cache directory path (empty = auto-detect)
-        public int MaxCacheEntriesPerAvatar = 1000; // Maximum cache entries per avatar hash
-        public long MaxCacheSizeMB = 1024; // Maximum total cache size in MB (1GB default)
-        public int CacheVersionNumber = 1; // Cache version for invalidation on format changes
-        public bool CacheLatentsOnly = false; // Cache only latents (faster) vs full avatar data (slower but complete)
-        
-        public MuseTalkConfig()
+        public byte[] data;
+        public int width;
+        public int height;
+
+        public Frame(byte[] data, int width, int height)
         {
-        }
+            this.data = data;
+            this.width = width;
+            this.height = height;
+        }        
+    }
+
+    /// <summary>
+    /// RGB24 pixel struct for efficient 3-byte operations
+    /// </summary>
+    [StructLayout(LayoutKind.Sequential, Pack = 1)]
+    public struct RGB24 // Currently unused
+    {
+        public byte r;
+        public byte g;
+        public byte b;
         
-        public MuseTalkConfig(string modelPath, string version = "v15")
+        public RGB24(byte r, byte g, byte b)
         {
-            if (version != "v15")
-            {
-                throw new NotSupportedException("Only v15 is supported");
-            }
-            ModelPath = modelPath;
-            Version = version;
-        }
-        
-        /// <summary>
-        /// Create configuration optimized for performance with disk caching
-        /// </summary>
-        public static MuseTalkConfig CreateOptimized(string modelPath = "MuseTalk")
-        {
-            return new MuseTalkConfig(modelPath)
-            {
-                EnableDiskCache = true,
-                CacheLatentsOnly = false,
-                MaxCacheSizeMB = 2048,
-                UseINT8 = true
-            };
-        }
-        
-        /// <summary>
-        /// Create configuration for development/debugging with full texture caching
-        /// </summary>
-        public static MuseTalkConfig CreateForDevelopment(string modelPath = "MuseTalk")
-        {
-            return new MuseTalkConfig(modelPath)
-            {
-                EnableDiskCache = true,
-                CacheLatentsOnly = false, // Full texture caching for debugging
-                MaxCacheSizeMB = 512, // Smaller cache for development
-                UseINT8 = false // Full precision for better quality debugging
-            };
+            this.r = r;
+            this.g = g;
+            this.b = b;
         }
     }
-    
+
     /// <summary>
-    /// Input data for MuseTalk generation
+    /// Sampling mode for texture resizing
+    /// </summary>
+    public enum SamplingMode
+    {
+        /// <summary>
+        /// Bilinear interpolation - higher quality, slower (default for ML preprocessing)
+        /// </summary>
+        Bilinear,
+        /// <summary>
+        /// Point/Nearest neighbor sampling - faster, lower quality (good for face detection)
+        /// </summary>
+        Point
+    }
+
+    /// <summary>
+    /// Morphological operation type for consolidated morphology function
+    /// </summary>
+    public enum MorphologyOperation
+    {
+        /// <summary>
+        /// Dilation - expands bright regions (finds maximum in kernel neighborhood)
+        /// </summary>
+        Dilation,
+        /// <summary>
+        /// Erosion - shrinks bright regions (finds minimum in kernel neighborhood)
+        /// </summary>
+        Erosion
+    }
+
+    /// <summary>
+    /// Blur direction for consolidated blur pass function
+    /// </summary>
+    public enum BlurDirection
+    {
+        /// <summary>
+        /// Horizontal blur - samples along X axis
+        /// </summary>
+        Horizontal,
+        /// <summary>
+        /// Vertical blur - samples along Y axis
+        /// </summary>
+        Vertical
+    }
+
+    /// <summary>
+    /// Input for MuseTalk inference - simplified for streaming
     /// </summary>
     public class MuseTalkInput
     {
+        /// <summary>
+        /// Avatar images for talking head generation
+        /// </summary>
         public Texture2D[] AvatarTextures { get; set; }
+        
+        /// <summary>
+        /// Audio clip for lip sync
+        /// </summary>
         public AudioClip AudioClip { get; set; }
+        
+        /// <summary>
+        /// Batch size for processing
+        /// </summary>
         public int BatchSize { get; set; } = 4;
+        
+        public MuseTalkInput(Texture2D avatarTexture, AudioClip audioClip)
+        {
+            AvatarTextures = new[] { avatarTexture ?? throw new ArgumentNullException(nameof(avatarTexture)) };
+            AudioClip = audioClip ?? throw new ArgumentNullException(nameof(audioClip));
+        }
         
         public MuseTalkInput(Texture2D[] avatarTextures, AudioClip audioClip)
         {
             AvatarTextures = avatarTextures ?? throw new ArgumentNullException(nameof(avatarTextures));
             AudioClip = audioClip ?? throw new ArgumentNullException(nameof(audioClip));
-        }
-        
-        public MuseTalkInput(Texture2D avatarTexture, AudioClip audioClip) 
-            : this(new[] { avatarTexture }, audioClip)
-        {
         }
     }
     
@@ -183,5 +207,27 @@ namespace MuseTalk.Models
             Jaw,
             LowerHalf
         }
+    }
+
+    /// <summary>
+    /// Precomputed segmentation data for efficient frame blending
+    /// </summary>
+    public class SegmentationData
+    {
+        public Frame FaceLarge { get; set; }
+        
+        public Frame SegmentationMask { get; set; }
+        
+        public Vector4 AdjustedFaceBbox { get; set; }
+        public Vector4 CropBox { get; set; }
+        
+        // Precomputed masks for efficient blending
+        public Frame MaskSmall { get; set; }
+        
+        public Frame FullMask { get; set; }
+        
+        public Frame BoundaryMask { get; set; }
+        
+        public Frame BlurredMask { get; set; }
     }
 }

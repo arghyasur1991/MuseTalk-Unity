@@ -14,29 +14,6 @@ namespace MuseTalk.Core
 {
     using API;
     using Utils;
-    using Models;
-
-    /// <summary>
-    /// Precomputed segmentation data for efficient frame blending
-    /// </summary>
-    public class SegmentationData
-    {
-        public Frame FaceLarge { get; set; }
-        
-        public Frame SegmentationMask { get; set; }
-        
-        public Vector4 AdjustedFaceBbox { get; set; }
-        public Vector4 CropBox { get; set; }
-        
-        // Precomputed masks for efficient blending
-        public Frame MaskSmall { get; set; }
-        
-        public Frame FullMask { get; set; }
-        
-        public Frame BoundaryMask { get; set; }
-        
-        public Frame BlurredMask { get; set; }
-    }
 
     /// <summary>
     /// Avatar animation cache key based on texture content hashes
@@ -98,39 +75,6 @@ namespace MuseTalk.Core
         /// Yield instruction that waits until the *next* frame exists,
         /// then exposes it through the .Texture property.
         public FrameAwaiter WaitForNext() => new(queue);
-    }
-
-    /// <summary>
-    /// Input for MuseTalk inference - simplified for streaming
-    /// </summary>
-    public class MuseTalkInput
-    {
-        /// <summary>
-        /// Avatar images for talking head generation
-        /// </summary>
-        public Texture2D[] AvatarTextures { get; set; }
-        
-        /// <summary>
-        /// Audio clip for lip sync
-        /// </summary>
-        public AudioClip AudioClip { get; set; }
-        
-        /// <summary>
-        /// Batch size for processing
-        /// </summary>
-        public int BatchSize { get; set; } = 4;
-        
-        public MuseTalkInput(Texture2D avatarTexture, AudioClip audioClip)
-        {
-            AvatarTextures = new[] { avatarTexture ?? throw new ArgumentNullException(nameof(avatarTexture)) };
-            AudioClip = audioClip ?? throw new ArgumentNullException(nameof(audioClip));
-        }
-        
-        public MuseTalkInput(Texture2D[] avatarTextures, AudioClip audioClip)
-        {
-            AvatarTextures = avatarTextures ?? throw new ArgumentNullException(nameof(avatarTextures));
-            AudioClip = audioClip ?? throw new ArgumentNullException(nameof(audioClip));
-        }
     }
 
     /// <summary>
@@ -383,7 +327,6 @@ namespace MuseTalk.Core
             
             // OPTIMIZATION: Precompute all blending masks that are independent of faceTexture
             // These masks only depend on segmentation, face bbox, and crop box - all available now
-            
             
             // Step 1: Create mask_small by cropping BiSeNet mask to face bbox (matching Python)
             var maskSmall = ImageBlendingHelper.CreateSmallMask(segmentationMask, adjustedFaceBbox, cropRect);

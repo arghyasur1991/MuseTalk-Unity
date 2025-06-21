@@ -11,7 +11,6 @@ namespace MuseTalk.Core
 {
     using API;
     using Utils;
-    using Models;
 
     /// <summary>
     /// LivePortrait prediction state for frame-by-frame inference

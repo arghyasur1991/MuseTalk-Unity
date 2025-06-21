@@ -1,13 +1,10 @@
 using System;
-using System.Linq;
 using UnityEngine;
-using Microsoft.ML.OnnxRuntime.Tensors;
 using Unity.Collections.LowLevel.Unsafe;
-using System.Runtime.InteropServices;
 
 namespace MuseTalk.Utils
 {
-
+    using Core;
     /// <summary>
     /// Utility functions for texture processing in MuseTalk
     /// </summary>

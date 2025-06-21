@@ -8,7 +8,8 @@ using UnityEngine;
 
 namespace MuseTalk.Utils
 {
-    using Models;
+    using Core;
+    using API;
     /// <summary>
     /// Utility functions for ONNX model loading and configuration in MuseTalk
     /// </summary>

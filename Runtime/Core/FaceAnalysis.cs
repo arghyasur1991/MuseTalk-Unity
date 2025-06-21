@@ -7,7 +7,7 @@ using Microsoft.ML.OnnxRuntime.Tensors;
 
 namespace MuseTalk.Core
 {
-    using Models;
+    using API;
     using Utils;
 
     /// <summary>

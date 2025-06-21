@@ -3,87 +3,10 @@ using System.Linq;
 using UnityEngine;
 using Microsoft.ML.OnnxRuntime.Tensors;
 using Unity.Collections.LowLevel.Unsafe;
-using System.Runtime.InteropServices;
 
 namespace MuseTalk.Utils
 {
-    public struct Frame
-    {
-        public byte[] data;
-        public int width;
-        public int height;
-
-        public Frame(byte[] data, int width, int height)
-        {
-            this.data = data;
-            this.width = width;
-            this.height = height;
-        }        
-    }
-
-    /// <summary>
-    /// RGB24 pixel struct for efficient 3-byte operations
-    /// </summary>
-    [StructLayout(LayoutKind.Sequential, Pack = 1)]
-    public struct RGB24 // Currently unused
-    {
-        public byte r;
-        public byte g;
-        public byte b;
-        
-        public RGB24(byte r, byte g, byte b)
-        {
-            this.r = r;
-            this.g = g;
-            this.b = b;
-        }
-    }
-
-    /// <summary>
-    /// Sampling mode for texture resizing
-    /// </summary>
-    public enum SamplingMode
-    {
-        /// <summary>
-        /// Bilinear interpolation - higher quality, slower (default for ML preprocessing)
-        /// </summary>
-        Bilinear,
-        /// <summary>
-        /// Point/Nearest neighbor sampling - faster, lower quality (good for face detection)
-        /// </summary>
-        Point
-    }
-
-    /// <summary>
-    /// Morphological operation type for consolidated morphology function
-    /// </summary>
-    public enum MorphologyOperation
-    {
-        /// <summary>
-        /// Dilation - expands bright regions (finds maximum in kernel neighborhood)
-        /// </summary>
-        Dilation,
-        /// <summary>
-        /// Erosion - shrinks bright regions (finds minimum in kernel neighborhood)
-        /// </summary>
-        Erosion
-    }
-
-    /// <summary>
-    /// Blur direction for consolidated blur pass function
-    /// </summary>
-    public enum BlurDirection
-    {
-        /// <summary>
-        /// Horizontal blur - samples along X axis
-        /// </summary>
-        Horizontal,
-        /// <summary>
-        /// Vertical blur - samples along Y axis
-        /// </summary>
-        Vertical
-    }
-
+    using Core;
     /// <summary>
     /// Utility functions for frame operations
     /// </summary>

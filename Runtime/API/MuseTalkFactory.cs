@@ -1,13 +1,11 @@
 using System;
-using System.Collections;
 using System.Threading.Tasks;
 using UnityEngine;
 
-namespace MuseTalk
+namespace MuseTalk.API
 {
     using API;
     using Core;
-    using Models;
     using Utils;
 
     /// <summary>

@@ -3,6 +3,7 @@ using Unity.Collections.LowLevel.Unsafe;
 
 namespace MuseTalk.Utils
 {
+    using Core;
     /// <summary>
     /// Image blending helper that implements Python's get_image() functionality
     /// Provides seamless face composition with mask-based blending
