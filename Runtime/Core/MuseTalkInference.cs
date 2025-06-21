@@ -251,61 +251,6 @@ namespace LiveTalk.Core
             stream.Finished = true;
             Logger.Log($"[MuseTalkInference] === STREAMING GENERATION COMPLETED ===");
         }
-
-        /// <summary>
-        /// Generate talking head video frames from avatar images and audio (LEGACY)
-        /// For backward compatibility - returns all frames at once
-        /// </summary>
-        public async Task<MuseTalkResult> GenerateAsync(MuseTalkInput input)
-        {
-            if (!_initialized)
-                throw new InvalidOperationException("MuseTalk inference not initialized");
-                
-            if (input == null)
-                throw new ArgumentNullException(nameof(input));
-                       
-            try
-            {
-                Logger.Log($"[MuseTalkInference] === STARTING MUSETALK GENERATION ===");
-                Logger.Log($"[MuseTalkInference] Version: {_config.Version}, Batch Size: {input.BatchSize}");
-                Logger.Log($"[MuseTalkInference] Avatar Images: {input.AvatarTextures.Length}, Audio: {input.AudioClip.name} ({input.AudioClip.length:F2}s)");
-                
-                // Step 1: Process avatar images and extract face regions
-                Logger.Log("[MuseTalkInference] STAGE 1: Processing avatar images...");
-                var avatarData = await ProcessAvatarImages(input.AvatarTextures);
-                Logger.Log($"[MuseTalkInference] Stage 1 completed - Processed {avatarData.FaceRegions.Count} faces");
-                
-                // Step 2: Process audio and extract features
-                Logger.Log("[MuseTalkInference] STAGE 2: Processing audio...");
-                var audioFeatures = await ProcessAudio(input.AudioClip);
-                Logger.Log($"[MuseTalkInference] Stage 2 completed - Generated {audioFeatures.FeatureChunks.Count} audio chunks");
-                
-                // Step 3: Generate video frames
-                Logger.Log("[MuseTalkInference] STAGE 3: Generating video frames...");
-                var frames = await GenerateFrames(avatarData, audioFeatures, input.BatchSize);
-                Logger.Log($"[MuseTalkInference] Stage 3 completed - Generated {frames.Count} frames");
-                
-                var result = new MuseTalkResult
-                {
-                    Success = true,
-                    GeneratedFrames = frames,
-                    FrameCount = frames.Count,
-                };
-                
-                Logger.Log($"[MuseTalkInference] === GENERATION COMPLETED ===");
-                    
-                return result;
-            }
-            catch (Exception e)
-            {
-                Logger.LogError($"[MuseTalkInference] Generation failed: {e.Message}");
-                return new MuseTalkResult
-                {
-                    Success = false,
-                    ErrorMessage = e.Message
-                };
-            }
-        }
         
         /// <summary>
         /// Pre-compute segmentation data that can be cached and reused for all frames
