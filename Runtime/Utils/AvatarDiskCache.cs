@@ -7,7 +7,7 @@ using System.Threading.Tasks;
 using UnityEngine;
 using Newtonsoft.Json;
 
-namespace MuseTalk.Utils
+namespace LiveTalk.Utils
 {
     using Core;
     using API;
@@ -180,7 +180,7 @@ namespace MuseTalk.Utils
     {
         private static readonly DebugLogger Logger = new();
         
-        private readonly MuseTalkConfig _config;
+        private readonly LiveTalkConfig _config;
         private readonly string _cacheDirectory;
         private readonly string _metadataFilePath;
         private CacheMetadata _metadata;
@@ -192,7 +192,7 @@ namespace MuseTalk.Utils
         private const string CACHE_FILE_EXTENSION = ".avatarcache";
         private const string METADATA_FILE_NAME = "cache_metadata.json";
         
-        public AvatarDiskCache(MuseTalkConfig config)
+        public AvatarDiskCache(LiveTalkConfig config)
         {
             _config = config ?? throw new ArgumentNullException(nameof(config));
             

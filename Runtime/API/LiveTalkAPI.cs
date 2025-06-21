@@ -5,16 +5,16 @@ using System.Threading;
 using System.Threading.Tasks;
 using UnityEngine;
 
-namespace MuseTalk.API
+namespace LiveTalk.API
 {
     using Core;
     using Utils;
 
-    public sealed class AvatarVideoStream
+    public sealed class OutputStream
     {
         public int TotalExpectedFrames { get; set; }
 
-        public AvatarVideoStream(int totalExpectedFrames)
+        public OutputStream(int totalExpectedFrames)
         {
             TotalExpectedFrames = totalExpectedFrames;
         }
@@ -97,23 +97,23 @@ namespace MuseTalk.API
     /// 
     /// This matches the user's requested workflow exactly
     /// </summary>
-    public class AvatarAPI : IDisposable
+    public class LiveTalkAPI : IDisposable
     {
         private static readonly DebugLogger Logger = new();
         
         private LivePortraitInference _livePortrait;
         private MuseTalkInference _museTalk;
-        private MuseTalkConfig _config;
+        private LiveTalkConfig _config;
         private bool _initialized = false;
         private bool _disposed = false;
-        private readonly AvatarController _avatarController;
+        private readonly LiveTalkController _avatarController;
         
         public bool IsInitialized => _initialized;
         
         /// <summary>
         /// Initialize the integrated API with configuration
         /// </summary>
-        public AvatarAPI(MuseTalkConfig config, AvatarController avatarController)
+        public LiveTalkAPI(LiveTalkConfig config, LiveTalkController avatarController)
         {
             _config = config ?? throw new ArgumentNullException(nameof(config));
             _avatarController = avatarController ?? throw new ArgumentNullException(nameof(avatarController));
@@ -152,7 +152,7 @@ namespace MuseTalk.API
         /// <summary>
         /// Generate animated textures only using LivePortrait (SYNCHRONOUS) - List<Texture2D> overload
         /// </summary>
-        public AvatarVideoStream GenerateAnimatedTexturesAsync(Texture2D sourceImage, List<Texture2D> drivingFrames)
+        public OutputStream GenerateAnimatedTexturesAsync(Texture2D sourceImage, List<Texture2D> drivingFrames)
         {
             if (!_initialized)
                 throw new InvalidOperationException("API not initialized");
@@ -168,12 +168,12 @@ namespace MuseTalk.API
                 DrivingFrames = drivingFrames
             };
 
-            var stream = new AvatarVideoStream(drivingFrames.Count);
+            var stream = new OutputStream(drivingFrames.Count);
             _avatarController.StartCoroutine(_livePortrait.GenerateAsync(input, stream));
             return stream;
         }
 
-        public AvatarVideoStream GenerateAnimatedTexturesAsync(Texture2D sourceImage, string drivingFramesPath, int maxFrames = -1)
+        public OutputStream GenerateAnimatedTexturesAsync(Texture2D sourceImage, string drivingFramesPath, int maxFrames = -1)
         {
             if (!_initialized)
                 throw new InvalidOperationException("API not initialized");
@@ -190,7 +190,7 @@ namespace MuseTalk.API
 
             Logger.Log($"[LivePortraitMuseTalkAPI] Starting pipelined processing: {frameFiles.Length} driving frames");
             
-            var stream = new AvatarVideoStream(frameFiles.Length);
+            var stream = new OutputStream(frameFiles.Length);
             _avatarController.StartCoroutine(
                 _livePortrait.GenerateAsync(sourceImage, frameFiles, stream, _avatarController));
             return stream;
@@ -234,7 +234,7 @@ namespace MuseTalk.API
             }
         }
         
-        ~AvatarAPI()
+        ~LiveTalkAPI()
         {
             Dispose();
         }
@@ -248,28 +248,28 @@ namespace MuseTalk.API
         /// <summary>
         /// Create an instance of the integrated API with default configuration
         /// </summary>
-        public static AvatarAPI Create(AvatarController avatarController,string modelPath = "MuseTalk")
+        public static LiveTalkAPI Create(LiveTalkController avatarController,string modelPath = "MuseTalk")
         {
-            var config = new MuseTalkConfig(modelPath);
-            return new AvatarAPI(config, avatarController);
+            var config = new LiveTalkConfig(modelPath);
+            return new LiveTalkAPI(config, avatarController);
         }
         
         /// <summary>
         /// Create an instance optimized for performance
         /// </summary>
-        public static AvatarAPI CreateOptimized(AvatarController avatarController, string modelPath = "MuseTalk")
+        public static LiveTalkAPI CreateOptimized(LiveTalkController avatarController, string modelPath = "MuseTalk")
         {
-            var config = MuseTalkConfig.CreateOptimized(modelPath);
-            return new AvatarAPI(config, avatarController);
+            var config = LiveTalkConfig.CreateOptimized(modelPath);
+            return new LiveTalkAPI(config, avatarController);
         }
         
         /// <summary>
         /// Create an instance optimized for development/debugging
         /// </summary>
-        public static AvatarAPI CreateForDevelopment(AvatarController avatarController, string modelPath = "MuseTalk")
+        public static LiveTalkAPI CreateForDevelopment(LiveTalkController avatarController, string modelPath = "MuseTalk")
         {
-            var config = MuseTalkConfig.CreateForDevelopment(modelPath);
-            return new AvatarAPI(config, avatarController);
+            var config = LiveTalkConfig.CreateForDevelopment(modelPath);
+            return new LiveTalkAPI(config, avatarController);
         }
     }
 }

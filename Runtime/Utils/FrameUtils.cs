@@ -4,7 +4,7 @@ using UnityEngine;
 using Microsoft.ML.OnnxRuntime.Tensors;
 using Unity.Collections.LowLevel.Unsafe;
 
-namespace MuseTalk.Utils
+namespace LiveTalk.Utils
 {
     using Core;
     /// <summary>

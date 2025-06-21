@@ -5,7 +5,7 @@ using System.Collections.Generic;
 using System.Linq;
 using UnityEngine;
 
-namespace MuseTalk.Core
+namespace LiveTalk.Core
 {
     using API;
     using Utils;
@@ -65,7 +65,7 @@ namespace MuseTalk.Core
         /// <summary>
         /// Initialize Whisper model from StreamingAssets
         /// </summary>
-        public WhisperModel(MuseTalkConfig config)
+        public WhisperModel(LiveTalkConfig config)
         {
             _session = ModelUtils.LoadModel(config, "whisper_encoder");
             _isInitialized = true;

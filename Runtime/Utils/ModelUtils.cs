@@ -6,7 +6,7 @@ using Microsoft.ML.OnnxRuntime;
 using Microsoft.ML.OnnxRuntime.Tensors;
 using UnityEngine;
 
-namespace MuseTalk.Utils
+namespace LiveTalk.Utils
 {
     using Core;
     using API;
@@ -19,7 +19,7 @@ namespace MuseTalk.Utils
         /// Create optimized session options for ONNX Runtime
         /// OPTIMIZED: Enable all performance optimizations
         /// </summary>
-        private static SessionOptions CreateSessionOptions(MuseTalkConfig config)
+        private static SessionOptions CreateSessionOptions(LiveTalkConfig config)
         {
             var options = new SessionOptions
             {
@@ -77,7 +77,7 @@ namespace MuseTalk.Utils
             return options;
         }
 
-        public static InferenceSession LoadModel(MuseTalkConfig config, string modelName)
+        public static InferenceSession LoadModel(LiveTalkConfig config, string modelName)
         {
             string modelPath = GetModelPath(config, modelName);
             if (!File.Exists(modelPath))
@@ -119,7 +119,7 @@ namespace MuseTalk.Utils
         /// Get model file path with optimal quality/performance balance
         /// QUALITY OPTIMIZATION: Automatically use FP32 for VAE models to preserve image quality
         /// </summary>
-        public static string GetModelPath(MuseTalkConfig config, string baseName)
+        public static string GetModelPath(LiveTalkConfig config, string baseName)
         {
             // SPECIAL CASE: Models that don't use version suffix
             bool isVersionIndependent = baseName.Contains("whisper_encoder") || 
@@ -176,7 +176,7 @@ namespace MuseTalk.Utils
         /// Load mask template texture from Resources or StreamingAssets
         /// Matches Python: mask_crop = cv2.imread('mask_template.png')
         /// </summary>
-        public static Frame LoadMaskTemplate(MuseTalkConfig config)
+        public static Frame LoadMaskTemplate(LiveTalkConfig config)
         {
             try
             {

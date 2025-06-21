@@ -1,12 +1,12 @@
 using System;
 
-namespace MuseTalk.API
+namespace LiveTalk.API
 {
     /// <summary>
     /// Configuration for MuseTalk inference
     /// </summary>
     [Serializable]
-    public class MuseTalkConfig
+    public class LiveTalkConfig
     {
         public string ModelPath = "MuseTalk";
         public string Version = "v15"; // only v15 is supported
@@ -23,11 +23,11 @@ namespace MuseTalk.API
         public int CacheVersionNumber = 1; // Cache version for invalidation on format changes
         public bool CacheLatentsOnly = false; // Cache only latents (faster) vs full avatar data (slower but complete)
         
-        public MuseTalkConfig()
+        public LiveTalkConfig()
         {
         }
         
-        public MuseTalkConfig(string modelPath, string version = "v15")
+        public LiveTalkConfig(string modelPath, string version = "v15")
         {
             if (version != "v15")
             {
@@ -40,9 +40,9 @@ namespace MuseTalk.API
         /// <summary>
         /// Create configuration optimized for performance with disk caching
         /// </summary>
-        public static MuseTalkConfig CreateOptimized(string modelPath = "MuseTalk")
+        public static LiveTalkConfig CreateOptimized(string modelPath = "MuseTalk")
         {
-            return new MuseTalkConfig(modelPath)
+            return new LiveTalkConfig(modelPath)
             {
                 EnableDiskCache = true,
                 CacheLatentsOnly = false,
@@ -54,9 +54,9 @@ namespace MuseTalk.API
         /// <summary>
         /// Create configuration for development/debugging with full texture caching
         /// </summary>
-        public static MuseTalkConfig CreateForDevelopment(string modelPath = "MuseTalk")
+        public static LiveTalkConfig CreateForDevelopment(string modelPath = "MuseTalk")
         {
-            return new MuseTalkConfig(modelPath)
+            return new LiveTalkConfig(modelPath)
             {
                 EnableDiskCache = true,
                 CacheLatentsOnly = false, // Full texture caching for debugging

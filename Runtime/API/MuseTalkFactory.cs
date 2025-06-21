@@ -2,7 +2,7 @@ using System;
 using System.Threading.Tasks;
 using UnityEngine;
 
-namespace MuseTalk.API
+namespace LiveTalk.API
 {
     using API;
     using Core;
@@ -36,7 +36,7 @@ namespace MuseTalk.API
         }
         
         private MuseTalkInference _museTalk;
-        private readonly AvatarController _avatarController;
+        private readonly LiveTalkController _avatarController;
         private bool _disposed = false;
         private bool _initialized = false;
         
@@ -53,7 +53,7 @@ namespace MuseTalk.API
         /// <summary>
         /// Initializes a new instance of the MuseTalkFactory with avatar controller for streaming
         /// </summary>
-        public MuseTalkFactory(AvatarController avatarController)
+        public MuseTalkFactory(LiveTalkController avatarController)
         {
             _avatarController = avatarController;
         }
@@ -61,14 +61,14 @@ namespace MuseTalk.API
         /// <summary>
         /// Initialize MuseTalk with specified configuration
         /// </summary>
-        public bool Initialize(MuseTalkConfig config = null)
+        public bool Initialize(LiveTalkConfig config = null)
         {
             if (_initialized)
                 return true;
                 
             try
             {
-                config ??= new MuseTalkConfig(); // Use default config if none provided
+                config ??= new LiveTalkConfig(); // Use default config if none provided
                 _museTalk = new MuseTalkInference(config);
                 _initialized = _museTalk.IsInitialized;
                 
@@ -425,10 +425,10 @@ namespace MuseTalk.API
         /// <summary>
         /// Create an instance of MuseTalk factory with default configuration
         /// </summary>
-        public static MuseTalkFactory Create(AvatarController avatarController, string modelPath = "MuseTalk")
+        public static MuseTalkFactory Create(LiveTalkController avatarController, string modelPath = "MuseTalk")
         {
             var factory = new MuseTalkFactory(avatarController);
-            var config = new MuseTalkConfig(modelPath);
+            var config = new LiveTalkConfig(modelPath);
             factory.Initialize(config);
             return factory;
         }
@@ -436,10 +436,10 @@ namespace MuseTalk.API
         /// <summary>
         /// Create an instance optimized for performance
         /// </summary>
-        public static MuseTalkFactory CreateOptimized(AvatarController avatarController, string modelPath = "MuseTalk")
+        public static MuseTalkFactory CreateOptimized(LiveTalkController avatarController, string modelPath = "MuseTalk")
         {
             var factory = new MuseTalkFactory(avatarController);
-            var config = MuseTalkConfig.CreateOptimized(modelPath);
+            var config = LiveTalkConfig.CreateOptimized(modelPath);
             factory.Initialize(config);
             return factory;
         }
@@ -447,10 +447,10 @@ namespace MuseTalk.API
         /// <summary>
         /// Create an instance optimized for development/debugging
         /// </summary>
-        public static MuseTalkFactory CreateForDevelopment(AvatarController avatarController, string modelPath = "MuseTalk")
+        public static MuseTalkFactory CreateForDevelopment(LiveTalkController avatarController, string modelPath = "MuseTalk")
         {
             var factory = new MuseTalkFactory(avatarController);
-            var config = MuseTalkConfig.CreateForDevelopment(modelPath);
+            var config = LiveTalkConfig.CreateForDevelopment(modelPath);
             factory.Initialize(config);
             return factory;
         }
@@ -461,7 +461,7 @@ namespace MuseTalk.API
         public static MuseTalkFactory CreateLegacy(string modelPath = "MuseTalk")
         {
             var factory = new MuseTalkFactory();
-            var config = new MuseTalkConfig(modelPath);
+            var config = new LiveTalkConfig(modelPath);
             factory.Initialize(config);
             return factory;
         }

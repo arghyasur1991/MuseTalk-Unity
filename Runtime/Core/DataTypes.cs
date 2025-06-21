@@ -4,7 +4,7 @@ using System.Runtime.InteropServices;
 using Microsoft.ML.OnnxRuntime.Tensors;
 using UnityEngine;
 
-namespace MuseTalk.Core
+namespace LiveTalk.Core
 {
     public struct Frame
     {

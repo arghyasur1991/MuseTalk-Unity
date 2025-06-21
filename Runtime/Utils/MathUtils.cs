@@ -1,6 +1,6 @@
 using System;
 using UnityEngine;
-namespace MuseTalk.Utils
+namespace LiveTalk.Utils
 {
     public static class MathUtils
     {        

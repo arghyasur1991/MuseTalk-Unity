@@ -7,7 +7,7 @@ using UnityEngine;
 using Microsoft.ML.OnnxRuntime;
 using Microsoft.ML.OnnxRuntime.Tensors;
 
-namespace MuseTalk.Core
+namespace LiveTalk.Core
 {
     using API;
     using Utils;
@@ -52,7 +52,7 @@ namespace MuseTalk.Core
         private Texture2D _debugImage = null;
         
         // Configuration
-        private MuseTalkConfig _config;
+        private LiveTalkConfig _config;
         private bool _initialized = false;
         private bool _disposed = false;
         
@@ -64,7 +64,7 @@ namespace MuseTalk.Core
         
         public bool IsInitialized => _initialized;
         
-        public LivePortraitInference(MuseTalkConfig config)
+        public LivePortraitInference(LiveTalkConfig config)
         {
             _config = config ?? throw new ArgumentNullException(nameof(config));
             
@@ -164,7 +164,7 @@ namespace MuseTalk.Core
         /// Generate talking head animation - matches Python LivePortraitWrapper.execute
         /// MAIN THREAD ONLY for correctness
         /// </summary>
-        public IEnumerator GenerateAsync(LivePortraitInput input, AvatarVideoStream stream)
+        public IEnumerator GenerateAsync(LivePortraitInput input, OutputStream stream)
         {
             if (!_initialized)
                 throw new InvalidOperationException("LivePortrait inference not initialized");
@@ -212,7 +212,7 @@ namespace MuseTalk.Core
         /// </summary>
         public IEnumerator GenerateAsync(
             Texture2D sourceImage, string[] frameFiles, 
-            AvatarVideoStream outputStream, AvatarController avatarController)
+            OutputStream outputStream, LiveTalkController avatarController)
         {
             // Step 1: Start source image processing immediately (async)
             var srcImg = TextureUtils.Texture2DToFrame(sourceImage);

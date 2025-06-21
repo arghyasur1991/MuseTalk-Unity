@@ -2,7 +2,7 @@ using System;
 using UnityEngine;
 using Unity.Collections.LowLevel.Unsafe;
 
-namespace MuseTalk.Utils
+namespace LiveTalk.Utils
 {
     using Core;
     /// <summary>

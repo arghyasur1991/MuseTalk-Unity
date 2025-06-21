@@ -3,7 +3,7 @@ using System;
 using UnityEngine;
 using System.Linq;
 
-namespace MuseTalk.Utils
+namespace LiveTalk.Utils
 {
     public static class FileUtils
     {

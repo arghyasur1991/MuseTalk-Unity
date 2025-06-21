@@ -1,7 +1,7 @@
 using System;
 using UnityEngine;
 
-namespace MuseTalk.Utils
+namespace LiveTalk.Utils
 {
     /// <summary>
     /// Utility functions for audio processing in MuseTalk

@@ -2,7 +2,7 @@ using System;
 using System.IO;
 using UnityEngine;
 
-namespace MuseTalk.Utils
+namespace LiveTalk.Utils
 {
     /// <summary>
     /// Enhanced debug logger with file dumping capabilities

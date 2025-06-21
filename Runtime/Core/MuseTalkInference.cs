@@ -10,7 +10,7 @@ using UnityEngine;
 using Microsoft.ML.OnnxRuntime;
 using Microsoft.ML.OnnxRuntime.Tensors;
 
-namespace MuseTalk.Core
+namespace LiveTalk.Core
 {
     using API;
     using Utils;
@@ -101,7 +101,7 @@ namespace MuseTalk.Core
         private readonly WhisperModel _whisperModel;
         
         // Configuration
-        private MuseTalkConfig _config;
+        private LiveTalkConfig _config;
         private readonly bool _initialized = false;
         private bool _disposed = false;
         
@@ -155,7 +155,7 @@ namespace MuseTalk.Core
         /// <summary>
         /// Initialize MuseTalk inference with specified configuration
         /// </summary>
-        public MuseTalkInference(MuseTalkConfig config)
+        public MuseTalkInference(LiveTalkConfig config)
         {
             _config = config ?? throw new ArgumentNullException(nameof(config));
             

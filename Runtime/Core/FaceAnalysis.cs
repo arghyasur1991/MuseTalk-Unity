@@ -5,7 +5,7 @@ using UnityEngine;
 using Microsoft.ML.OnnxRuntime;
 using Microsoft.ML.OnnxRuntime.Tensors;
 
-namespace MuseTalk.Core
+namespace LiveTalk.Core
 {
     using API;
     using Utils;
@@ -87,7 +87,7 @@ namespace MuseTalk.Core
         private readonly InferenceSession _faceParsingSession; // Face parsing/segmentation model
         
         // Configuration
-        private readonly MuseTalkConfig _config;
+        private readonly LiveTalkConfig _config;
         private bool _disposed = false;
         
         // Detection parameters - matching Python implementation exactly
@@ -106,7 +106,7 @@ namespace MuseTalk.Core
         
         public bool IsInitialized { get; private set; }
         
-        public FaceAnalysis(MuseTalkConfig config)
+        public FaceAnalysis(LiveTalkConfig config)
         {
             _config = config ?? throw new ArgumentNullException(nameof(config));
             
