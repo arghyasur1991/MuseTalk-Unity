@@ -1,15 +1,18 @@
 using System;
+using System.Collections;
 using System.Threading.Tasks;
 using UnityEngine;
 
 namespace MuseTalk
 {
+    using API;
     using Core;
     using Models;
     using Utils;
 
     /// <summary>
     /// Factory class for creating MuseTalk instances for talking head generation
+    /// Enhanced with streaming capabilities similar to LivePortrait
     /// </summary>
     public class MuseTalkFactory : IDisposable
     {
@@ -35,6 +38,7 @@ namespace MuseTalk
         }
         
         private MuseTalkInference _museTalk;
+        private readonly AvatarController _avatarController;
         private bool _disposed = false;
         private bool _initialized = false;
         
@@ -46,6 +50,14 @@ namespace MuseTalk
         public MuseTalkFactory()
         {
             // Default initialization - models will be loaded when first needed
+        }
+
+        /// <summary>
+        /// Initializes a new instance of the MuseTalkFactory with avatar controller for streaming
+        /// </summary>
+        public MuseTalkFactory(AvatarController avatarController)
+        {
+            _avatarController = avatarController;
         }
         
         /// <summary>
@@ -110,7 +122,7 @@ namespace MuseTalk
             
             try
             {
-                var input = new MuseTalkInput(avatarTexture, audioClip)
+                var input = new Core.MuseTalkInput(avatarTexture, audioClip)
                 {
                     BatchSize = batchSize
                 };
@@ -157,7 +169,7 @@ namespace MuseTalk
             
             try
             {
-                var input = new MuseTalkInput(avatarTextures, audioClip)
+                var input = new Core.MuseTalkInput(avatarTextures, audioClip)
                 {
                     BatchSize = batchSize
                 };
@@ -176,11 +188,105 @@ namespace MuseTalk
         }
         
         /// <summary>
-        /// Generate talking head video with custom input configuration
+        /// Generate talking head video with streaming output (NEW STREAMING API)
+        /// Similar to LivePortrait's streaming approach - yields frames as they're generated
+        /// </summary>
+        /// <param name="avatarTexture">Avatar image texture</param>
+        /// <param name="audioClip">Speech audio clip</param>
+        /// <param name="batchSize">Processing batch size (default: 4)</param>
+        /// <returns>MuseTalkStream for receiving frames as they're generated</returns>
+        public MuseTalkStream GenerateStreamingAsync(Texture2D avatarTexture, AudioClip audioClip, int batchSize = 4)
+        {
+            if (!_initialized)
+                throw new InvalidOperationException("Factory is not initialized. Call Initialize() first.");
+                
+            if (_avatarController == null)
+                throw new InvalidOperationException("Avatar controller is required for streaming operations. Use constructor with AvatarController parameter.");
+                
+            if (avatarTexture == null || audioClip == null)
+                throw new ArgumentException("Avatar texture and audio clip are required");
+                
+            Logger.Log($"[MuseTalkFactory] Starting streaming generation: {audioClip.name} ({audioClip.length:F2}s)");
+            
+            var input = new Core.MuseTalkInput(avatarTexture, audioClip)
+            {
+                BatchSize = batchSize
+            };
+            
+            // Estimate frame count based on audio length (approximation)
+            int estimatedFrames = Mathf.CeilToInt(audioClip.length * 25f); // ~25 FPS estimate
+            var stream = new MuseTalkStream(estimatedFrames);
+            
+            _avatarController.StartCoroutine(_museTalk.GenerateAsync(input, stream));
+            return stream;
+        }
+
+        /// <summary>
+        /// Generate talking head video with multiple avatar images (STREAMING)
+        /// </summary>
+        /// <param name="avatarTextures">Array of avatar image textures</param>
+        /// <param name="audioClip">Speech audio clip</param>
+        /// <param name="batchSize">Processing batch size (default: 4)</param>
+        /// <returns>MuseTalkStream for receiving frames as they're generated</returns>
+        public MuseTalkStream GenerateStreamingAsync(Texture2D[] avatarTextures, AudioClip audioClip, int batchSize = 4)
+        {
+            if (!_initialized)
+                throw new InvalidOperationException("Factory is not initialized. Call Initialize() first.");
+                
+            if (_avatarController == null)
+                throw new InvalidOperationException("Avatar controller is required for streaming operations. Use constructor with AvatarController parameter.");
+                
+            if (avatarTextures == null || avatarTextures.Length == 0 || audioClip == null)
+                throw new ArgumentException("Avatar textures and audio clip are required");
+                
+            Logger.Log($"[MuseTalkFactory] Starting streaming generation: {avatarTextures.Length} avatars, {audioClip.name} ({audioClip.length:F2}s)");
+            
+            var input = new Core.MuseTalkInput(avatarTextures, audioClip)
+            {
+                BatchSize = batchSize
+            };
+            
+            // Estimate frame count based on audio length (approximation)
+            int estimatedFrames = Mathf.CeilToInt(audioClip.length * 25f); // ~25 FPS estimate
+            var stream = new MuseTalkStream(estimatedFrames);
+            
+            _avatarController.StartCoroutine(_museTalk.GenerateAsync(input, stream));
+            return stream;
+        }
+
+        /// <summary>
+        /// Generate talking head video with custom input configuration (STREAMING)
+        /// </summary>
+        /// <param name="input">Complete MuseTalk input configuration</param>
+        /// <returns>MuseTalkStream for receiving frames as they're generated</returns>
+        public MuseTalkStream GenerateStreamingAsync(Core.MuseTalkInput input)
+        {
+            if (!_initialized)
+                throw new InvalidOperationException("Factory is not initialized. Call Initialize() first.");
+                
+            if (_avatarController == null)
+                throw new InvalidOperationException("Avatar controller is required for streaming operations. Use constructor with AvatarController parameter.");
+                
+            if (input == null)
+                throw new ArgumentException("Input configuration is required");
+                
+            Logger.Log($"[MuseTalkFactory] Starting streaming generation: {input.AvatarTextures.Length} avatars, {input.AudioClip.name} ({input.AudioClip.length:F2}s)");
+            
+            // Estimate frame count based on audio length (approximation)
+            int estimatedFrames = Mathf.CeilToInt(input.AudioClip.length * 25f); // ~25 FPS estimate
+            var stream = new MuseTalkStream(estimatedFrames);
+            
+            _avatarController.StartCoroutine(_museTalk.GenerateAsync(input, stream));
+            return stream;
+        }
+
+        /// <summary>
+        /// Generate talking head video with custom input configuration (LEGACY)
+        /// For backward compatibility - returns all frames at once
         /// </summary>
         /// <param name="input">Complete MuseTalk input configuration</param>
         /// <returns>MuseTalkResult containing generated frames</returns>
-        public async Task<MuseTalkResult> GenerateAsync(MuseTalkInput input)
+        public async Task<MuseTalkResult> GenerateAsync(Core.MuseTalkInput input)
         {
             if (!_initialized)
             {
@@ -248,6 +354,30 @@ namespace MuseTalk
         }
         
         /// <summary>
+        /// Get cache information for debugging and monitoring (similar to LivePortrait)
+        /// </summary>
+        public string GetCacheInfo()
+        {
+            if (!_initialized) return "Factory not initialized";
+            
+            return _museTalk?.GetCacheInfo() ?? "MuseTalk: No cache info";
+        }
+        
+        /// <summary>
+        /// Clear all caches to free memory (similar to LivePortrait)
+        /// </summary>
+        public async Task ClearCachesAsync()
+        {
+            if (_museTalk != null)
+            {
+                await _museTalk.ClearDiskCacheAsync();
+                MuseTalkInference.ClearAvatarAnimationCache();
+            }
+            
+            Logger.Log("[MuseTalkFactory] Cleared all caches");
+        }
+        
+        /// <summary>
         /// Get information about the current MuseTalk configuration
         /// </summary>
         public string GetInfo()
@@ -255,13 +385,18 @@ namespace MuseTalk
             if (!_initialized)
                 return "MuseTalkFactory: Not initialized";
                 
-            return $"MuseTalkFactory: Initialized, LogTiming={LogTiming}, EnableLogging={EnableLogging}, EnableFileDebug={EnableFileDebug}";
+            return $"MuseTalkFactory: Initialized, LogTiming={LogTiming}, EnableLogging={EnableLogging}, EnableFileDebug={EnableFileDebug}, HasAvatarController={_avatarController != null}";
         }
         
         /// <summary>
         /// Check if the factory is ready for generation
         /// </summary>
         public bool IsReady => _initialized && !_disposed;
+
+        /// <summary>
+        /// Check if streaming operations are supported
+        /// </summary>
+        public bool SupportsStreaming => _initialized && !_disposed && _avatarController != null;
         
         public void Dispose()
         {
@@ -281,6 +416,56 @@ namespace MuseTalk
         ~MuseTalkFactory()
         {
             Dispose();
+        }
+    }
+
+    /// <summary>
+    /// Factory for creating MuseTalkFactory instances (similar to LivePortraitMuseTalkFactory)
+    /// </summary>
+    public static class MuseTalkFactoryBuilder
+    {
+        /// <summary>
+        /// Create an instance of MuseTalk factory with default configuration
+        /// </summary>
+        public static MuseTalkFactory Create(AvatarController avatarController, string modelPath = "MuseTalk")
+        {
+            var factory = new MuseTalkFactory(avatarController);
+            var config = new MuseTalkConfig(modelPath);
+            factory.Initialize(config);
+            return factory;
+        }
+        
+        /// <summary>
+        /// Create an instance optimized for performance
+        /// </summary>
+        public static MuseTalkFactory CreateOptimized(AvatarController avatarController, string modelPath = "MuseTalk")
+        {
+            var factory = new MuseTalkFactory(avatarController);
+            var config = MuseTalkConfig.CreateOptimized(modelPath);
+            factory.Initialize(config);
+            return factory;
+        }
+        
+        /// <summary>
+        /// Create an instance optimized for development/debugging
+        /// </summary>
+        public static MuseTalkFactory CreateForDevelopment(AvatarController avatarController, string modelPath = "MuseTalk")
+        {
+            var factory = new MuseTalkFactory(avatarController);
+            var config = MuseTalkConfig.CreateForDevelopment(modelPath);
+            factory.Initialize(config);
+            return factory;
+        }
+
+        /// <summary>
+        /// Create legacy instance without streaming support (backward compatibility)
+        /// </summary>
+        public static MuseTalkFactory CreateLegacy(string modelPath = "MuseTalk")
+        {
+            var factory = new MuseTalkFactory();
+            var config = new MuseTalkConfig(modelPath);
+            factory.Initialize(config);
+            return factory;
         }
     }
 } 

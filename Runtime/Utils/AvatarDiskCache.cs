@@ -119,6 +119,16 @@ namespace MuseTalk.Utils
         public int OriginalHeight { get; set; }
         public int FaceLargeWidth { get; set; }
         public int FaceLargeHeight { get; set; }
+        public int SegmentationMaskWidth { get; set; }
+        public int SegmentationMaskHeight { get; set; }
+        public int MaskSmallWidth { get; set; }
+        public int MaskSmallHeight { get; set; }
+        public int FullMaskWidth { get; set; }
+        public int FullMaskHeight { get; set; }
+        public int BoundaryMaskWidth { get; set; }
+        public int BoundaryMaskHeight { get; set; }
+        public int BlurredMaskWidth { get; set; }
+        public int BlurredMaskHeight { get; set; }
     }
 
     /// <summary>
@@ -184,9 +194,6 @@ namespace MuseTalk.Utils
         public AvatarDiskCache(MuseTalkConfig config)
         {
             _config = config ?? throw new ArgumentNullException(nameof(config));
-            
-            // Ensure MainThreadDispatcher is available for texture operations
-            _ = MainThreadDispatcher.Instance;
             
             // Determine cache directory
             if (string.IsNullOrEmpty(config.CacheDirectory))
@@ -360,7 +367,7 @@ namespace MuseTalk.Utils
                 
                 // Convert back to AvatarData
                 var start = Stopwatch.StartNew();
-                var avatarData = await DeserializeAvatarDataAsync(serializableData);
+                var avatarData = DeserializeAvatarData(serializableData);
 
                 var elapsed = start.Elapsed;
                 Logger.Log($"[AvatarDiskCache] Loaded avatar data from cache: in {elapsed.TotalMilliseconds}ms");
@@ -396,7 +403,7 @@ namespace MuseTalk.Utils
                 var filePath = Path.Combine(_cacheDirectory, fileName);
                 
                 // Serialize avatar data
-                var serializableData = await SerializeAvatarDataAsync(avatarData, cacheKey);
+                var serializableData = SerializeAvatarData(avatarData, cacheKey);
                 var jsonData = JsonConvert.SerializeObject(serializableData, Formatting.Indented);
                 
                 // Write to disk
@@ -447,9 +454,8 @@ namespace MuseTalk.Utils
         
         /// <summary>
         /// Serialize avatar data for disk storage
-        /// Uses MainThreadDispatcher to handle Unity texture operations safely
         /// </summary>
-        private async Task<SerializableAvatarData> SerializeAvatarDataAsync(AvatarData avatarData, string cacheKey)
+        private SerializableAvatarData SerializeAvatarData(AvatarData avatarData, string cacheKey)
         {
             var serializableData = new SerializableAvatarData
             {
@@ -473,73 +479,61 @@ namespace MuseTalk.Utils
                             CropBox = new SerializableVector4(faceData.CropBox)
                         };
                     
-                    // Convert textures to PNG byte data using MainThreadDispatcher
-                    if (faceData.CroppedFaceTexture != null)
+                    // Convert byte arrays to base64 strings (no conversion needed since FaceData already has byte arrays)
+                    if (faceData.CroppedFaceTexture.data != null)
                     {
-                        var pngData = await MainThreadDispatcher.EncodeToPNGAsync(faceData.CroppedFaceTexture);
-                        if (pngData != null)
-                        {
-                            serializableFace.CroppedFaceTextureData = Convert.ToBase64String(pngData);
-                            serializableFace.CroppedFaceWidth = faceData.CroppedFaceTexture.width;
-                            serializableFace.CroppedFaceHeight = faceData.CroppedFaceTexture.height;
-                        }
+                        serializableFace.CroppedFaceTextureData = Convert.ToBase64String(faceData.CroppedFaceTexture.data);
+                        serializableFace.CroppedFaceWidth = faceData.CroppedFaceTexture.width;
+                        serializableFace.CroppedFaceHeight = faceData.CroppedFaceTexture.height;
                     }
                     
-                    if (faceData.OriginalTexture != null)
+                    if (faceData.OriginalTexture.data != null)
                     {
-                        var pngData = await MainThreadDispatcher.EncodeToPNGAsync(faceData.OriginalTexture);
-                        if (pngData != null)
-                        {
-                            serializableFace.OriginalTextureData = Convert.ToBase64String(pngData);
-                            serializableFace.OriginalWidth = faceData.OriginalTexture.width;
-                            serializableFace.OriginalHeight = faceData.OriginalTexture.height;
-                        }
+                        serializableFace.OriginalTextureData = Convert.ToBase64String(faceData.OriginalTexture.data);
+                        serializableFace.OriginalWidth = faceData.OriginalTexture.width;
+                        serializableFace.OriginalHeight = faceData.OriginalTexture.height;
                     }
                     
-                    if (faceData.FaceLarge != null)
+                    if (faceData.FaceLarge.data != null)
                     {
-                        var pngData = await MainThreadDispatcher.EncodeToPNGAsync(faceData.FaceLarge);
-                        if (pngData != null)
-                        {
-                            serializableFace.FaceLargeData = Convert.ToBase64String(pngData);
-                            serializableFace.FaceLargeWidth = faceData.FaceLarge.width;
-                            serializableFace.FaceLargeHeight = faceData.FaceLarge.height;
-                        }
+                        serializableFace.FaceLargeData = Convert.ToBase64String(faceData.FaceLarge.data);
+                        serializableFace.FaceLargeWidth = faceData.FaceLarge.width;
+                        serializableFace.FaceLargeHeight = faceData.FaceLarge.height;
                     }
                     
-                    if (faceData.SegmentationMask != null)
+                    if (faceData.SegmentationMask.data != null)
                     {
-                        var pngData = await MainThreadDispatcher.EncodeToPNGAsync(faceData.SegmentationMask);
-                        if (pngData != null)
-                            serializableFace.SegmentationMaskData = Convert.ToBase64String(pngData);
+                        serializableFace.SegmentationMaskData = Convert.ToBase64String(faceData.SegmentationMask.data);
+                        serializableFace.SegmentationMaskWidth = faceData.SegmentationMask.width;
+                        serializableFace.SegmentationMaskHeight = faceData.SegmentationMask.height;
                     }
                     
-                    if (faceData.MaskSmall != null)
+                    if (faceData.MaskSmall.data != null)
                     {
-                        var pngData = await MainThreadDispatcher.EncodeToPNGAsync(faceData.MaskSmall);
-                        if (pngData != null)
-                            serializableFace.MaskSmallData = Convert.ToBase64String(pngData);
+                        serializableFace.MaskSmallData = Convert.ToBase64String(faceData.MaskSmall.data);
+                        serializableFace.MaskSmallWidth = faceData.MaskSmall.width;
+                        serializableFace.MaskSmallHeight = faceData.MaskSmall.height;
                     }
                     
-                    if (faceData.FullMask != null)
+                    if (faceData.FullMask.data != null)
                     {
-                        var pngData = await MainThreadDispatcher.EncodeToPNGAsync(faceData.FullMask);
-                        if (pngData != null)
-                            serializableFace.FullMaskData = Convert.ToBase64String(pngData);
+                        serializableFace.FullMaskData = Convert.ToBase64String(faceData.FullMask.data);
+                        serializableFace.FullMaskWidth = faceData.FullMask.width;
+                        serializableFace.FullMaskHeight = faceData.FullMask.height;
                     }
                     
-                    if (faceData.BoundaryMask != null)
+                    if (faceData.BoundaryMask.data != null)
                     {
-                        var pngData = await MainThreadDispatcher.EncodeToPNGAsync(faceData.BoundaryMask);
-                        if (pngData != null)
-                            serializableFace.BoundaryMaskData = Convert.ToBase64String(pngData);
+                        serializableFace.BoundaryMaskData = Convert.ToBase64String(faceData.BoundaryMask.data);
+                        serializableFace.BoundaryMaskWidth = faceData.BoundaryMask.width;
+                        serializableFace.BoundaryMaskHeight = faceData.BoundaryMask.height;
                     }
                     
-                    if (faceData.BlurredMask != null)
+                    if (faceData.BlurredMask.data != null)
                     {
-                        var pngData = await MainThreadDispatcher.EncodeToPNGAsync(faceData.BlurredMask);
-                        if (pngData != null)
-                            serializableFace.BlurredMaskData = Convert.ToBase64String(pngData);
+                        serializableFace.BlurredMaskData = Convert.ToBase64String(faceData.BlurredMask.data);
+                        serializableFace.BlurredMaskWidth = faceData.BlurredMask.width;
+                        serializableFace.BlurredMaskHeight = faceData.BlurredMask.height;
                     }
                     
                     serializableData.FaceRegions.Add(serializableFace);
@@ -551,9 +545,8 @@ namespace MuseTalk.Utils
         
         /// <summary>
         /// Deserialize avatar data from disk storage
-        /// Uses MainThreadDispatcher to handle Unity texture operations safely
         /// </summary>
-        private async Task<AvatarData> DeserializeAvatarDataAsync(SerializableAvatarData serializableData)
+        private AvatarData DeserializeAvatarData(SerializableAvatarData serializableData)
         {
             var avatarData = new AvatarData
             {
@@ -572,15 +565,22 @@ namespace MuseTalk.Utils
                         Landmarks = serializableFace.Landmarks?.Select(v => v.ToVector2()).ToArray(),
                         AdjustedFaceBbox = serializableFace.AdjustedFaceBbox?.ToVector4() ?? default(Vector4),
                         CropBox = serializableFace.CropBox?.ToVector4() ?? default(Vector4),
-                        // Convert PNG byte data back to textures using MainThreadDispatcher
-                        CroppedFaceTexture = await MainThreadDispatcher.LoadImageAsync(serializableFace.CroppedFaceTextureData, serializableFace.CroppedFaceWidth, serializableFace.CroppedFaceHeight),
-                        OriginalTexture = await MainThreadDispatcher.LoadImageAsync(serializableFace.OriginalTextureData, serializableFace.OriginalWidth, serializableFace.OriginalHeight),
-                        FaceLarge = await MainThreadDispatcher.LoadImageAsync(serializableFace.FaceLargeData, serializableFace.FaceLargeWidth, serializableFace.FaceLargeHeight),
-                        SegmentationMask = await MainThreadDispatcher.LoadImageAsync(serializableFace.SegmentationMaskData), // Will be resized by LoadImage
-                        MaskSmall = await MainThreadDispatcher.LoadImageAsync(serializableFace.MaskSmallData),
-                        FullMask = await MainThreadDispatcher.LoadImageAsync(serializableFace.FullMaskData),
-                        BoundaryMask = await MainThreadDispatcher.LoadImageAsync(serializableFace.BoundaryMaskData),
-                        BlurredMask = await MainThreadDispatcher.LoadImageAsync(serializableFace.BlurredMaskData)
+                        // Cropped Face Texture Data
+                        CroppedFaceTexture = new Frame(!string.IsNullOrEmpty(serializableFace.CroppedFaceTextureData) ? Convert.FromBase64String(serializableFace.CroppedFaceTextureData) : null, serializableFace.CroppedFaceWidth, serializableFace.CroppedFaceHeight),
+                        // Original Texture Data
+                        OriginalTexture = new Frame(!string.IsNullOrEmpty(serializableFace.OriginalTextureData) ? Convert.FromBase64String(serializableFace.OriginalTextureData) : null, serializableFace.OriginalWidth, serializableFace.OriginalHeight),
+                        // Face Large Data
+                        FaceLarge = new Frame(!string.IsNullOrEmpty(serializableFace.FaceLargeData) ? Convert.FromBase64String(serializableFace.FaceLargeData) : null, serializableFace.FaceLargeWidth, serializableFace.FaceLargeHeight),
+                        // Segmentation Mask Data
+                        SegmentationMask = new Frame(!string.IsNullOrEmpty(serializableFace.SegmentationMaskData) ? Convert.FromBase64String(serializableFace.SegmentationMaskData) : null, serializableFace.SegmentationMaskWidth, serializableFace.SegmentationMaskHeight),
+                        // Mask Small Data
+                        MaskSmall = new Frame(!string.IsNullOrEmpty(serializableFace.MaskSmallData) ? Convert.FromBase64String(serializableFace.MaskSmallData) : null, serializableFace.MaskSmallWidth, serializableFace.MaskSmallHeight),
+                        // Full Mask Data
+                        FullMask = new Frame(!string.IsNullOrEmpty(serializableFace.FullMaskData) ? Convert.FromBase64String(serializableFace.FullMaskData) : null, serializableFace.FullMaskWidth, serializableFace.FullMaskHeight),
+                        // Boundary Mask Data
+                        BoundaryMask = new Frame(!string.IsNullOrEmpty(serializableFace.BoundaryMaskData) ? Convert.FromBase64String(serializableFace.BoundaryMaskData) : null, serializableFace.BoundaryMaskWidth, serializableFace.BoundaryMaskHeight),
+                        // Blurred Mask Data
+                        BlurredMask = new Frame(!string.IsNullOrEmpty(serializableFace.BlurredMaskData) ? Convert.FromBase64String(serializableFace.BlurredMaskData) : null, serializableFace.BlurredMaskWidth, serializableFace.BlurredMaskHeight)
                     };
 
                     avatarData.FaceRegions.Add(faceData);

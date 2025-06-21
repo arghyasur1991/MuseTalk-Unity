@@ -1,7 +1,10 @@
 using System;
 using System.Buffers;
+using System.Collections;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using UnityEngine;
 using Microsoft.ML.OnnxRuntime;
@@ -9,6 +12,7 @@ using Microsoft.ML.OnnxRuntime.Tensors;
 
 namespace MuseTalk.Core
 {
+    using API;
     using Utils;
     using Models;
 
@@ -17,16 +21,21 @@ namespace MuseTalk.Core
     /// </summary>
     public class SegmentationData
     {
-        public Texture2D FaceLarge { get; set; }
-        public Texture2D SegmentationMask { get; set; }
+        public Frame FaceLarge { get; set; }
+        
+        public Frame SegmentationMask { get; set; }
+        
         public Vector4 AdjustedFaceBbox { get; set; }
         public Vector4 CropBox { get; set; }
         
         // Precomputed masks for efficient blending
-        public Texture2D MaskSmall { get; set; }
-        public Texture2D FullMask { get; set; }
-        public Texture2D BoundaryMask { get; set; }
-        public Texture2D BlurredMask { get; set; }
+        public Frame MaskSmall { get; set; }
+        
+        public Frame FullMask { get; set; }
+        
+        public Frame BoundaryMask { get; set; }
+        
+        public Frame BlurredMask { get; set; }
     }
 
     /// <summary>
@@ -67,6 +76,64 @@ namespace MuseTalk.Core
     }
 
     /// <summary>
+    /// Stream for MuseTalk output frames - similar to LivePortraitStream
+    /// </summary>
+    public sealed class MuseTalkStream
+    {
+        public int TotalExpectedFrames { get; set; }
+
+        public MuseTalkStream(int totalExpectedFrames)
+        {
+            TotalExpectedFrames = totalExpectedFrames;
+        }
+
+        internal readonly ConcurrentQueue<Texture2D> queue = new();
+        internal CancellationTokenSource cts = new();
+
+        public bool Finished { get; internal set; }
+
+        /// Non-blocking poll. Returns false if no frame is ready yet.
+        public bool TryGetNext(out Texture2D tex) => queue.TryDequeue(out tex);
+
+        /// Yield instruction that waits until the *next* frame exists,
+        /// then exposes it through the .Texture property.
+        public FrameAwaiter WaitForNext() => new(queue);
+    }
+
+    /// <summary>
+    /// Input for MuseTalk inference - simplified for streaming
+    /// </summary>
+    public class MuseTalkInput
+    {
+        /// <summary>
+        /// Avatar images for talking head generation
+        /// </summary>
+        public Texture2D[] AvatarTextures { get; set; }
+        
+        /// <summary>
+        /// Audio clip for lip sync
+        /// </summary>
+        public AudioClip AudioClip { get; set; }
+        
+        /// <summary>
+        /// Batch size for processing
+        /// </summary>
+        public int BatchSize { get; set; } = 4;
+        
+        public MuseTalkInput(Texture2D avatarTexture, AudioClip audioClip)
+        {
+            AvatarTextures = new[] { avatarTexture ?? throw new ArgumentNullException(nameof(avatarTexture)) };
+            AudioClip = audioClip ?? throw new ArgumentNullException(nameof(audioClip));
+        }
+        
+        public MuseTalkInput(Texture2D[] avatarTextures, AudioClip audioClip)
+        {
+            AvatarTextures = avatarTextures ?? throw new ArgumentNullException(nameof(avatarTextures));
+            AudioClip = audioClip ?? throw new ArgumentNullException(nameof(audioClip));
+        }
+    }
+
+    /// <summary>
     /// Core MuseTalk inference engine that manages ONNX models for real-time talking head generation
     /// 
     /// MEMORY OPTIMIZATIONS:
@@ -97,8 +164,8 @@ namespace MuseTalk.Core
         // QUANTIZATION SUPPORT: INT8 configuration for CPU optimization
         private readonly bool _useINT8 = false;
         
-        // InsightFace utility for SCRFD+1k3d68 face processing
-        private readonly InsightFaceHelper _insightFaceHelper;
+        // Face analysis utility for SCRFD+1k3d68 face processing
+        private readonly FaceAnalysis _faceAnalysis;
         
         // Avatar data for blending
         private AvatarData _avatarData;
@@ -154,7 +221,7 @@ namespace MuseTalk.Core
             try
             {
                 InitializeModels();
-                _insightFaceHelper = new InsightFaceHelper(_config);
+                _faceAnalysis = new FaceAnalysis(_config);
                 
                 // Initialize Whisper model for audio processing
                 _whisperModel = new WhisperModel(_config);
@@ -193,7 +260,47 @@ namespace MuseTalk.Core
         }
 
         /// <summary>
-        /// Generate talking head video frames from avatar images and audio
+        /// Generate talking head video frames from avatar images and audio (STREAMING)
+        /// Matches LivePortrait's streaming approach - yields frames as they're generated
+        /// MAIN THREAD ONLY for correctness
+        /// </summary>
+        public IEnumerator GenerateAsync(MuseTalkInput input, MuseTalkStream stream)
+        {
+            if (!_initialized)
+                throw new InvalidOperationException("MuseTalk inference not initialized");
+                
+            if (input == null)
+                throw new ArgumentNullException(nameof(input));
+                
+            Logger.Log($"[MuseTalkInference] === STARTING MUSETALK STREAMING GENERATION ===");
+            Logger.Log($"[MuseTalkInference] Version: {_config.Version}, Batch Size: {input.BatchSize}");
+            Logger.Log($"[MuseTalkInference] Avatar Images: {input.AvatarTextures.Length}, Audio: {input.AudioClip.name} ({input.AudioClip.length:F2}s)");
+            
+            // Step 1: Process avatar images and extract face regions
+            Logger.Log("[MuseTalkInference] STAGE 1: Processing avatar images...");
+            var avatarTask = ProcessAvatarImages(input.AvatarTextures);
+            yield return new WaitUntil(() => avatarTask.IsCompleted);
+            var avatarData = avatarTask.Result;
+            Logger.Log($"[MuseTalkInference] Stage 1 completed - Processed {avatarData.FaceRegions.Count} faces");
+            
+            // Step 2: Process audio and extract features
+            Logger.Log("[MuseTalkInference] STAGE 2: Processing audio...");
+            var audioTask = ProcessAudio(input.AudioClip);
+            yield return new WaitUntil(() => audioTask.IsCompleted);
+            var audioFeatures = audioTask.Result;
+            Logger.Log($"[MuseTalkInference] Stage 2 completed - Generated {audioFeatures.FeatureChunks.Count} audio chunks");
+            
+            // Step 3: Generate video frames in streaming mode
+            Logger.Log("[MuseTalkInference] STAGE 3: Generating video frames (streaming)...");
+            yield return GenerateFramesStreaming(avatarData, audioFeatures, input.BatchSize, stream);
+            
+            stream.Finished = true;
+            Logger.Log($"[MuseTalkInference] === STREAMING GENERATION COMPLETED ===");
+        }
+
+        /// <summary>
+        /// Generate talking head video frames from avatar images and audio (LEGACY)
+        /// For backward compatibility - returns all frames at once
         /// </summary>
         public async Task<MuseTalkResult> GenerateAsync(MuseTalkInput input)
         {
@@ -249,8 +356,9 @@ namespace MuseTalk.Core
         /// <summary>
         /// Pre-compute segmentation data that can be cached and reused for all frames
         /// This includes face_large crop, BiSeNet segmentation mask, and all blending masks
+        /// REFACTORED: Uses byte arrays internally for better memory efficiency
         /// </summary>
-        private SegmentationData PrecomputeSegmentationData(Texture2D originalImage, Vector4 faceBbox, string version)
+        private SegmentationData PrecomputeSegmentationData(Frame originalImage, Vector4 faceBbox, string version)
         {
             // Apply version-specific adjustments to face bbox (matching BlendFaceWithOriginal logic)
             Vector4 adjustedFaceBbox = faceBbox;
@@ -267,20 +375,18 @@ namespace MuseTalk.Core
             // Create face_large crop (matching Python's face_large = body.crop(crop_box))
             var faceLarge = CropImage(originalImage, cropRect);
             
-            if (faceLarge == null)
-                throw new InvalidOperationException("Failed to create face_large crop");
-            
             // Generate face segmentation mask using BiSeNet on face_large
             var segmentationMask = GenerateFaceSegmentationMaskCached(faceLarge);
             
-            if (segmentationMask == null)
+            if (segmentationMask.data == null)
                 throw new InvalidOperationException("Failed to generate segmentation mask");
             
             // OPTIMIZATION: Precompute all blending masks that are independent of faceTexture
             // These masks only depend on segmentation, face bbox, and crop box - all available now
             
+            
             // Step 1: Create mask_small by cropping BiSeNet mask to face bbox (matching Python)
-            var maskSmall = ImageBlendingHelper.CreateSmallMaskFromBiSeNet(segmentationMask, adjustedFaceBbox, cropRect);
+            var maskSmall = ImageBlendingHelper.CreateSmallMask(segmentationMask, adjustedFaceBbox, cropRect);
             
             // Step 2: Create full mask by pasting mask_small back into face_large dimensions (matching Python)
             var fullMask = ImageBlendingHelper.CreateFullMask(segmentationMask, maskSmall, adjustedFaceBbox, cropRect);
@@ -298,10 +404,8 @@ namespace MuseTalk.Core
                 SegmentationMask = segmentationMask,
                 AdjustedFaceBbox = adjustedFaceBbox,
                 CropBox = cropBox,
-                
-                // Precomputed masks for efficient blending
                 MaskSmall = maskSmall,
-                FullMask = fullMask,
+                FullMask = fullMask,                
                 BoundaryMask = boundaryMask,
                 BlurredMask = blurredMask
             };
@@ -311,44 +415,30 @@ namespace MuseTalk.Core
         /// Generate segmentation mask for caching (extracted from ImageBlendingHelper logic)
         /// FIXED: Runs on main thread to avoid Unity texture operation violations
         /// </summary>
-        private Texture2D GenerateFaceSegmentationMaskCached(Texture2D faceLarge)
+        private Frame GenerateFaceSegmentationMaskCached(Frame faceLarge)
         {
-            // Must run on main thread due to Unity texture operations
-            var onnxFaceParsing = GetOrCreateFaceParsingHelper();
-            if (onnxFaceParsing != null && onnxFaceParsing.IsInitialized)
+            try
             {
-                try
+                // Run BiSeNet directly on the face_large crop using byte array optimized method
+                var mask = _faceAnalysis.CreateFaceMaskWithMorphology(faceLarge, "jaw");
+                
+                if (mask.data != null)
                 {
-                    // Run BiSeNet directly on the face_large crop
-                    var biSeNetMask = onnxFaceParsing.CreateFaceMaskWithMorphology(faceLarge, "jaw");
-                    
-                    if (biSeNetMask != null)
+                    // Resize to target dimensions if needed
+                    if (mask.width != faceLarge.width || mask.height != faceLarge.height)
                     {
-                        // Resize to target dimensions if needed
-                        if (biSeNetMask.width != faceLarge.width || biSeNetMask.height != faceLarge.height)
-                        {
-                            var resizedMask = TextureUtils.ResizeTexture(biSeNetMask, faceLarge.width, faceLarge.height);
-                            UnityEngine.Object.Destroy(biSeNetMask);
-                            return resizedMask;
-                        }
-                        return biSeNetMask;
+                        var resizedMask = FrameUtils.ResizeFrame(mask, faceLarge.width, faceLarge.height, SamplingMode.Bilinear);
+                        return resizedMask;
                     }
+                    return mask;
                 }
-                catch (Exception e)
-                {
-                    Logger.LogError($"[MuseTalkInference] ONNX face parsing failed: {e.Message}");
-                }
+            }
+            catch (Exception e)
+            {
+                Logger.LogError($"[MuseTalkInference] ONNX face parsing failed: {e.Message}");
             }
             
             throw new InvalidOperationException("Face segmentation failed and no fallback is available");
-        }
-        
-        /// <summary>
-        /// Get or create the ONNX face parsing helper instance (singleton pattern)
-        /// </summary>
-        private FaceParsingHelper GetOrCreateFaceParsingHelper()
-        {
-            return ImageBlendingHelper.GetOrCreateFaceParsingHelper(_config);
         }
         
         /// <summary>
@@ -380,7 +470,7 @@ namespace MuseTalk.Core
         /// <summary>
         /// Crop image to specified rectangle
         /// </summary>
-        private Texture2D CropImage(Texture2D source, Rect cropRect)
+        private Frame CropImage(Frame source, Rect cropRect)
         {
             // Ensure crop bounds are within image
             cropRect.x = Mathf.Max(0, cropRect.x);
@@ -388,31 +478,7 @@ namespace MuseTalk.Core
             cropRect.width = Mathf.Min(cropRect.width, source.width - cropRect.x);
             cropRect.height = Mathf.Min(cropRect.height, source.height - cropRect.y);
             
-            return TextureUtils.CropTexture(source, cropRect);
-        }
-
-        /// <summary>
-        /// Generate a content-based hash for a texture
-        /// </summary>
-        private string GenerateTextureHash(Texture2D texture)
-        {
-            // Use texture properties and a sample of pixels for hashing
-            // This is faster than hashing all pixels but still provides good uniqueness
-            unchecked
-            {
-                int hash = texture.width.GetHashCode();
-                hash = hash * 31 + texture.height.GetHashCode();
-                hash = hash * 31 + texture.format.GetHashCode();
-                
-                // Sample a few pixels for content-based hashing (much faster than full texture)
-                var pixels = texture.GetPixels(0, 0, Math.Min(32, texture.width), Math.Min(32, texture.height));
-                for (int i = 0; i < Math.Min(100, pixels.Length); i += 10) // Sample every 10th pixel
-                {
-                    hash = hash * 31 + pixels[i].GetHashCode();
-                }
-                
-                return hash.ToString("X8");
-            }
+            return FrameUtils.CropFrame(source, cropRect);
         }
         
         /// <summary>
@@ -423,7 +489,7 @@ namespace MuseTalk.Core
             var textureHashes = new string[avatarTextures.Length];
             for (int i = 0; i < avatarTextures.Length; i++)
             {
-                textureHashes[i] = GenerateTextureHash(avatarTextures[i]);
+                textureHashes[i] = TextureUtils.GenerateTextureHash(avatarTextures[i]);
             }
             
             return new AvatarAnimationKey
@@ -444,19 +510,6 @@ namespace MuseTalk.Core
                 var keysToRemove = _avatarAnimationCache.Keys.Take(_avatarAnimationCache.Count - MAX_CACHE_SIZE + 1).ToList();
                 foreach (var key in keysToRemove)
                 {
-                    if (_avatarAnimationCache.TryGetValue(key, out var cachedData))
-                    {
-                        // Clean up cached textures to prevent memory leaks
-                        foreach (var faceRegion in cachedData.FaceRegions)
-                        {
-                            if (faceRegion.FaceLarge != null) UnityEngine.Object.Destroy(faceRegion.FaceLarge);
-                            if (faceRegion.SegmentationMask != null) UnityEngine.Object.Destroy(faceRegion.SegmentationMask);
-                            if (faceRegion.MaskSmall != null) UnityEngine.Object.Destroy(faceRegion.MaskSmall);
-                            if (faceRegion.FullMask != null) UnityEngine.Object.Destroy(faceRegion.FullMask);
-                            if (faceRegion.BoundaryMask != null) UnityEngine.Object.Destroy(faceRegion.BoundaryMask);
-                            if (faceRegion.BlurredMask != null) UnityEngine.Object.Destroy(faceRegion.BlurredMask);
-                        }
-                    }
                     _avatarAnimationCache.Remove(key);
                     Logger.Log($"[MuseTalkInference] Removed cached avatar animation to manage memory");
                 }
@@ -509,8 +562,8 @@ namespace MuseTalk.Core
                         if (diskCachedData.FaceRegions.Count > 0)
                         {
                             var firstFace = diskCachedData.FaceRegions[0];
-                            if (firstFace.OriginalTexture == null || firstFace.CroppedFaceTexture == null || 
-                                firstFace.BlurredMask == null || firstFace.FaceLarge == null)
+                            if (firstFace.OriginalTexture.data == null || firstFace.CroppedFaceTexture.data == null || 
+                                firstFace.BlurredMask.data == null || firstFace.FaceLarge.data == null)
                             {
                                 needsTextureReprocessing = true;
                                 Logger.Log("[MuseTalkInference] Disk cache has latents but missing texture data, will reprocess face regions for blending");
@@ -543,16 +596,18 @@ namespace MuseTalk.Core
             Logger.Log($"[MuseTalkInference] Processing new avatar animation sequence with {avatarTextures.Length} textures");
             
             var avatarData = new AvatarData();
+
+            var frames = new List<Frame>();
+            foreach (var texture in avatarTextures)
+            {
+                var frame = TextureUtils.Texture2DToFrame(texture);
+                frames.Add(frame);
+            }
             
             // Face Detection
-            var result = _insightFaceHelper.GetLandmarkAndBbox(
-                avatarTextures, 
-                bboxShift: 0,
-                version: _config.Version,
-                debugDir: null
-            );
+            var result = _faceAnalysis.GetLandmarkAndBbox(frames);
             List<Vector4> coordsList = result.Item1;
-            List<Texture2D> framesList = result.Item2;
+            List<Frame> framesList = result.Item2;
             
             Logger.Log($"[MuseTalkInference] Face detection completed: {coordsList.Count} results for {avatarTextures.Length} input textures");
             
@@ -561,7 +616,7 @@ namespace MuseTalk.Core
             {
                 var bbox = coordsList[i];
                 
-                if (bbox == InsightFaceHelper.CoordPlaceholder)
+                if (bbox == Vector4.zero)
                 {
                     Logger.LogWarning($"[MuseTalkInference] No face detected in image {i}, skipping");
                     continue;
@@ -572,26 +627,23 @@ namespace MuseTalk.Core
                     var originalTexture = framesList[i];
                     
                     // Crop face region with version-specific margins
-                    var croppedTexture = _insightFaceHelper.CropFaceRegion(originalTexture, bbox, _config.Version);
+                    var croppedTexture = _faceAnalysis.CropFaceRegion(originalTexture, bbox, _config.Version);
                     
                     // Pre-compute segmentation mask and cached data for blending
                     var segmentationData = PrecomputeSegmentationData(originalTexture, bbox, _config.Version);
-                    
-                    // Create face data for this region
+                   
+                    // Create face data for this region using byte arrays
                     var faceData = new FaceData
                     {
                         HasFace = true,
                         BoundingBox = new Rect(bbox.x, bbox.y, bbox.z - bbox.x, bbox.w - bbox.y),
                         CroppedFaceTexture = croppedTexture,
-                        OriginalTexture = originalTexture,  // Store for blending
-                        
-                        // Cached segmentation data
+                        OriginalTexture = originalTexture,
                         FaceLarge = segmentationData.FaceLarge,
                         SegmentationMask = segmentationData.SegmentationMask,
                         AdjustedFaceBbox = segmentationData.AdjustedFaceBbox,
                         CropBox = segmentationData.CropBox,
                         
-                        // Precomputed blending masks
                         MaskSmall = segmentationData.MaskSmall,
                         FullMask = segmentationData.FullMask,
                         BoundaryMask = segmentationData.BoundaryMask,
@@ -716,15 +768,14 @@ namespace MuseTalk.Core
         /// <summary>
         /// Encode image using VAE encoder
         /// </summary>
-        private async Task<float[]> EncodeImage(Texture2D texture)
+        private async Task<float[]> EncodeImage(Frame image)
         {
-            // Texture operations must run on main thread - do them first
-            var resizedTexture = TextureUtils.ResizeTexture(texture, 256, 256);
-            var inputTensor = TextureUtils.TextureToTensor(resizedTexture);
-            
-            // Now we can run ONNX inference on background thread
             return await Task.Run(() =>
             {
+                // Resize image data to 256x256 for VAE encoder
+                var resizedData = FrameUtils.ResizeFrame(image, 256, 256, SamplingMode.Bilinear);
+                var inputTensor = FrameUtils.FrameToTensor(resizedData, 2.0f / 255.0f, -1.0f);
+                
                 var inputs = new List<NamedOnnxValue>
                 {
                     NamedOnnxValue.CreateFromTensor("image", inputTensor)
@@ -744,15 +795,14 @@ namespace MuseTalk.Core
         /// Encode image with lower half masked using VAE encoder
         /// Matches Python's encode_image_with_half_mask exactly
         /// </summary>
-        private async Task<float[]> EncodeImageWithMask(Texture2D texture)
+        private async Task<float[]> EncodeImageWithMask(Frame image)
         {
-            // Texture operations must run on main thread - do them first
-            var resizedTexture = TextureUtils.ResizeTexture(texture, 256, 256);
-            var inputTensor = TextureUtils.TextureToTensorWithMask(resizedTexture);
-            
-            // Now we can run ONNX inference on background thread
             return await Task.Run(() =>
             {
+                // Resize image data to 256x256 for VAE encoder
+                var resizedData = FrameUtils.ResizeFrame(image, 256, 256, SamplingMode.Bilinear);
+                var inputTensor = FrameUtils.FrameToTensor(resizedData, 2.0f / 255.0f, -1.0f, applyLowerHalfMask: true);
+                
                 var inputs = new List<NamedOnnxValue>
                 {
                     NamedOnnxValue.CreateFromTensor("image", inputTensor)
@@ -769,13 +819,13 @@ namespace MuseTalk.Core
         /// <summary>
         /// Get latents for UNet inference, matching Python's get_latents_for_unet exactly
         /// </summary>
-        private async Task<float[]> GetLatentsForUNet(Texture2D texture)
+        private async Task<float[]> GetLatentsForUNet(Frame image)
         {
             // Get masked latents (lower half masked)
-            var maskedLatents = await EncodeImageWithMask(texture);
+            var maskedLatents = await EncodeImageWithMask(image);
             
             // Get reference latents (full image)
-            var refLatents = await EncodeImage(texture);
+            var refLatents = await EncodeImage(image);
             
             // Match Python concatenation exactly along axis=1 (channel dimension)
             if (maskedLatents.Length != refLatents.Length)
@@ -787,11 +837,11 @@ namespace MuseTalk.Core
             const int maskedChannels = 4;
             const int refChannels = 4;
             const int totalChannels = maskedChannels + refChannels;
-            const int height = 32;
-            const int width = 32;
-            const int spatialSize = height * width;
+            const int latentHeight = 32;
+            const int latentWidth = 32;
+            const int spatialSize = latentHeight * latentWidth;
             
-            var combinedLatents = new float[batch * totalChannels * height * width];
+            var combinedLatents = new float[batch * totalChannels * latentHeight * latentWidth];
             
             unsafe
             {
@@ -837,7 +887,73 @@ namespace MuseTalk.Core
         }
         
         /// <summary>
-        /// Generate video frames using UNet and VAE decoder
+        /// Generate video frames using UNet and VAE decoder (STREAMING)
+        /// Similar to LivePortrait - yields frames as they're generated for real-time feedback
+        /// </summary>
+        private IEnumerator GenerateFramesStreaming(AvatarData avatarData, AudioFeatures audioFeatures, int batchSize, MuseTalkStream stream)
+        {
+            // Use audio length to determine frame count (like Python implementation)
+            int numFrames = audioFeatures.FeatureChunks.Count;
+            int numBatches = Mathf.CeilToInt((float)numFrames / batchSize);
+            
+            if (avatarData.Latents.Count == 0)
+            {
+                Logger.LogError("[MuseTalkInference] No avatar latents available for frame generation");
+                yield break;
+            }
+            
+            Logger.Log($"[MuseTalkInference] Processing {numFrames} frames in {numBatches} batches of {batchSize}");
+            
+            // Create cycled latent list for smooth animation
+            var cycleDLatents = new List<float[]>(avatarData.Latents);
+            var reversedLatents = new List<float[]>(avatarData.Latents);
+            reversedLatents.Reverse();
+            cycleDLatents.AddRange(reversedLatents);
+            
+            for (int batchIdx = 0; batchIdx < numBatches; batchIdx++)
+            {   
+                int startIdx = batchIdx * batchSize;
+                int endIdx = Math.Min(startIdx + batchSize, numFrames);
+                int actualBatchSize = endIdx - startIdx;
+                
+                Logger.Log($"[MuseTalkInference] Processing batch {batchIdx + 1}/{numBatches} (frames {startIdx}-{endIdx - 1})");
+                
+                // Prepare batch data using the frame index to cycle through latents
+                var latentBatch = PrepareLatentBatchWithCycling(cycleDLatents, startIdx, actualBatchSize);
+                var audioBatch = PrepareAudioBatch(audioFeatures.FeatureChunks, startIdx, actualBatchSize);
+                
+                // Add positional encoding to audio (async)
+                var audioWithPETask = AddPositionalEncoding(audioBatch);
+                yield return new WaitUntil(() => audioWithPETask.IsCompleted);
+                var audioWithPE = audioWithPETask.Result;
+                
+                // Run UNet inference (async)
+                var predictedLatentsTask = RunUNet(latentBatch, audioWithPE);
+                yield return new WaitUntil(() => predictedLatentsTask.IsCompleted);
+                var predictedLatents = predictedLatentsTask.Result;
+                
+                // Decode latents to images (async)
+                var batchFramesTask = DecodeLatents(predictedLatents, actualBatchSize, startIdx);
+                yield return new WaitUntil(() => batchFramesTask.IsCompleted);
+                var batchFrames = batchFramesTask.Result;
+                
+                // Stream frames to output as they're generated
+                foreach (var frame in batchFrames)
+                {
+                    stream.queue.Enqueue(frame);
+                }
+                
+                // Log batch performance
+                Logger.Log($"[MuseTalkInference] Batch {batchIdx} completed ({actualBatchSize} frames) - streamed to output");
+                
+                // Yield control back to allow processing/rendering
+                yield return null;
+            }
+        }
+
+        /// <summary>
+        /// Generate video frames using UNet and VAE decoder (LEGACY)
+        /// For backward compatibility - returns all frames at once
         /// </summary>
         private async Task<List<Texture2D>> GenerateFrames(AvatarData avatarData, AudioFeatures audioFeatures, int batchSize)
         {
@@ -1048,8 +1164,6 @@ namespace MuseTalk.Core
                 
                 try
                 {
-                    // OPTIMIZATION: Reuse the tensor directly without creating a copy
-                    // CreateFromTensor with existing tensor should not copy if tensor owns its buffer
                     var inputs = new List<NamedOnnxValue>
                     {
                         NamedOnnxValue.CreateFromTensor("latents", unetOutputBatch)
@@ -1116,7 +1230,7 @@ namespace MuseTalk.Core
                 int globalFrameIdx = globalStartIdx + i;
                 
                 // Step 1: Convert tensor to raw decoded texture
-                var rawDecodedTexture = TextureUtils.TensorToTexture2D(tensor);
+                var rawDecodedTexture = FrameUtils.TensorToFrame(tensor);
                 
                 // Step 2: Resize to face crop dimensions (matching Python cv2.resize)
                 if (_avatarData != null && _avatarData.FaceRegions.Count > 0)
@@ -1137,51 +1251,31 @@ namespace MuseTalk.Core
                     {
                         targetHeight += 10; // extra_margin
                         // Clamp to original image height
-                        if (faceData.OriginalTexture != null)
-                        {
-                            targetHeight = Mathf.Min(targetHeight, faceData.OriginalTexture.height - Mathf.RoundToInt(bbox.y));
-                        }
+                        targetHeight = Mathf.Min(targetHeight, faceData.OriginalTexture.height - Mathf.RoundToInt(bbox.y));
                     }
                     
                     // Resize decoded frame to face crop size
-                    var resizedFrame = TextureUtils.ResizeTextureToExactSize(rawDecodedTexture, targetWidth, targetHeight);
-                    
-                    // Step 3: Apply seamless face blending
-                    var originalImage = faceData.OriginalTexture;
-                    if (originalImage == null)
-                    {
-                        blendedFrames.Add(resizedFrame);
-                        continue;
-                    }
+                    var resizedFrame = FrameUtils.ResizeFrame(rawDecodedTexture, targetWidth, targetHeight);
                     
                     // Convert face bbox to Vector4 format for blending (x1, y1, x2, y2)
                     var faceBbox = new Vector4(bbox.x, bbox.y, bbox.x + bbox.width, bbox.y + bbox.height);
                     string blendingMode = "jaw"; // version v15
+                    // Use precomputed segmentation data for optimal performance
+                    var blendedFrame = ImageBlendingHelper.BlendFaceWithOriginal(
+                        faceData.OriginalTexture, 
+                        resizedFrame, 
+                        faceBbox,
+                        faceData.CropBox,
+                        faceData.BlurredMask, 
+                        faceData.FaceLarge, 
+                        blendingMode);
                     
-                    try
-                    {
-                        // Use precomputed segmentation data for optimal performance
-                        var blendedFrame = ImageBlendingHelper.BlendFaceWithOriginal(
-                            originalImage,
-                            resizedFrame,
-                            faceBbox,
-                            blendingMode,
-                            faceData.CropBox, // Use cached crop box
-                            faceData.BlurredMask, // Use precomputed blurred mask
-                            faceData.FaceLarge); // Use precomputed face large
-                        
-                        blendedFrames.Add(blendedFrame);
-                    }
-                    catch (Exception e)
-                    {
-                        Logger.LogError($"[MuseTalkInference] Frame processing failed for frame {globalFrameIdx}: {e.Message}");
-                        blendedFrames.Add(resizedFrame);
-                    }
+                    blendedFrames.Add(TextureUtils.FrameToTexture2D(blendedFrame));
                 }
                 else
                 {
-                    blendedFrames.Add(rawDecodedTexture);
-                }    
+                    blendedFrames.Add(TextureUtils.FrameToTexture2D(rawDecodedTexture));
+                }
             }
             
             return blendedFrames;
@@ -1189,22 +1283,12 @@ namespace MuseTalk.Core
         
         /// <summary>
         /// Clear the avatar animation cache (useful for memory management)
+        /// REFACTORED: No texture cleanup needed since we use byte arrays now
         /// </summary>
         public static void ClearAvatarAnimationCache()
         {
-            foreach (var cachedData in _avatarAnimationCache.Values)
-            {
-                // Clean up cached textures
-                foreach (var faceRegion in cachedData.FaceRegions)
-                {
-                    if (faceRegion.FaceLarge != null) UnityEngine.Object.Destroy(faceRegion.FaceLarge);
-                    if (faceRegion.SegmentationMask != null) UnityEngine.Object.Destroy(faceRegion.SegmentationMask);
-                    if (faceRegion.MaskSmall != null) UnityEngine.Object.Destroy(faceRegion.MaskSmall);
-                    if (faceRegion.FullMask != null) UnityEngine.Object.Destroy(faceRegion.FullMask);
-                    if (faceRegion.BoundaryMask != null) UnityEngine.Object.Destroy(faceRegion.BoundaryMask);
-                    if (faceRegion.BlurredMask != null) UnityEngine.Object.Destroy(faceRegion.BlurredMask);
-                }
-            }
+            // No need to destroy textures since we use byte arrays now
+            // The garbage collector will handle the byte arrays automatically
             _avatarAnimationCache.Clear();
             Logger.Log("[MuseTalkInference] Cleared avatar animation cache");
         }
@@ -1261,7 +1345,7 @@ namespace MuseTalk.Core
                 _vaeDecoderSession?.Dispose();
                 _positionalEncodingSession?.Dispose();
                 _whisperModel?.Dispose();
-                _insightFaceHelper?.Dispose();
+                _faceAnalysis?.Dispose();
                 _reusableUNetResult?.Dispose();
                 _diskCache?.Dispose();
                 

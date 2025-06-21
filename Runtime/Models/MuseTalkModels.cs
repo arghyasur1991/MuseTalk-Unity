@@ -4,6 +4,8 @@ using UnityEngine;
 
 namespace MuseTalk.Models
 {
+    using Utils;
+    
     /// <summary>
     /// Configuration for MuseTalk inference
     /// </summary>
@@ -107,29 +109,38 @@ namespace MuseTalk.Models
     
     /// <summary>
     /// Face detection and landmark data
+    /// REFACTORED: Uses byte arrays for internal storage instead of Texture2D for better memory efficiency
     /// </summary>
     public class FaceData
     {
         public bool HasFace { get; set; }
         public Rect BoundingBox { get; set; }
         public Vector2[] Landmarks { get; set; }
-        public Texture2D CroppedFaceTexture { get; set; }
-        public Texture2D OriginalTexture { get; set; }
+        
+        // Face texture data as byte arrays (RGB24 format)
+        public Frame CroppedFaceTexture { get; set; }
+        
+        public Frame OriginalTexture { get; set; }
         
         // Face parsing mask (if enabled)
-        public Texture2D FaceMask { get; set; }
+        public Frame FaceMask { get; set; }
         
         // Cached segmentation data (computed once during avatar processing)
-        public Texture2D FaceLarge { get; set; }           // Cropped face region with expansion
-        public Texture2D SegmentationMask { get; set; }    // BiSeNet segmentation mask
+        public Frame FaceLarge { get; set; }           // Cropped face region with expansion
+        
+        public Frame SegmentationMask { get; set; }    // BiSeNet segmentation mask
+        
         public Vector4 AdjustedFaceBbox { get; set; }      // Face bbox with version-specific adjustments
         public Vector4 CropBox { get; set; }               // Expanded crop box coordinates
         
         // Precomputed blending masks (computed once during avatar processing for performance)
-        public Texture2D MaskSmall { get; set; }           // Small mask cropped to face region
-        public Texture2D FullMask { get; set; }            // Full mask with small mask pasted back
-        public Texture2D BoundaryMask { get; set; }        // Mask with upper boundary ratio applied
-        public Texture2D BlurredMask { get; set; }         // Final blurred mask for smooth blending
+        public Frame MaskSmall { get; set; }           // Small mask cropped to face region
+        
+        public Frame FullMask { get; set; }            // Full mask with small mask pasted back
+        
+        public Frame BoundaryMask { get; set; }        // Mask with upper boundary ratio applied
+        
+        public Frame BlurredMask { get; set; }         // Final blurred mask for smooth blending
     }
     
     /// <summary>

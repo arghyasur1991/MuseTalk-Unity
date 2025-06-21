@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using Microsoft.ML.OnnxRuntime;
+using Microsoft.ML.OnnxRuntime.Tensors;
 using UnityEngine;
 
 namespace MuseTalk.Utils
@@ -93,6 +95,25 @@ namespace MuseTalk.Utils
             return model;
         }
 
+        public static IDisposableReadOnlyCollection<DisposableNamedOnnxValue> RunModel(string modelName, InferenceSession session, List<Tensor<float>> inputTensors)
+        {
+            var inputNames = session.InputMetadata.Keys.ToArray();
+            if (inputTensors.Count != inputNames.Length)
+            {
+                throw new Exception($"Input tensors count mismatch: {inputTensors.Count} != {inputNames.Length}");
+            }
+            var inputs = new List<NamedOnnxValue>(inputTensors.Count);
+            for (int i = 0; i < inputTensors.Count; i++)
+            {
+                inputs.Add(NamedOnnxValue.CreateFromTensor(inputNames[i], inputTensors[i]));
+            }
+            var start = System.Diagnostics.Stopwatch.StartNew();
+            var results = session.Run(inputs);
+            var elapsed = start.ElapsedMilliseconds;
+            Debug.Log($"[ModelUtils] RunModel {modelName} took {elapsed}ms");
+            return results;
+        }
+
         /// <summary>
         /// Get model file path with optimal quality/performance balance
         /// QUALITY OPTIMIZATION: Automatically use FP32 for VAE models to preserve image quality
@@ -154,7 +175,7 @@ namespace MuseTalk.Utils
         /// Load mask template texture from Resources or StreamingAssets
         /// Matches Python: mask_crop = cv2.imread('mask_template.png')
         /// </summary>
-        public static (byte[], int, int) LoadMaskTemplate(MuseTalkConfig config)
+        public static Frame LoadMaskTemplate(MuseTalkConfig config)
         {
             try
             {
@@ -163,7 +184,7 @@ namespace MuseTalk.Utils
                 if (maskTexture != null)
                 {
                     Debug.Log("[ModelUtils] Loaded mask template from Resources");
-                    return TextureUtils.Texture2DToBytes(TextureUtils.ConvertTexture2DToRGB24(maskTexture));
+                    return TextureUtils.Texture2DToFrame(TextureUtils.ConvertTexture2DToRGB24(maskTexture));
                 }
                 
                 // Try to load from StreamingAssets
@@ -175,7 +196,7 @@ namespace MuseTalk.Utils
                     if (texture.LoadImage(fileData))
                     {                        
                         Debug.Log("[ModelUtils] Loaded mask template from StreamingAssets");
-                        return TextureUtils.Texture2DToBytes(TextureUtils.ConvertTexture2DToRGB24(texture));
+                        return TextureUtils.Texture2DToFrame(TextureUtils.ConvertTexture2DToRGB24(texture));
                     }
                     else
                     {
@@ -194,7 +215,7 @@ namespace MuseTalk.Utils
                         if (texture.LoadImage(fileData))
                         {
                             Debug.Log($"[ModelUtils] Loaded mask template from config path: {configMaskPath}");
-                            return TextureUtils.Texture2DToBytes(TextureUtils.ConvertTexture2DToRGB24(texture));
+                            return TextureUtils.Texture2DToFrame(TextureUtils.ConvertTexture2DToRGB24(texture));
                         }
                         else
                         {
@@ -204,12 +225,12 @@ namespace MuseTalk.Utils
                 }
                 
                 Debug.LogWarning("[ModelUtils] Could not find mask_template.png in Resources, StreamingAssets, or config path. Will use default mask.");
-                return (null, 0, 0);
+                return new Frame(null, 0, 0);
             }
             catch (System.Exception e)
             {
                 Debug.LogError($"[ModelUtils] Error loading mask template: {e.Message}");
-                return (null, 0, 0);
+                return new Frame(null, 0, 0);
             }
         }
     }
