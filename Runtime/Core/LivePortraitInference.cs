@@ -164,7 +164,7 @@ namespace MuseTalk.Core
         /// Generate talking head animation - matches Python LivePortraitWrapper.execute
         /// MAIN THREAD ONLY for correctness
         /// </summary>
-        public IEnumerator GenerateAsync(LivePortraitInput input, LivePortaitStream stream)
+        public IEnumerator GenerateAsync(LivePortraitInput input, AvatarVideoStream stream)
         {
             if (!_initialized)
                 throw new InvalidOperationException("LivePortrait inference not initialized");
@@ -212,7 +212,7 @@ namespace MuseTalk.Core
         /// </summary>
         public IEnumerator GenerateAsync(
             Texture2D sourceImage, string[] frameFiles, 
-            LivePortaitStream outputStream, AvatarController avatarController)
+            AvatarVideoStream outputStream, AvatarController avatarController)
         {
             // Step 1: Start source image processing immediately (async)
             var srcImg = TextureUtils.Texture2DToFrame(sourceImage);
