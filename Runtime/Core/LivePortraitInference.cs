@@ -289,7 +289,7 @@ namespace MuseTalk.Core
                 
                 // Python: img = cv2.resize(img, (new_w, new_h))
                 // Use TextureUtils for optimized byte array resizing (no texture conversion needed)
-                imageData = TextureUtils.ResizeTextureToExactSize(imageData, currentWidth, currentHeight, newWidth, newHeight, TextureUtils.SamplingMode.Bilinear);
+                imageData = FrameUtils.ResizeTextureToExactSize(imageData, currentWidth, currentHeight, newWidth, newHeight, SamplingMode.Bilinear);
                 
                 currentWidth = newWidth;
                 currentHeight = newHeight;
@@ -382,7 +382,7 @@ namespace MuseTalk.Core
             cropInfo.LandmarksCrop = lmk;
             
             // Python: crop_info["img_crop_256x256"] = cv2.resize(crop_info["img_crop"], (256, 256), interpolation=cv2.INTER_AREA)
-            cropInfo.ImageCrop256x256 = TextureUtils.ResizeTextureToExactSize(cropInfo.ImageCrop, cropSize, cropSize, 256, 256, TextureUtils.SamplingMode.Bilinear);
+            cropInfo.ImageCrop256x256 = FrameUtils.ResizeTextureToExactSize(cropInfo.ImageCrop, cropSize, cropSize, 256, 256, SamplingMode.Bilinear);
             
             // Python: crop_info["lmk_crop_256x256"] = crop_info["lmk_crop"] * 256 / 512
             cropInfo.LandmarksCrop256x256 = ScaleLandmarks(cropInfo.LandmarksCrop, 256f / 512f);
@@ -521,7 +521,7 @@ namespace MuseTalk.Core
             // Python: img = img.astype(np.float32)
             
             // Use the common optimized method: pixelValue / 255.0 = pixelValue * (1/255) + 0
-            var tensor = TextureUtils.PreprocessImageOptimized(img, width, height, 1.0f / 255.0f, 0.0f);
+            var tensor = FrameUtils.PreprocessImageOptimized(img, width, height, 1.0f / 255.0f, 0.0f);
             return tensor;
         }
         
@@ -884,7 +884,7 @@ namespace MuseTalk.Core
             // Python: prepare_driving_videos
             // Python: img = cv2.resize(img, (256, 256))
 
-            var img256 = TextureUtils.ResizeTextureToExactSize(img, width, height, 256, 256, TextureUtils.SamplingMode.Bilinear);
+            var img256 = FrameUtils.ResizeTextureToExactSize(img, width, height, 256, 256, SamplingMode.Bilinear);
             // Python: I_d = preprocess(img)
             var Id = Preprocess(img256, 256, 256);
             
@@ -1100,7 +1100,7 @@ namespace MuseTalk.Core
             // Python: crop_image(img, pts: np.ndarray, dsize=224, scale=1.5, vy_ratio=-0.1) - EXACT MATCH
             var (MInv, _) = EstimateSimilarTransformFromPts(lmk, dsize, scale, 0f, vyRatio, true);
             
-            var imgCrop = TextureUtils.TransformImgExact(img, width, height, MInv, dsize, dsize);
+            var imgCrop = FrameUtils.TransformImgExact(img, width, height, MInv, dsize, dsize);
             var ptCrop = MathUtils.TransformPts(lmk, MInv);
             
             // Python: M_o2c = np.vstack([M_INV, np.array([0, 0, 1], dtype=np.float32)])
@@ -1471,7 +1471,7 @@ namespace MuseTalk.Core
         private DenseTensor<float> PreprocessDetectionImage(byte[] img, int inputSize)
         {
             // Pre-calculated constants: (pixelValue - 127.5) / 128 = pixelValue * 0.0078125 - 0.99609375
-            return TextureUtils.PreprocessImageOptimized(img, inputSize, inputSize, 0.0078125f, -0.99609375f);
+            return FrameUtils.PreprocessImageOptimized(img, inputSize, inputSize, 0.0078125f, -0.99609375f);
         }
         
         /// <summary>
@@ -1815,7 +1815,7 @@ namespace MuseTalk.Core
             };
             
             // Python: cropped = cv2.warpAffine(data, M, (output_size, output_size), borderValue=0.0)
-            var cropped = TextureUtils.TransformImgExact(img, width, height, M, inputSize, inputSize);
+            var cropped = FrameUtils.TransformImgExact(img, width, height, M, inputSize, inputSize);
 
             // Convert to Matrix4x4 for Unity compatibility
             var transform = new Matrix4x4
@@ -1848,7 +1848,7 @@ namespace MuseTalk.Core
         private DenseTensor<float> PreprocessLandmarkImage(byte[] img, int inputSize)
         {
             // No normalization: pixelValue = pixelValue * 1.0 + 0.0
-            return TextureUtils.PreprocessImageOptimized(img, inputSize, inputSize, 1.0f, 0.0f);
+            return FrameUtils.PreprocessImageOptimized(img, inputSize, inputSize, 1.0f, 0.0f);
         }
         
         /// <summary>
@@ -1858,7 +1858,7 @@ namespace MuseTalk.Core
         private DenseTensor<float> PreprocessLandmarkRunnerImage(byte[] img, int width, int height)
         {
             // Normalize to [0,1]: pixelValue / 255 = pixelValue * 0.00392157 + 0
-            return TextureUtils.PreprocessImageOptimized(img, width, height, 0.00392157f, 0.0f);  // 1/255 = 0.00392157
+            return FrameUtils.PreprocessImageOptimized(img, width, height, 0.00392157f, 0.0f);  // 1/255 = 0.00392157
         }
         
         private Vector2[] TransformLandmarksWithMatrix(Vector2[] landmarks, Matrix4x4 transform)
@@ -1920,7 +1920,7 @@ namespace MuseTalk.Core
                 { cropMc2o.m10, cropMc2o.m11, cropMc2o.m13 }
             };
             
-            var maskOri = TextureUtils.TransformImgExact(_maskTemplate, _maskTemplateWidth, _maskTemplateHeight, M, width, height);
+            var maskOri = FrameUtils.TransformImgExact(_maskTemplate, _maskTemplateWidth, _maskTemplateHeight, M, width, height);
             return maskOri;
         }
         
@@ -1946,7 +1946,7 @@ namespace MuseTalk.Core
                 { Mc2o.m00, Mc2o.m01, Mc2o.m03 },
                 { Mc2o.m10, Mc2o.m11, Mc2o.m13 }
             };
-            var warped = TextureUtils.TransformImgExact(imgCrop, imgCropWidth, imgCropHeight, M, dsize_w, dsize_h);
+            var warped = FrameUtils.TransformImgExact(imgCrop, imgCropWidth, imgCropHeight, M, dsize_w, dsize_h);
             
             // Python: result = np.clip(mask_ori * result + (1 - mask_ori) * img_ori, 0, 255).astype(np.uint8)
             var result = new byte[dsize_w * dsize_h * 3];

@@ -213,7 +213,7 @@ namespace MuseTalk.Core
             float detScale = (float)newHeight / pythonHeight;
             
             // Python: resized_img = cv2.resize(img, (new_width, new_height))
-            var resizedImg = TextureUtils.ResizeTextureToExactSize(img, width, height, newWidth, newHeight, TextureUtils.SamplingMode.Bilinear);
+            var resizedImg = FrameUtils.ResizeTextureToExactSize(img, width, height, newWidth, newHeight, SamplingMode.Bilinear);
             
             // Python: det_img = np.zeros((input_size, input_size, 3), dtype=np.uint8)
             // Python: det_img[:new_height, :new_width, :] = resized_img
@@ -611,7 +611,7 @@ namespace MuseTalk.Core
                 { m10, m11, m12 }
             };
             
-            var cropped = TextureUtils.TransformImgExact(img, width, height, M, outputSize, outputSize);
+            var cropped = FrameUtils.TransformImgExact(img, width, height, M, outputSize, outputSize);
 
             var transform = new Matrix4x4
             {
@@ -630,7 +630,7 @@ namespace MuseTalk.Core
         {
             var (MInv, _) = EstimateSimilarTransformFromPts(lmk, dsize, scale, 0f, vyRatio, true);
             
-            var imgCrop = TextureUtils.TransformImgExact(img, width, height, MInv, dsize, dsize);
+            var imgCrop = FrameUtils.TransformImgExact(img, width, height, MInv, dsize, dsize);
             var ptCrop = MathUtils.TransformPts(lmk, MInv);
             
             var Mo2c = MathUtils.GetCropTransform(MInv);
@@ -1036,10 +1036,10 @@ namespace MuseTalk.Core
             }
 
             // Extract face region (matching InsightFaceHelper coordinate system)
-            var croppedTexture = TextureUtils.CropTexture(originalTexture, width, height, new Rect(x1, y1, cropWidth, cropHeight));
+            var croppedTexture = FrameUtils.CropTexture(originalTexture, width, height, new Rect(x1, y1, cropWidth, cropHeight));
             
             // Resize to standard size (256x256 for MuseTalk, matching InsightFaceHelper)
-            var resizedTexture = TextureUtils.ResizeTextureToExactSize(croppedTexture, cropWidth, cropHeight, 256, 256);            
+            var resizedTexture = FrameUtils.ResizeTextureToExactSize(croppedTexture, cropWidth, cropHeight, 256, 256);            
             return resizedTexture;
         }
         
@@ -1093,7 +1093,7 @@ namespace MuseTalk.Core
         private DenseTensor<float> PreprocessImageForBiSeNet(byte[] inputImageData, int width, int height)
         {
             // Resize to BiSeNet input size (512x512) - now uses optimized ResizeTextureToExactSize with byte arrays
-            var resizedImageData = TextureUtils.ResizeTextureToExactSize(inputImageData, width, height, 512, 512, TextureUtils.SamplingMode.Bilinear);
+            var resizedImageData = FrameUtils.ResizeTextureToExactSize(inputImageData, width, height, 512, 512, SamplingMode.Bilinear);
             
             // ImageNet normalization: (pixel/255 - mean) / std for each channel
             // R: (pixel/255 - 0.485) / 0.229, G: (pixel/255 - 0.456) / 0.224, B: (pixel/255 - 0.406) / 0.225
@@ -1111,7 +1111,7 @@ namespace MuseTalk.Core
                 -0.406f / 0.225f   // B: -mean_b/std_b
             };
             
-            return TextureUtils.PreprocessImageOptimized(resizedImageData, 512, 512, multipliers, offsets);
+            return FrameUtils.PreprocessImageOptimized(resizedImageData, 512, 512, multipliers, offsets);
         }
         
         private unsafe int[,] RunBiSeNetInference(DenseTensor<float> inputTensor)
@@ -1254,7 +1254,7 @@ namespace MuseTalk.Core
             // Resize to target dimensions if needed using optimized resize
             if (targetWidth != 512 || targetHeight != 512)
             {
-                var resizedMaskData = TextureUtils.ResizeTextureToExactSize(maskData, maskWidth, maskHeight, targetWidth, targetHeight, TextureUtils.SamplingMode.Bilinear);
+                var resizedMaskData = FrameUtils.ResizeTextureToExactSize(maskData, maskWidth, maskHeight, targetWidth, targetHeight, SamplingMode.Bilinear);
                 return (resizedMaskData, targetWidth, targetHeight);
             }
             
@@ -1280,18 +1280,18 @@ namespace MuseTalk.Core
                 if (mode.ToLower() == "jaw")
                 {
                     // Apply morphological operations using unsafe pointers
-                    TextureUtils.ApplyDilationUnsafe(inputPtr, dilatedPtr, width, height, 3);
-                    TextureUtils.ApplyErosionUnsafe(dilatedPtr, erodedPtr, width, height, 2);
+                    FrameUtils.ApplyDilationUnsafe(inputPtr, dilatedPtr, width, height, 3);
+                    FrameUtils.ApplyErosionUnsafe(dilatedPtr, erodedPtr, width, height, 2);
                     
                     // Apply optimized Gaussian blur
-                    TextureUtils.ApplySimpleGaussianBlur(erodedPtr, blurredPtr, width, height, 5);
+                    FrameUtils.ApplySimpleGaussianBlur(erodedPtr, blurredPtr, width, height, 5);
                     
                     return (blurredData, width, height);
                 }
                 else
                 {
                     // For other modes, just apply light smoothing
-                    TextureUtils.ApplySimpleGaussianBlur(inputPtr, blurredPtr, width, height, 3);
+                    FrameUtils.ApplySimpleGaussianBlur(inputPtr, blurredPtr, width, height, 3);
                     return (blurredData, width, height);
                 }
             }

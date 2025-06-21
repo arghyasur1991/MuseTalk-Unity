@@ -472,7 +472,7 @@ namespace MuseTalk.Core
                     // Resize to target dimensions if needed
                     if (maskWidth != faceLargeWidth || maskHeight != faceLargeHeight)
                     {
-                        var resizedMaskData = TextureUtils.ResizeTextureToExactSize(maskData, maskWidth, maskHeight, faceLargeWidth, faceLargeHeight, TextureUtils.SamplingMode.Bilinear);
+                        var resizedMaskData = FrameUtils.ResizeTextureToExactSize(maskData, maskWidth, maskHeight, faceLargeWidth, faceLargeHeight, SamplingMode.Bilinear);
                         return (resizedMaskData, faceLargeWidth, faceLargeHeight);
                     }
                     return (maskData, maskWidth, maskHeight);
@@ -523,7 +523,7 @@ namespace MuseTalk.Core
             cropRect.width = Mathf.Min(cropRect.width, sourceWidth - cropRect.x);
             cropRect.height = Mathf.Min(cropRect.height, sourceHeight - cropRect.y);
             
-            return TextureUtils.CropTexture(source, sourceWidth, sourceHeight, cropRect);
+            return FrameUtils.CropTexture(source, sourceWidth, sourceHeight, cropRect);
         }
 
         
@@ -857,8 +857,8 @@ namespace MuseTalk.Core
             return await Task.Run(() =>
             {
                 // Resize image data to 256x256 for VAE encoder
-                var resizedData = TextureUtils.ResizeTextureToExactSize(imageData, width, height, 256, 256, TextureUtils.SamplingMode.Bilinear);
-                var inputTensor = TextureUtils.PreprocessImageOptimized(resizedData, 256, 256, 2.0f / 255.0f, -1.0f);
+                var resizedData = FrameUtils.ResizeTextureToExactSize(imageData, width, height, 256, 256, SamplingMode.Bilinear);
+                var inputTensor = FrameUtils.PreprocessImageOptimized(resizedData, 256, 256, 2.0f / 255.0f, -1.0f);
                 
                 var inputs = new List<NamedOnnxValue>
                 {
@@ -884,8 +884,8 @@ namespace MuseTalk.Core
             return await Task.Run(() =>
             {
                 // Resize image data to 256x256 for VAE encoder
-                var resizedData = TextureUtils.ResizeTextureToExactSize(imageData, width, height, 256, 256, TextureUtils.SamplingMode.Bilinear);
-                var inputTensor = TextureUtils.PreprocessImageOptimized(resizedData, 256, 256, 2.0f / 255.0f, -1.0f, applyLowerHalfMask: true);
+                var resizedData = FrameUtils.ResizeTextureToExactSize(imageData, width, height, 256, 256, SamplingMode.Bilinear);
+                var inputTensor = FrameUtils.PreprocessImageOptimized(resizedData, 256, 256, 2.0f / 255.0f, -1.0f, applyLowerHalfMask: true);
                 
                 var inputs = new List<NamedOnnxValue>
                 {
@@ -1314,7 +1314,7 @@ namespace MuseTalk.Core
                 int globalFrameIdx = globalStartIdx + i;
                 
                 // Step 1: Convert tensor to raw decoded texture
-                var (rawDecodedTextureData, rawDecodedTextureWidth, rawDecodedTextureHeight) = TextureUtils.TensorToBytes(tensor);
+                var (rawDecodedTextureData, rawDecodedTextureWidth, rawDecodedTextureHeight) = FrameUtils.TensorToBytes(tensor);
                 
                 // Step 2: Resize to face crop dimensions (matching Python cv2.resize)
                 if (_avatarData != null && _avatarData.FaceRegions.Count > 0)
@@ -1342,7 +1342,7 @@ namespace MuseTalk.Core
                     }
                     
                     // Resize decoded frame to face crop size
-                    var resizedFrame = TextureUtils.ResizeTextureToExactSize(
+                    var resizedFrame = FrameUtils.ResizeTextureToExactSize(
                         rawDecodedTextureData, rawDecodedTextureWidth, rawDecodedTextureHeight, 
                         targetWidth, targetHeight);
                     

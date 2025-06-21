@@ -244,7 +244,7 @@ namespace MuseTalk.API
             return stream;
         }
 
-        public LivePortaitStream GenerateAnimatedTexturesAsync(Texture2D sourceImage, string drivingFramesPath)
+        public LivePortaitStream GenerateAnimatedTexturesAsync(Texture2D sourceImage, string drivingFramesPath, int maxFrames = -1)
         {
             if (!_initialized)
                 throw new InvalidOperationException("API not initialized");
@@ -253,7 +253,7 @@ namespace MuseTalk.API
                 throw new ArgumentException("Invalid input: source image and driving frames path are required");
 
             // Get frame count first to estimate total frames
-            var frameFiles = FileUtils.GetFrameFiles(drivingFramesPath); // Send maxFrames > 0 to load some frames
+            var frameFiles = FileUtils.GetFrameFiles(drivingFramesPath, maxFrames); // Send maxFrames > 0 to load some frames
             if (frameFiles.Length == 0)
             {
                 throw new ArgumentException($"No driving frames found in path: {drivingFramesPath}");

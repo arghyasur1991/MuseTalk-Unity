@@ -59,7 +59,7 @@ namespace MuseTalk.Utils
             cropRect.width = Mathf.Min(cropRect.width, sourceWidth - cropRect.x);
             cropRect.height = Mathf.Min(cropRect.height, sourceHeight - cropRect.y);
             
-            return (TextureUtils.CropTexture(sourceData, sourceWidth, sourceHeight, cropRect), 
+            return (FrameUtils.CropTexture(sourceData, sourceWidth, sourceHeight, cropRect), 
                     (int)cropRect.width, (int)cropRect.height);
         }
 
@@ -332,7 +332,7 @@ namespace MuseTalk.Utils
             // Resize face texture to match face bbox dimensions (use exact integer calculation like Python)
             int faceWidth = (int)(faceBbox.z - faceBbox.x);
             int faceHeight = (int)(faceBbox.w - faceBbox.y);
-            var resizedFace = TextureUtils.ResizeTextureToExactSize(faceTexture, faceTextureWidth, faceTextureHeight, faceWidth, faceHeight);
+            var resizedFace = FrameUtils.ResizeTextureToExactSize(faceTexture, faceTextureWidth, faceTextureHeight, faceWidth, faceHeight);
 
             // Paste the resized face into precomputed face_large at relative position (matching Python)
             // Python: face_large.paste(face, (x-x_s, y-y_s))
@@ -368,7 +368,7 @@ namespace MuseTalk.Utils
             fixed (byte* maskPtr = maskData)
             fixed (byte* blurredMaskPtr = blurredMaskData)
             {
-                TextureUtils.ApplySimpleGaussianBlur(maskPtr, blurredMaskPtr, width, height, kernelSize);
+                FrameUtils.ApplySimpleGaussianBlur(maskPtr, blurredMaskPtr, width, height, kernelSize);
             }
             
             return (blurredMaskData, width, height);
