@@ -1,8 +1,8 @@
 {
-    "name": "MuseTalk.Editor",
-    "rootNamespace": "MuseTalk",
+    "name": "LiveTalk.Editor",
+    "rootNamespace": "LiveTalk",
     "references": [
-        "MuseTalk.Runtime"
+        "LiveTalk.Runtime"
     ],
     "includePlatforms": [
         "Editor"

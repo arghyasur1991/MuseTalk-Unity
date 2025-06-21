@@ -1,16 +1,17 @@
 {
-  "name": "com.genesis.musetalk.unity",
+  "name": "com.genesis.livetalk.unity",
   "version": "0.1.0",
-  "displayName": "MuseTalk Unity",
-  "description": "Unity package for using MuseTalk on-device models for real-time talking head generation",
+  "displayName": "LiveTalk Unity",
+  "description": "Unity package for using LiveTalk on-device models for real-time talking head generation",
   "unity": "6000.0",
   "unityRelease": "46f1",
   "dependencies": {
     "com.github.asus4.onnxruntime": "0.4.0",
-    "com.github.asus4.onnxruntime-extensions": "0.4.0"
+    "com.github.asus4.onnxruntime-extensions": "0.4.0",
+    "com.unity.nuget.newtonsoft-json": "3.2.1"
   },
   "keywords": [
-    "musetalk",
+    "livetalk",
     "talking-head",
     "ai-avatar",
     "face-animation",
@@ -19,12 +20,5 @@
   ],
   "author": {
     "name": "Genesis"
-  },
-  "samples": [
-    {
-      "displayName": "MuseTalk Avatar Demo",
-      "description": "Demo of using MuseTalk for real-time talking head generation in Unity",
-      "path": "Samples/AvatarDemo"
-    }
-  ]
+  }
 } 
