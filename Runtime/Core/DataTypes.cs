@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
+using Microsoft.ML.OnnxRuntime.Tensors;
 using UnityEngine;
 
 namespace MuseTalk.Core
@@ -229,5 +230,44 @@ namespace MuseTalk.Core
         public Frame BoundaryMask { get; set; }
         
         public Frame BlurredMask { get; set; }
+    }
+
+    /// <summary>
+    /// Crop information matching Python crop_info
+    /// </summary>
+    public class CropInfo
+    {
+        public Frame ImageCrop { get; set; }
+        public Frame ImageCrop256x256 { get; set; }
+        public Vector2[] LandmarksCrop { get; set; }
+        public Vector2[] LandmarksCrop256x256 { get; set; }
+        public Matrix4x4 Transform { get; set; }
+        public Matrix4x4 InverseTransform { get; set; }
+    }
+    
+    public class ProcessSourceImageResult
+    {
+        public CropInfo CropInfo { get; set; }
+        public Frame SrcImg { get; set; }
+        public Frame MaskOri { get; set; }
+        public MotionInfo XsInfo { get; set; }
+        public float[,] Rs { get; set; }
+        public Tensor<float> Fs { get; set; }
+        public float[] Xs { get; set; }
+    }
+
+    /// <summary>
+    /// Motion information extracted from face keypoints - matches Python kp_info structure
+    /// </summary>
+    public class MotionInfo
+    {
+        public float[] Pitch { get; set; }       // Processed pitch angles
+        public float[] Yaw { get; set; }         // Processed yaw angles  
+        public float[] Roll { get; set; }        // Processed roll angles
+        public float[] Translation { get; set; } // t: translation parameters
+        public float[] Expression { get; set; }  // exp: expression deformation
+        public float[] Scale { get; set; }       // scale: scaling factor
+        public float[] Keypoints { get; set; }   // kp: 3D keypoints
+        public float[,] RotationMatrix { get; set; } // R_d: rotation matrix (added for Python compatibility)
     }
 }
