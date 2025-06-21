@@ -1,7 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Collections.Concurrent;
-using System.Threading;
 using System.Threading.Tasks;
 using UnityEngine;
 
@@ -271,79 +269,6 @@ namespace LiveTalk.API
         }
         
         /// <summary>
-        /// Create a video from generated frames and audio
-        /// </summary>
-        /// <param name="result">MuseTalk generation result</param>
-        /// <param name="outputPath">Output video file path</param>
-        /// <param name="videoParams">Video encoding parameters</param>
-        /// <returns>True if video creation was successful</returns>
-        public async Task<bool> CreateVideoAsync(MuseTalkResult result, string outputPath)
-        {
-            if (result == null || !result.Success || result.GeneratedFrames.Count == 0)
-            {
-                Logger.LogError("[MuseTalkFactory] Invalid result for video creation.");
-                return false;
-            }
-            
-            try
-            {                
-                // For now, save frames as individual images
-                Logger.LogWarning("[MuseTalkFactory] Video encoding not yet implemented. Saving frames as images.");
-                
-                for (int i = 0; i < result.GeneratedFrames.Count; i++)
-                {
-                    var frame = result.GeneratedFrames[i];
-                    var frameBytes = frame.EncodeToPNG();
-                    var framePath = $"{outputPath}_frame_{i:D6}.png";
-                    await System.IO.File.WriteAllBytesAsync(framePath, frameBytes);
-                }
-                
-                Logger.Log($"[MuseTalkFactory] Saved {result.GeneratedFrames.Count} frames to {outputPath}_frame_*.png");
-                return true;
-            }
-            catch (Exception e)
-            {
-                Logger.LogError($"[MuseTalkFactory] Exception creating video: {e.Message}");
-                return false;
-            }
-        }
-        
-        /// <summary>
-        /// Get cache information for debugging and monitoring (similar to LivePortrait)
-        /// </summary>
-        public string GetCacheInfo()
-        {
-            if (!_initialized) return "Factory not initialized";
-            
-            return _museTalk?.GetCacheInfo() ?? "MuseTalk: No cache info";
-        }
-        
-        /// <summary>
-        /// Clear all caches to free memory (similar to LivePortrait)
-        /// </summary>
-        public async Task ClearCachesAsync()
-        {
-            if (_museTalk != null)
-            {
-                await _museTalk.ClearDiskCacheAsync();
-                MuseTalkInference.ClearAvatarAnimationCache();
-            }
-            
-            Logger.Log("[MuseTalkFactory] Cleared all caches");
-        }
-        
-        /// <summary>
-        /// Get information about the current MuseTalk configuration
-        /// </summary>
-        public string GetInfo()
-        {
-            if (!_initialized)
-                return "MuseTalkFactory: Not initialized";
-                
-            return $"MuseTalkFactory: Initialized, LogTiming={LogTiming}, EnableLogging={EnableLogging}, EnableFileDebug={EnableFileDebug}, HasAvatarController={_avatarController != null}";
-        }
-        
-        /// <summary>
         /// Check if the factory is ready for generation
         /// </summary>
         public bool IsReady => _initialized && !_disposed;
@@ -373,54 +298,4 @@ namespace LiveTalk.API
             Dispose();
         }
     }
-
-    /// <summary>
-    /// Factory for creating MuseTalkFactory instances (similar to LivePortraitMuseTalkFactory)
-    /// </summary>
-    public static class MuseTalkFactoryBuilder
-    {
-        /// <summary>
-        /// Create an instance of MuseTalk factory with default configuration
-        /// </summary>
-        public static MuseTalkFactory Create(LiveTalkController avatarController, string modelPath = "MuseTalk")
-        {
-            var factory = new MuseTalkFactory(avatarController);
-            var config = new LiveTalkConfig(modelPath);
-            factory.Initialize(config);
-            return factory;
-        }
-        
-        /// <summary>
-        /// Create an instance optimized for performance
-        /// </summary>
-        public static MuseTalkFactory CreateOptimized(LiveTalkController avatarController, string modelPath = "MuseTalk")
-        {
-            var factory = new MuseTalkFactory(avatarController);
-            var config = LiveTalkConfig.CreateOptimized(modelPath);
-            factory.Initialize(config);
-            return factory;
-        }
-        
-        /// <summary>
-        /// Create an instance optimized for development/debugging
-        /// </summary>
-        public static MuseTalkFactory CreateForDevelopment(LiveTalkController avatarController, string modelPath = "MuseTalk")
-        {
-            var factory = new MuseTalkFactory(avatarController);
-            var config = LiveTalkConfig.CreateForDevelopment(modelPath);
-            factory.Initialize(config);
-            return factory;
-        }
-
-        /// <summary>
-        /// Create legacy instance without streaming support (backward compatibility)
-        /// </summary>
-        public static MuseTalkFactory CreateLegacy(string modelPath = "MuseTalk")
-        {
-            var factory = new MuseTalkFactory();
-            var config = new LiveTalkConfig(modelPath);
-            factory.Initialize(config);
-            return factory;
-        }
-    }
-} 
+}
