@@ -197,6 +197,41 @@ namespace LiveTalk.API
         }
 
         /// <summary>
+        /// Generate talking head video with streaming output (NEW STREAMING API)
+        /// Similar to LivePortrait's streaming approach - yields frames as they're generated
+        /// </summary>
+        /// <param name="avatarTexture">Avatar image texture</param>
+        /// <param name="audioClip">Speech audio clip</param>
+        /// <param name="batchSize">Processing batch size (default: 4)</param>
+        /// <returns>MuseTalkStream for receiving frames as they're generated</returns>
+        public OutputStream GenerateTalkingHeadAsync(Texture2D avatarTexture, AudioClip audioClip, int batchSize = 4)
+        {
+            if (!_initialized)
+                throw new InvalidOperationException("Factory is not initialized. Call Initialize() first.");
+                
+            if (_avatarController == null)
+                throw new InvalidOperationException("Avatar controller is required for streaming operations. Use constructor with AvatarController parameter.");
+                
+            if (avatarTexture == null || audioClip == null)
+                throw new ArgumentException("Avatar texture and audio clip are required");
+                
+            Logger.Log($"[MuseTalkFactory] Starting streaming generation: {audioClip.name} ({audioClip.length:F2}s)");
+            
+            var input = new MuseTalkInput(avatarTexture, audioClip)
+            {
+                BatchSize = batchSize
+            };
+            
+            // Estimate frame count based on audio length (approximation)
+            int estimatedFrames = Mathf.CeilToInt(audioClip.length * 25f); // ~25 FPS estimate
+            var stream = new OutputStream(estimatedFrames);
+            
+            _avatarController.StartCoroutine(_museTalk.GenerateAsync(input, stream));
+            return stream;
+        }
+
+
+        /// <summary>
         /// Get cache information for debugging and monitoring
         /// </summary>
         public string GetCacheInfo()

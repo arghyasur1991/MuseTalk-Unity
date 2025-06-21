@@ -183,7 +183,7 @@ namespace LiveTalk.Core
         /// Matches LivePortrait's streaming approach - yields frames as they're generated
         /// MAIN THREAD ONLY for correctness
         /// </summary>
-        public IEnumerator GenerateAsync(MuseTalkInput input, MuseTalkStream stream)
+        public IEnumerator GenerateAsync(MuseTalkInput input, OutputStream stream)
         {
             if (!_initialized)
                 throw new InvalidOperationException("MuseTalk inference not initialized");
@@ -207,6 +207,7 @@ namespace LiveTalk.Core
             var audioTask = ProcessAudio(input.AudioClip);
             yield return new WaitUntil(() => audioTask.IsCompleted);
             var audioFeatures = audioTask.Result;
+            stream.TotalExpectedFrames = audioFeatures.FeatureChunks.Count;
             Logger.Log($"[MuseTalkInference] Stage 2 completed - Generated {audioFeatures.FeatureChunks.Count} audio chunks");
             
             // Step 3: Generate video frames in streaming mode
@@ -808,7 +809,7 @@ namespace LiveTalk.Core
         /// Generate video frames using UNet and VAE decoder (STREAMING)
         /// Similar to LivePortrait - yields frames as they're generated for real-time feedback
         /// </summary>
-        private IEnumerator GenerateFramesStreaming(AvatarData avatarData, AudioFeatures audioFeatures, int batchSize, MuseTalkStream stream)
+        private IEnumerator GenerateFramesStreaming(AvatarData avatarData, AudioFeatures audioFeatures, int batchSize, OutputStream stream)
         {
             // Use audio length to determine frame count (like Python implementation)
             int numFrames = audioFeatures.FeatureChunks.Count;
@@ -1075,7 +1076,7 @@ namespace LiveTalk.Core
         private async Task<List<Texture2D>> DecodeLatents(Tensor<float> unetOutputBatch, int batchSize, int globalStartIdx = 0)
         {
             // Run ONNX VAE decoder inference on background thread first            
-            var decodedTensors = await Task.Run(() =>
+            var blendedFrames = await Task.Run(() =>
             {
                 var tensors = new List<Tensor<float>>();
                 Tensor<float> batchImageOutput = null; // Keep reference alive
@@ -1134,69 +1135,74 @@ namespace LiveTalk.Core
                     Logger.LogWarning($"[MuseTalkInference] Batch VAE decoding failed: {e.Message}");
                     throw;
                 }
-                return tensors;
+                
+                var blendedFrames = new List<Frame>();
+                for (int i = 0; i < tensors.Count; i++)
+                {
+                    var tensor = tensors[i];
+                    
+                    // Calculate global frame index for proper numbering
+                    int globalFrameIdx = globalStartIdx + i;
+                    
+                    // Step 1: Convert tensor to raw decoded texture
+                    var rawDecodedTexture = FrameUtils.TensorToFrame(tensor);
+                    
+                    // Step 2: Resize to face crop dimensions (matching Python cv2.resize)
+                    if (_avatarData != null && _avatarData.FaceRegions.Count > 0)
+                    {
+                        // Get corresponding face bbox for sizing
+                        int avatarIndex = globalFrameIdx % (2 *_avatarData.FaceRegions.Count); // cycled latents
+                        if (avatarIndex >= _avatarData.FaceRegions.Count)
+                        {
+                            avatarIndex = (2 * _avatarData.FaceRegions.Count) - 1 - avatarIndex;
+                        }
+                        var faceData = _avatarData.FaceRegions[avatarIndex];
+                        var bbox = faceData.BoundingBox;
+                        
+                        int targetWidth = Mathf.RoundToInt(bbox.width);
+                        int targetHeight = Mathf.RoundToInt(bbox.height);
+                        
+                        if (_config.Version == "v15")
+                        {
+                            targetHeight += 10; // extra_margin
+                            // Clamp to original image height
+                            targetHeight = Mathf.Min(targetHeight, faceData.OriginalTexture.height - Mathf.RoundToInt(bbox.y));
+                        }
+                        
+                        // Resize decoded frame to face crop size
+                        var resizedFrame = FrameUtils.ResizeFrame(rawDecodedTexture, targetWidth, targetHeight);
+                        
+                        // Convert face bbox to Vector4 format for blending (x1, y1, x2, y2)
+                        var faceBbox = new Vector4(bbox.x, bbox.y, bbox.x + bbox.width, bbox.y + bbox.height);
+                        string blendingMode = "jaw"; // version v15
+                        // Use precomputed segmentation data for optimal performance
+                        var blendedFrame = ImageBlendingHelper.BlendFaceWithOriginal(
+                            faceData.OriginalTexture, 
+                            resizedFrame, 
+                            faceBbox,
+                            faceData.CropBox,
+                            faceData.BlurredMask, 
+                            faceData.FaceLarge, 
+                            blendingMode);
+                        
+                        blendedFrames.Add(blendedFrame);
+                    }
+                    else
+                    {
+                        blendedFrames.Add(rawDecodedTexture);
+                    }
+                }
+                return blendedFrames;
             });
             
             // Convert tensors to textures and apply blending on main thread
-            var blendedFrames = new List<Texture2D>();
-            
-            for (int i = 0; i < decodedTensors.Count; i++)
+            var blendedTextures = new List<Texture2D>();
+            foreach (var frame in blendedFrames)
             {
-                var tensor = decodedTensors[i];
-                
-                // Calculate global frame index for proper numbering
-                int globalFrameIdx = globalStartIdx + i;
-                
-                // Step 1: Convert tensor to raw decoded texture
-                var rawDecodedTexture = FrameUtils.TensorToFrame(tensor);
-                
-                // Step 2: Resize to face crop dimensions (matching Python cv2.resize)
-                if (_avatarData != null && _avatarData.FaceRegions.Count > 0)
-                {
-                    // Get corresponding face bbox for sizing
-                    int avatarIndex = globalFrameIdx % (2 *_avatarData.FaceRegions.Count); // cycled latents
-                    if (avatarIndex >= _avatarData.FaceRegions.Count)
-                    {
-                        avatarIndex = (2 * _avatarData.FaceRegions.Count) - 1 - avatarIndex;
-                    }
-                    var faceData = _avatarData.FaceRegions[avatarIndex];
-                    var bbox = faceData.BoundingBox;
-                    
-                    int targetWidth = Mathf.RoundToInt(bbox.width);
-                    int targetHeight = Mathf.RoundToInt(bbox.height);
-                    
-                    if (_config.Version == "v15")
-                    {
-                        targetHeight += 10; // extra_margin
-                        // Clamp to original image height
-                        targetHeight = Mathf.Min(targetHeight, faceData.OriginalTexture.height - Mathf.RoundToInt(bbox.y));
-                    }
-                    
-                    // Resize decoded frame to face crop size
-                    var resizedFrame = FrameUtils.ResizeFrame(rawDecodedTexture, targetWidth, targetHeight);
-                    
-                    // Convert face bbox to Vector4 format for blending (x1, y1, x2, y2)
-                    var faceBbox = new Vector4(bbox.x, bbox.y, bbox.x + bbox.width, bbox.y + bbox.height);
-                    string blendingMode = "jaw"; // version v15
-                    // Use precomputed segmentation data for optimal performance
-                    var blendedFrame = ImageBlendingHelper.BlendFaceWithOriginal(
-                        faceData.OriginalTexture, 
-                        resizedFrame, 
-                        faceBbox,
-                        faceData.CropBox,
-                        faceData.BlurredMask, 
-                        faceData.FaceLarge, 
-                        blendingMode);
-                    
-                    blendedFrames.Add(TextureUtils.FrameToTexture2D(blendedFrame));
-                }
-                else
-                {
-                    blendedFrames.Add(TextureUtils.FrameToTexture2D(rawDecodedTexture));
-                }
+                blendedTextures.Add(TextureUtils.FrameToTexture2D(frame));
             }
             
-            return blendedFrames;
+            return blendedTextures;
         }
         
         /// <summary>

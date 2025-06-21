@@ -61,31 +61,6 @@ namespace LiveTalk.API
     }
 
     /// <summary>
-    /// Stream for MuseTalk output frames - similar to LivePortraitStream
-    /// </summary>
-    public sealed class MuseTalkStream
-    {
-        public int TotalExpectedFrames { get; set; }
-
-        public MuseTalkStream(int totalExpectedFrames)
-        {
-            TotalExpectedFrames = totalExpectedFrames;
-        }
-
-        internal readonly ConcurrentQueue<Texture2D> queue = new();
-        internal CancellationTokenSource cts = new();
-
-        public bool Finished { get; internal set; }
-
-        /// Non-blocking poll. Returns false if no frame is ready yet.
-        public bool TryGetNext(out Texture2D tex) => queue.TryDequeue(out tex);
-
-        /// Yield instruction that waits until the *next* frame exists,
-        /// then exposes it through the .Texture property.
-        public FrameAwaiter WaitForNext() => new(queue);
-    }
-
-    /// <summary>
     /// Factory class for creating MuseTalk instances for talking head generation
     /// Enhanced with streaming capabilities similar to LivePortrait
     /// </summary>
@@ -269,8 +244,8 @@ namespace LiveTalk.API
         /// <param name="avatarTexture">Avatar image texture</param>
         /// <param name="audioClip">Speech audio clip</param>
         /// <param name="batchSize">Processing batch size (default: 4)</param>
-        /// <returns>MuseTalkStream for receiving frames as they're generated</returns>
-        public MuseTalkStream GenerateStreamingAsync(Texture2D avatarTexture, AudioClip audioClip, int batchSize = 4)
+        /// <returns>OutputStream for receiving frames as they're generated</returns>
+        public OutputStream GenerateStreamingAsync(Texture2D avatarTexture, AudioClip audioClip, int batchSize = 4)
         {
             if (!_initialized)
                 throw new InvalidOperationException("Factory is not initialized. Call Initialize() first.");
@@ -290,7 +265,7 @@ namespace LiveTalk.API
             
             // Estimate frame count based on audio length (approximation)
             int estimatedFrames = Mathf.CeilToInt(audioClip.length * 25f); // ~25 FPS estimate
-            var stream = new MuseTalkStream(estimatedFrames);
+            var stream = new OutputStream(estimatedFrames);
             
             _avatarController.StartCoroutine(_museTalk.GenerateAsync(input, stream));
             return stream;
@@ -302,8 +277,8 @@ namespace LiveTalk.API
         /// <param name="avatarTextures">Array of avatar image textures</param>
         /// <param name="audioClip">Speech audio clip</param>
         /// <param name="batchSize">Processing batch size (default: 4)</param>
-        /// <returns>MuseTalkStream for receiving frames as they're generated</returns>
-        public MuseTalkStream GenerateStreamingAsync(Texture2D[] avatarTextures, AudioClip audioClip, int batchSize = 4)
+        /// <returns>OutputStream for receiving frames as they're generated</returns>
+        public OutputStream GenerateStreamingAsync(Texture2D[] avatarTextures, AudioClip audioClip, int batchSize = 4)
         {
             if (!_initialized)
                 throw new InvalidOperationException("Factory is not initialized. Call Initialize() first.");
@@ -323,7 +298,7 @@ namespace LiveTalk.API
             
             // Estimate frame count based on audio length (approximation)
             int estimatedFrames = Mathf.CeilToInt(audioClip.length * 25f); // ~25 FPS estimate
-            var stream = new MuseTalkStream(estimatedFrames);
+            var stream = new OutputStream(estimatedFrames);
             
             _avatarController.StartCoroutine(_museTalk.GenerateAsync(input, stream));
             return stream;
@@ -333,8 +308,8 @@ namespace LiveTalk.API
         /// Generate talking head video with custom input configuration (STREAMING)
         /// </summary>
         /// <param name="input">Complete MuseTalk input configuration</param>
-        /// <returns>MuseTalkStream for receiving frames as they're generated</returns>
-        public MuseTalkStream GenerateStreamingAsync(MuseTalkInput input)
+        /// <returns>OutputStream for receiving frames as they're generated</returns>
+        public OutputStream GenerateStreamingAsync(MuseTalkInput input)
         {
             if (!_initialized)
                 throw new InvalidOperationException("Factory is not initialized. Call Initialize() first.");
@@ -349,7 +324,7 @@ namespace LiveTalk.API
             
             // Estimate frame count based on audio length (approximation)
             int estimatedFrames = Mathf.CeilToInt(input.AudioClip.length * 25f); // ~25 FPS estimate
-            var stream = new MuseTalkStream(estimatedFrames);
+            var stream = new OutputStream(estimatedFrames);
             
             _avatarController.StartCoroutine(_museTalk.GenerateAsync(input, stream));
             return stream;
