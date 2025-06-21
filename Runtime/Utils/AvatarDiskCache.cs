@@ -480,60 +480,60 @@ namespace MuseTalk.Utils
                         };
                     
                     // Convert byte arrays to base64 strings (no conversion needed since FaceData already has byte arrays)
-                    if (faceData.CroppedFaceTextureData != null)
+                    if (faceData.CroppedFaceTexture.data != null)
                     {
-                        serializableFace.CroppedFaceTextureData = Convert.ToBase64String(faceData.CroppedFaceTextureData);
-                        serializableFace.CroppedFaceWidth = faceData.CroppedFaceWidth;
-                        serializableFace.CroppedFaceHeight = faceData.CroppedFaceHeight;
+                        serializableFace.CroppedFaceTextureData = Convert.ToBase64String(faceData.CroppedFaceTexture.data);
+                        serializableFace.CroppedFaceWidth = faceData.CroppedFaceTexture.width;
+                        serializableFace.CroppedFaceHeight = faceData.CroppedFaceTexture.height;
                     }
                     
-                    if (faceData.OriginalTextureData != null)
+                    if (faceData.OriginalTexture.data != null)
                     {
-                        serializableFace.OriginalTextureData = Convert.ToBase64String(faceData.OriginalTextureData);
-                        serializableFace.OriginalWidth = faceData.OriginalWidth;
-                        serializableFace.OriginalHeight = faceData.OriginalHeight;
+                        serializableFace.OriginalTextureData = Convert.ToBase64String(faceData.OriginalTexture.data);
+                        serializableFace.OriginalWidth = faceData.OriginalTexture.width;
+                        serializableFace.OriginalHeight = faceData.OriginalTexture.height;
                     }
                     
-                    if (faceData.FaceLargeData != null)
+                    if (faceData.FaceLarge.data != null)
                     {
-                        serializableFace.FaceLargeData = Convert.ToBase64String(faceData.FaceLargeData);
-                        serializableFace.FaceLargeWidth = faceData.FaceLargeWidth;
-                        serializableFace.FaceLargeHeight = faceData.FaceLargeHeight;
+                        serializableFace.FaceLargeData = Convert.ToBase64String(faceData.FaceLarge.data);
+                        serializableFace.FaceLargeWidth = faceData.FaceLarge.width;
+                        serializableFace.FaceLargeHeight = faceData.FaceLarge.height;
                     }
                     
-                    if (faceData.SegmentationMaskData != null)
+                    if (faceData.SegmentationMask.data != null)
                     {
-                        serializableFace.SegmentationMaskData = Convert.ToBase64String(faceData.SegmentationMaskData);
-                        serializableFace.SegmentationMaskWidth = faceData.SegmentationMaskWidth;
-                        serializableFace.SegmentationMaskHeight = faceData.SegmentationMaskHeight;
+                        serializableFace.SegmentationMaskData = Convert.ToBase64String(faceData.SegmentationMask.data);
+                        serializableFace.SegmentationMaskWidth = faceData.SegmentationMask.width;
+                        serializableFace.SegmentationMaskHeight = faceData.SegmentationMask.height;
                     }
                     
-                    if (faceData.MaskSmallData != null)
+                    if (faceData.MaskSmall.data != null)
                     {
-                        serializableFace.MaskSmallData = Convert.ToBase64String(faceData.MaskSmallData);
-                        serializableFace.MaskSmallWidth = faceData.MaskSmallWidth;
-                        serializableFace.MaskSmallHeight = faceData.MaskSmallHeight;
+                        serializableFace.MaskSmallData = Convert.ToBase64String(faceData.MaskSmall.data);
+                        serializableFace.MaskSmallWidth = faceData.MaskSmall.width;
+                        serializableFace.MaskSmallHeight = faceData.MaskSmall.height;
                     }
                     
-                    if (faceData.FullMaskData != null)
+                    if (faceData.FullMask.data != null)
                     {
-                        serializableFace.FullMaskData = Convert.ToBase64String(faceData.FullMaskData);
-                        serializableFace.FullMaskWidth = faceData.FullMaskWidth;
-                        serializableFace.FullMaskHeight = faceData.FullMaskHeight;
+                        serializableFace.FullMaskData = Convert.ToBase64String(faceData.FullMask.data);
+                        serializableFace.FullMaskWidth = faceData.FullMask.width;
+                        serializableFace.FullMaskHeight = faceData.FullMask.height;
                     }
                     
-                    if (faceData.BoundaryMaskData != null)
+                    if (faceData.BoundaryMask.data != null)
                     {
-                        serializableFace.BoundaryMaskData = Convert.ToBase64String(faceData.BoundaryMaskData);
-                        serializableFace.BoundaryMaskWidth = faceData.BoundaryMaskWidth;
-                        serializableFace.BoundaryMaskHeight = faceData.BoundaryMaskHeight;
+                        serializableFace.BoundaryMaskData = Convert.ToBase64String(faceData.BoundaryMask.data);
+                        serializableFace.BoundaryMaskWidth = faceData.BoundaryMask.width;
+                        serializableFace.BoundaryMaskHeight = faceData.BoundaryMask.height;
                     }
                     
-                    if (faceData.BlurredMaskData != null)
+                    if (faceData.BlurredMask.data != null)
                     {
-                        serializableFace.BlurredMaskData = Convert.ToBase64String(faceData.BlurredMaskData);
-                        serializableFace.BlurredMaskWidth = faceData.BlurredMaskWidth;
-                        serializableFace.BlurredMaskHeight = faceData.BlurredMaskHeight;
+                        serializableFace.BlurredMaskData = Convert.ToBase64String(faceData.BlurredMask.data);
+                        serializableFace.BlurredMaskWidth = faceData.BlurredMask.width;
+                        serializableFace.BlurredMaskHeight = faceData.BlurredMask.height;
                     }
                     
                     serializableData.FaceRegions.Add(serializableFace);
@@ -566,37 +566,21 @@ namespace MuseTalk.Utils
                         AdjustedFaceBbox = serializableFace.AdjustedFaceBbox?.ToVector4() ?? default(Vector4),
                         CropBox = serializableFace.CropBox?.ToVector4() ?? default(Vector4),
                         // Cropped Face Texture Data
-                        CroppedFaceTextureData = !string.IsNullOrEmpty(serializableFace.CroppedFaceTextureData) ? Convert.FromBase64String(serializableFace.CroppedFaceTextureData) : null,
-                        CroppedFaceWidth = serializableFace.CroppedFaceWidth,
-                        CroppedFaceHeight = serializableFace.CroppedFaceHeight,
+                        CroppedFaceTexture = new Frame(!string.IsNullOrEmpty(serializableFace.CroppedFaceTextureData) ? Convert.FromBase64String(serializableFace.CroppedFaceTextureData) : null, serializableFace.CroppedFaceWidth, serializableFace.CroppedFaceHeight),
                         // Original Texture Data
-                        OriginalTextureData = !string.IsNullOrEmpty(serializableFace.OriginalTextureData) ? Convert.FromBase64String(serializableFace.OriginalTextureData) : null,
-                        OriginalWidth = serializableFace.OriginalWidth,
-                        OriginalHeight = serializableFace.OriginalHeight,
+                        OriginalTexture = new Frame(!string.IsNullOrEmpty(serializableFace.OriginalTextureData) ? Convert.FromBase64String(serializableFace.OriginalTextureData) : null, serializableFace.OriginalWidth, serializableFace.OriginalHeight),
                         // Face Large Data
-                        FaceLargeData = !string.IsNullOrEmpty(serializableFace.FaceLargeData) ? Convert.FromBase64String(serializableFace.FaceLargeData) : null,
-                        FaceLargeWidth = serializableFace.FaceLargeWidth,
-                        FaceLargeHeight = serializableFace.FaceLargeHeight,
+                        FaceLarge = new Frame(!string.IsNullOrEmpty(serializableFace.FaceLargeData) ? Convert.FromBase64String(serializableFace.FaceLargeData) : null, serializableFace.FaceLargeWidth, serializableFace.FaceLargeHeight),
                         // Segmentation Mask Data
-                        SegmentationMaskData = !string.IsNullOrEmpty(serializableFace.SegmentationMaskData) ? Convert.FromBase64String(serializableFace.SegmentationMaskData) : null,
-                        SegmentationMaskWidth = serializableFace.SegmentationMaskWidth,
-                        SegmentationMaskHeight = serializableFace.SegmentationMaskHeight,
+                        SegmentationMask = new Frame(!string.IsNullOrEmpty(serializableFace.SegmentationMaskData) ? Convert.FromBase64String(serializableFace.SegmentationMaskData) : null, serializableFace.SegmentationMaskWidth, serializableFace.SegmentationMaskHeight),
                         // Mask Small Data
-                        MaskSmallData = !string.IsNullOrEmpty(serializableFace.MaskSmallData) ? Convert.FromBase64String(serializableFace.MaskSmallData) : null,
-                        MaskSmallWidth = serializableFace.MaskSmallWidth,
-                        MaskSmallHeight = serializableFace.MaskSmallHeight,
+                        MaskSmall = new Frame(!string.IsNullOrEmpty(serializableFace.MaskSmallData) ? Convert.FromBase64String(serializableFace.MaskSmallData) : null, serializableFace.MaskSmallWidth, serializableFace.MaskSmallHeight),
                         // Full Mask Data
-                        FullMaskData = !string.IsNullOrEmpty(serializableFace.FullMaskData) ? Convert.FromBase64String(serializableFace.FullMaskData) : null,
-                        FullMaskWidth = serializableFace.FullMaskWidth,
-                        FullMaskHeight = serializableFace.FullMaskHeight,
+                        FullMask = new Frame(!string.IsNullOrEmpty(serializableFace.FullMaskData) ? Convert.FromBase64String(serializableFace.FullMaskData) : null, serializableFace.FullMaskWidth, serializableFace.FullMaskHeight),
                         // Boundary Mask Data
-                        BoundaryMaskData = !string.IsNullOrEmpty(serializableFace.BoundaryMaskData) ? Convert.FromBase64String(serializableFace.BoundaryMaskData) : null,
-                        BoundaryMaskWidth = serializableFace.BoundaryMaskWidth,
-                        BoundaryMaskHeight = serializableFace.BoundaryMaskHeight,
+                        BoundaryMask = new Frame(!string.IsNullOrEmpty(serializableFace.BoundaryMaskData) ? Convert.FromBase64String(serializableFace.BoundaryMaskData) : null, serializableFace.BoundaryMaskWidth, serializableFace.BoundaryMaskHeight),
                         // Blurred Mask Data
-                        BlurredMaskData = !string.IsNullOrEmpty(serializableFace.BlurredMaskData) ? Convert.FromBase64String(serializableFace.BlurredMaskData) : null,
-                        BlurredMaskWidth = serializableFace.BlurredMaskWidth,
-                        BlurredMaskHeight = serializableFace.BlurredMaskHeight
+                        BlurredMask = new Frame(!string.IsNullOrEmpty(serializableFace.BlurredMaskData) ? Convert.FromBase64String(serializableFace.BlurredMaskData) : null, serializableFace.BlurredMaskWidth, serializableFace.BlurredMaskHeight)
                     };
 
                     avatarData.FaceRegions.Add(faceData);

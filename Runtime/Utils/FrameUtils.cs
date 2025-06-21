@@ -7,6 +7,20 @@ using System.Runtime.InteropServices;
 
 namespace MuseTalk.Utils
 {
+    public struct Frame
+    {
+        public byte[] data;
+        public int width;
+        public int height;
+
+        public Frame(byte[] data, int width, int height)
+        {
+            this.data = data;
+            this.width = width;
+            this.height = height;
+        }        
+    }
+
     /// <summary>
     /// RGB24 pixel struct for efficient 3-byte operations
     /// </summary>
@@ -71,7 +85,7 @@ namespace MuseTalk.Utils
     }
 
     /// <summary>
-    /// Utility functions for byte array operations
+    /// Utility functions for frame operations
     /// </summary>
     public static class FrameUtils
     {
@@ -79,9 +93,11 @@ namespace MuseTalk.Utils
 #region Conversion
 
         /// <summary>
-        /// OPTIMIZED: Uses unsafe pointers, parallelization, and bulk memory operations for maximum performance
+        /// Convert a tensor to a frame
         /// </summary>
-        public static unsafe (byte[], int, int) TensorToBytes(Tensor<float> tensor)
+        /// <param name="tensor">Tensor to convert</param>
+        /// <returns>Frame</returns>
+        public static unsafe Frame TensorToFrame(Tensor<float> tensor)
         {
             if (tensor == null)
                 throw new ArgumentNullException(nameof(tensor));
@@ -113,36 +129,21 @@ namespace MuseTalk.Utils
             
             if (channels != 3)
                 throw new ArgumentException($"Expected 3 channels (RGB), got {channels}");
-                
-            // Create texture with RGB24 format for maximum efficiency
+
             var pixelData = new byte[width * height * 3];
             
             // Get tensor data array once for performance
+            // TODO remove toArray()
             var tensorArray = tensor.ToArray();
-            
-            // Get unsafe pointer for direct memory operations
             fixed (byte* pixelPtr = pixelData)
             {
                 byte* pixelPtrLocal = pixelPtr;
-
-                // Pre-calculate channel stride for performance
                 int channelStride = height * width;
                 int batchStride = channels * channelStride;
-                
-                // OPTIMIZED: Parallel processing of rows for maximum performance
-                // Python processing:
-                // 1. image = np.transpose(image, (0, 2, 3, 1))
-                // 2. image_float64 = image.astype(np.float64) 
-                // 3. image_normalized = (image_float64 / 2.0 + 0.5).clip(0.0, 1.0)
-                // 4. image_uint8 = np.round(image_normalized * 255.0).astype(np.uint8)
-                // 5. image_final = image_uint8[0]  # Remove batch dimension
-                // 6. image_final_bgr = image_final[...,::-1]  # RGB to BGR conversion
                 
                 System.Threading.Tasks.Parallel.For(0, height, y =>
                 {
                     byte* rowPtr = pixelPtrLocal + y * width * 3; // RGB24: 3 bytes per pixel
-                    
-                    // Process entire row in chunks for better cache performance
                     for (int x = 0; x < width; x++)
                     {
                         float r, g, b;
@@ -163,27 +164,16 @@ namespace MuseTalk.Utils
                             g = tensorArray[baseIndex + channelStride];    // Channel 1 (G)
                             b = tensorArray[baseIndex + 2 * channelStride]; // Channel 2 (B)
                         }
-                        
-                        // OPTIMIZED: Use direct float operations instead of double for better performance
-                        // Python: image_normalized = (image_float64 / 2.0 + 0.5).clip(0.0, 1.0)
-                        // Clamp to [0, 1] range with fast math operations
+
                         r = Mathf.Clamp01(r * 0.5f + 0.5f);
                         g = Mathf.Clamp01(g * 0.5f + 0.5f);
                         b = Mathf.Clamp01(b * 0.5f + 0.5f);
                         
                         // Convert to byte range [0, 255] with proper rounding
-                        // Python: image_uint8 = np.round(image_normalized * 255.0).astype(np.uint8)
                         byte rByte = (byte)Mathf.RoundToInt(r * 255f);
                         byte gByte = (byte)Mathf.RoundToInt(g * 255f);
                         byte bByte = (byte)Mathf.RoundToInt(b * 255f);
                         
-                        // CRITICAL FIX: Proper color channel handling
-                        // Python VAE decoder outputs RGB tensor, then converts to BGR for OpenCV
-                        // Python: image_final_bgr = image_final[...,::-1]  # RGB to BGR
-                        // Unity expects RGB for display, so we use the original RGB from tensor
-                        // NO channel swapping needed - use original RGB values
-                        
-                        // Direct memory write using pointer arithmetic (fastest possible)
                         byte* pixelPtr = rowPtr + x * 3;
                         pixelPtr[0] = rByte; // R
                         pixelPtr[1] = gByte; // G
@@ -192,54 +182,49 @@ namespace MuseTalk.Utils
                 });
             }
             
-            return (pixelData, width, height);
+            return new Frame(pixelData, width, height);
         }
 
 
-        // Face detection and landmark processing methods - SIMPLIFIED FOR NOW
         /// <summary>
-        /// OPTIMIZED: Common image preprocessing with unsafe pointers and parallelization for maximum performance
-        /// Supports different normalization modes via multiplier and offset constants
+        /// Convert a frame to a tensor
         /// </summary>
-        /// <param name="img">RGB24 byte array</param>
+        /// <param name="frame">Frame to convert</param>
         /// <param name="width">Image width</param>
         /// <param name="height">Image height</param>
         /// <param name="multiplier">Multiplier for all RGB channels</param>
         /// <param name="offset">Offset for all RGB channels</param>
         /// <param name="applyLowerHalfMask">If true, masks lower half of image to zero (upper half = 1.0, lower half = 0.0)</param>
-        public static unsafe DenseTensor<float> PreprocessImageOptimized(
-            byte[] img, int width, int height, 
-            float multiplier, float offset, bool applyLowerHalfMask = false)
+        public static unsafe DenseTensor<float> FrameToTensor(
+            Frame frame, float multiplier, float offset, bool applyLowerHalfMask = false)
         {
             // Use per-channel version with same multiplier/offset for all channels
             var multipliers = new float[] { multiplier, multiplier, multiplier };
             var offsets = new float[] { offset, offset, offset };
-            return PreprocessImageOptimized(img, width, height, multipliers, offsets, applyLowerHalfMask);
+            return FrameToTensor(frame, multipliers, offsets, applyLowerHalfMask);
         }
 
         /// <summary>
-        /// OPTIMIZED: Common image preprocessing with per-channel multiplier and offset support
-        /// Supports ImageNet normalization and other per-channel transformations
+        /// Convert a frame to a tensor
         /// </summary>
-        /// <param name="img">RGB24 byte array</param>
+        /// <param name="frame">Frame to convert</param>
         /// <param name="width">Image width</param>
         /// <param name="height">Image height</param>
         /// <param name="multipliers">Per-channel multipliers (3 values for RGB)</param>
         /// <param name="offsets">Per-channel offsets (3 values for RGB)</param>
         /// <param name="applyLowerHalfMask">If true, masks lower half of image to zero (upper half = 1.0, lower half = 0.0)</param>
-        public static unsafe DenseTensor<float> PreprocessImageOptimized(
-            byte[] img, int width, int height, 
-            float[] multipliers, float[] offsets, bool applyLowerHalfMask = false)
+        public static unsafe DenseTensor<float> FrameToTensor(
+            Frame frame, float[] multipliers, float[] offsets, bool applyLowerHalfMask = false)
         {
             if (multipliers.Length != 3 || offsets.Length != 3)
                 throw new ArgumentException("Multipliers and offsets must have exactly 3 elements for RGB channels");
                 
-            var tensorData = new float[1 * 3 * height * width];
-            int imageSize = height * width;
-            int halfHeight = applyLowerHalfMask ? height / 2 : 0; // Pre-calculate for mask comparison
+            var tensorData = new float[1 * 3 * frame.height * frame.width];
+            int imageSize = frame.height * frame.width;
+            int halfHeight = applyLowerHalfMask ? frame.height / 2 : 0; // Pre-calculate for mask comparison
             
             // OPTIMIZED: Use unsafe pointers for direct memory access
-            fixed (byte* imgPtrFixed = img)
+            fixed (byte* imgPtrFixed = frame.data)
             fixed (float* tensorPtrFixed = tensorData)
             fixed (float* multipliersPtr = multipliers)
             fixed (float* offsetsPtr = offsets)
@@ -255,7 +240,7 @@ namespace MuseTalk.Utils
                 System.Threading.Tasks.Parallel.For(0, imageSize, pixelIdx =>
                 {
                     // Calculate x, y coordinates from linear pixel index for masking
-                    int y = pixelIdx / width;
+                    int y = pixelIdx / frame.width;
                     
                     // Apply mask if requested (upper half = 1, lower half = 0)
                     float mask = (applyLowerHalfMask && y >= halfHeight) ? 0.0f : 1.0f;
@@ -283,7 +268,7 @@ namespace MuseTalk.Utils
                 });
             }
             
-            return new DenseTensor<float>(tensorData, new[] { 1, 3, height, width });
+            return new DenseTensor<float>(tensorData, new[] { 1, 3, frame.height, frame.width });
         }
         
 #endregion
@@ -291,83 +276,85 @@ namespace MuseTalk.Utils
 #region Transformations
 
         /// <summary>
-        /// Crop byte array image data to specified rectangle
-        /// OPTIMIZED: Uses unsafe pointers for maximum performance
+        /// Crop frame to specified rectangle
         /// </summary>
-        public static unsafe byte[] CropTexture(byte[] sourceData, int sourceWidth, int sourceHeight, Rect cropRect)
+        /// <param name="frame">Frame to crop</param>
+        /// <param name="cropRect">Rectangle to crop</param>
+        /// <returns>Cropped frame</returns>
+        public static unsafe Frame CropFrame(Frame frame, Rect cropRect)
         {
-            if (sourceData == null)
-                throw new ArgumentNullException(nameof(sourceData));
-            
-            if (sourceData.Length != sourceWidth * sourceHeight * 3)
-                throw new ArgumentException($"Source data size {sourceData.Length} doesn't match expected size {sourceWidth * sourceHeight * 3} for RGB24 format");
+            if (frame.data.Length != frame.width * frame.height * 3)
+                throw new ArgumentException($"Source data size {frame.data.Length} doesn't match expected size {frame.width * frame.height * 3} for RGB24 format");
             
             // Ensure crop bounds are within source image
             int x = Mathf.Max(0, (int)cropRect.x);
             int y = Mathf.Max(0, (int)cropRect.y);
-            int width = Mathf.Min((int)cropRect.width, sourceWidth - x);
-            int height = Mathf.Min((int)cropRect.height, sourceHeight - y);
+            int cropWidth = Mathf.Min((int)cropRect.width, frame.width - x);
+            int cropHeight = Mathf.Min((int)cropRect.height, frame.height - y);
             
-            if (width <= 0 || height <= 0)
+            if (cropWidth <= 0 || cropHeight <= 0)
                 throw new ArgumentException("Invalid crop rectangle");
             
-            var croppedData = new byte[width * height * 3];
+            var croppedFrame = new Frame(new byte[cropWidth * cropHeight * 3], cropWidth, cropHeight);
             
-            fixed (byte* srcPtr = sourceData)
-            fixed (byte* dstPtr = croppedData)
+            fixed (byte* srcPtr = frame.data)
+            fixed (byte* dstPtr = croppedFrame.data)
             {
                 // Capture pointers in local variables to avoid lambda closure issues
                 byte* srcPtrLocal = srcPtr;
                 byte* dstPtrLocal = dstPtr;
                 
-                // OPTIMIZED: Parallel row copying for maximum performance
-                System.Threading.Tasks.Parallel.For(0, height, row =>
+                System.Threading.Tasks.Parallel.For(0, cropHeight, row =>
                 {
                     // Calculate source and destination row pointers
-                    byte* srcRowPtr = srcPtrLocal + ((y + row) * sourceWidth + x) * 3; // RGB24: 3 bytes per pixel
-                    byte* dstRowPtr = dstPtrLocal + row * width * 3;
+                    byte* srcRowPtr = srcPtrLocal + ((y + row) * frame.width + x) * 3; // RGB24: 3 bytes per pixel
+                    byte* dstRowPtr = dstPtrLocal + row * cropWidth * 3;
                     
                     // Bulk copy entire row in one operation
-                    int rowBytes = width * 3;
+                    int rowBytes = cropWidth * 3;
                     Buffer.MemoryCopy(srcRowPtr, dstRowPtr, rowBytes, rowBytes);
                 });
             }
             
-            return croppedData;
+            return croppedFrame;
         }
 
         /// <summary>
-        /// Resize RGB24 byte array to exact target dimensions (matching Python cv2.resize with LANCZOS4)
-        /// OPTIMIZED: Uses unsafe pointers, parallelization, and optimized interpolation for maximum performance
+        /// Resize frame to exact target dimensions (matching Python cv2.resize with LANCZOS4)
         /// </summary>
-        public static unsafe byte[] ResizeTextureToExactSize(
-            byte[] sourceData, int sourceWidth, int sourceHeight, 
+        /// <param name="frame">Frame to resize</param>
+        /// <param name="targetWidth">Target width</param>
+        /// <param name="targetHeight">Target height</param>
+        /// <param name="samplingMode">Sampling mode</param>
+        /// <returns>Resized frame</returns>
+        public static unsafe Frame ResizeFrame(
+            Frame frame, 
             int targetWidth, int targetHeight, 
             SamplingMode samplingMode = SamplingMode.Bilinear)
         {
-            if (sourceData == null)
-                throw new ArgumentNullException(nameof(sourceData));
+            if (frame.data == null)
+                throw new ArgumentNullException(nameof(frame.data));
                 
             if (targetWidth <= 0 || targetHeight <= 0)
                 throw new ArgumentException("Target dimensions must be positive");
                 
-            if (sourceWidth <= 0 || sourceHeight <= 0)
+            if (frame.width <= 0 || frame.height <= 0)
                 throw new ArgumentException("Source dimensions must be positive");
                 
             // If already the correct size, return copy
-            if (sourceWidth == targetWidth && sourceHeight == targetHeight)
+            if (frame.width == targetWidth && frame.height == targetHeight)
             {
-                var copy = new byte[sourceData.Length];
-                Array.Copy(sourceData, copy, sourceData.Length);
-                return copy;
+                var copy = new byte[frame.data.Length];
+                Array.Copy(frame.data, copy, frame.data.Length);
+                return new Frame(copy, targetWidth, targetHeight);
             }
             
             // Create target byte array (RGB24 = 3 bytes per pixel)
-            var targetData = new byte[targetWidth * targetHeight * 3];
+            var targetFrame = new Frame(new byte[targetWidth * targetHeight * 3], targetWidth, targetHeight);
             
             // Pre-calculate scaling ratios for performance
-            float xRatio = (float)sourceWidth / targetWidth;
-            float yRatio = (float)sourceHeight / targetHeight;
+            float xRatio = (float)frame.width / targetWidth;
+            float yRatio = (float)frame.height / targetHeight;
             
             // OPTIMIZED: Maximum parallelism across all target pixels
             int totalPixels = targetWidth * targetHeight;
@@ -386,17 +373,17 @@ namespace MuseTalk.Utils
                     int srcY = Mathf.RoundToInt(y * yRatio);
                     
                     // Clamp to source bounds
-                    srcX = Mathf.Clamp(srcX, 0, sourceWidth - 1);
-                    srcY = Mathf.Clamp(srcY, 0, sourceHeight - 1);
+                    srcX = Mathf.Clamp(srcX, 0, frame.width - 1);
+                    srcY = Mathf.Clamp(srcY, 0, frame.height - 1);
                     
                     // Calculate source and target indices
-                    int sourceIdx = (srcY * sourceWidth + srcX) * 3;
+                    int sourceIdx = (srcY * frame.width + srcX) * 3;
                     int targetIdx = (y * targetWidth + x) * 3;
                     
                     // Direct 3-byte copy (RGB24)
-                    targetData[targetIdx] = sourceData[sourceIdx];         // R
-                    targetData[targetIdx + 1] = sourceData[sourceIdx + 1]; // G
-                    targetData[targetIdx + 2] = sourceData[sourceIdx + 2]; // B
+                    targetFrame.data[targetIdx] = frame.data[sourceIdx];         // R
+                    targetFrame.data[targetIdx + 1] = frame.data[sourceIdx + 1]; // G
+                    targetFrame.data[targetIdx + 2] = frame.data[sourceIdx + 2]; // B
                 });
             }
             else
@@ -415,8 +402,8 @@ namespace MuseTalk.Utils
                     // Get integer and fractional parts for bilinear interpolation
                     int x1 = Mathf.FloorToInt(srcX);
                     int y1 = Mathf.FloorToInt(srcY);
-                    int x2 = Mathf.Min(x1 + 1, sourceWidth - 1);
-                    int y2 = Mathf.Min(y1 + 1, sourceHeight - 1);
+                    int x2 = Mathf.Min(x1 + 1, frame.width - 1);
+                    int y2 = Mathf.Min(y1 + 1, frame.height - 1);
                     
                     float fx = srcX - x1;
                     float fy = srcY - y1;
@@ -424,10 +411,10 @@ namespace MuseTalk.Utils
                     float invFy = 1.0f - fy;
                     
                     // Calculate source pixel indices for bilinear interpolation
-                    int c1Idx = (y1 * sourceWidth + x1) * 3; // Top-left
-                    int c2Idx = (y1 * sourceWidth + x2) * 3; // Top-right
-                    int c3Idx = (y2 * sourceWidth + x1) * 3; // Bottom-left
-                    int c4Idx = (y2 * sourceWidth + x2) * 3; // Bottom-right
+                    int c1Idx = (y1 * frame.width + x1) * 3; // Top-left
+                    int c2Idx = (y1 * frame.width + x2) * 3; // Top-right
+                    int c3Idx = (y2 * frame.width + x1) * 3; // Bottom-left
+                    int c4Idx = (y2 * frame.width + x2) * 3; // Bottom-right
                     
                     // Pre-calculate bilinear interpolation weights
                     float w1 = invFx * invFy; // Top-left weight
@@ -440,35 +427,38 @@ namespace MuseTalk.Utils
                     
                     // OPTIMIZED: Direct byte interpolation with unrolled RGB channels
                     // R channel
-                    float r = sourceData[c1Idx] * w1 + sourceData[c2Idx] * w2 + sourceData[c3Idx] * w3 + sourceData[c4Idx] * w4;
-                    targetData[targetIdx] = (byte)Mathf.Clamp(r, 0f, 255f);
+                    float r = frame.data[c1Idx] * w1 + frame.data[c2Idx] * w2 + frame.data[c3Idx] * w3 + frame.data[c4Idx] * w4;
+                    targetFrame.data[targetIdx] = (byte)Mathf.Clamp(r, 0f, 255f);
                     
                     // G channel
-                    float g = sourceData[c1Idx + 1] * w1 + sourceData[c2Idx + 1] * w2 + sourceData[c3Idx + 1] * w3 + sourceData[c4Idx + 1] * w4;
-                    targetData[targetIdx + 1] = (byte)Mathf.Clamp(g, 0f, 255f);
+                    float g = frame.data[c1Idx + 1] * w1 + frame.data[c2Idx + 1] * w2 + frame.data[c3Idx + 1] * w3 + frame.data[c4Idx + 1] * w4;
+                    targetFrame.data[targetIdx + 1] = (byte)Mathf.Clamp(g, 0f, 255f);
                     
                     // B channel
-                    float b = sourceData[c1Idx + 2] * w1 + sourceData[c2Idx + 2] * w2 + sourceData[c3Idx + 2] * w3 + sourceData[c4Idx + 2] * w4;
-                    targetData[targetIdx + 2] = (byte)Mathf.Clamp(b, 0f, 255f);
+                    float b = frame.data[c1Idx + 2] * w1 + frame.data[c2Idx + 2] * w2 + frame.data[c3Idx + 2] * w3 + frame.data[c4Idx + 2] * w4;
+                    targetFrame.data[targetIdx + 2] = (byte)Mathf.Clamp(b, 0f, 255f);
                 });
             }
             
-            return targetData;
+            return targetFrame;
         }
 
 
         /// <summary>
-        /// Python: cv2.warpAffine() - EXACT MATCH
-        /// This is the corrected version that matches OpenCV's warpAffine exactly
+        /// Affine transform frame to exact target dimensions (matching Python cv2.warpAffine)
+        /// <param name="frame">Frame to transform</param>
+        /// <param name="M">Transformation matrix</param>
+        /// <param name="dstWidth">Target width</param>
+        /// <param name="dstHeight">Target height</param>
+        /// <returns>Transformed frame</returns>
         /// </summary>
-        public static unsafe byte[] TransformImgExact(
-            byte[] img, int width, int height, float[,] M, int dstWidth, int dstHeight)
+        public static unsafe Frame AffineTransformFrame(
+            Frame frame, float[,] M, int dstWidth, int dstHeight)
         {
-            // Create result texture - MUST use RGB24 format for consistent processing
-            var result = new byte[dstWidth * dstHeight * 3];
+            var result = new Frame(new byte[dstWidth * dstHeight * 3], dstWidth, dstHeight);
 
-            int srcWidth = width;
-            int srcHeight = height;
+            int srcWidth = frame.width;
+            int srcHeight = frame.height;
 
             // Invert the transformation matrix M to get the mapping from destination to source
             float[,] invM = MathUtils.InvertAffineTransform(M);
@@ -477,14 +467,11 @@ namespace MuseTalk.Utils
             float m00 = invM[0, 0], m01 = invM[0, 1], m02 = invM[0, 2];
             float m10 = invM[1, 0], m11 = invM[1, 1], m12 = invM[1, 2];
 
-            // OPTIMIZED: Use unsafe pointers for direct memory access (compatible with Parallel.For)
-            fixed (byte* resultPtr = result)
+            fixed (byte* resultPtr = result.data)
             {
                 // Get source pointer using fixed for direct access
-                fixed (byte* srcPtrFixed = img)
+                fixed (byte* srcPtrFixed = frame.data)
                 {
-                    // MAXIMUM PERFORMANCE: Parallel processing across all destination pixels
-                    // Each pixel can be processed independently for perfect parallelization
                     int totalPixels = dstWidth * dstHeight;
                     
                     // Capture pointers in local variables to avoid lambda closure issues
@@ -498,12 +485,11 @@ namespace MuseTalk.Utils
                         int dstX = pixelIndex % dstWidth;
 
                         // Apply inverse transformation matrix to find source coordinates
-                        // OPTIMIZED: Use pre-calculated matrix elements
                         float srcX = m00 * dstX + m01 * dstY + m02;
                         float srcY = m10 * dstX + m11 * dstY + m12;
 
                         // Get integer and fractional parts for bilinear interpolation
-                        int x0 = (int)srcX; // Faster than Mathf.FloorToInt for positive values
+                        int x0 = (int)srcX;
                         int y0 = (int)srcY;
 
                         float fx = srcX - x0;
@@ -515,7 +501,6 @@ namespace MuseTalk.Utils
                         // Bounds check for bilinear interpolation
                         if (x0 >= 0 && (x0 + 1) < srcWidth && y0 >= 0 && (y0 + 1) < srcHeight)
                         {
-                            // OPTIMIZED: Direct pointer arithmetic for pixel access
                             byte* c00Ptr = srcPtrLocal + (y0 * srcWidth + x0) * 3;           // Top-left
                             byte* c10Ptr = srcPtrLocal + (y0 * srcWidth + x0 + 1) * 3;       // Top-right
                             byte* c01Ptr = srcPtrLocal + ((y0 + 1) * srcWidth + x0) * 3;     // Bottom-left
@@ -529,18 +514,15 @@ namespace MuseTalk.Utils
                             float w01 = inv_fx * fy;     // Bottom-left weight
                             float w11 = fx * fy;         // Bottom-right weight
                             
-                            // OPTIMIZED: Direct pointer access with unrolled RGB channels
                             float r_float = w00 * c00Ptr[0] + w10 * c10Ptr[0] + w01 * c01Ptr[0] + w11 * c11Ptr[0];
                             float g_float = w00 * c00Ptr[1] + w10 * c10Ptr[1] + w01 * c01Ptr[1] + w11 * c11Ptr[1];
                             float b_float = w00 * c00Ptr[2] + w10 * c10Ptr[2] + w01 * c01Ptr[2] + w11 * c11Ptr[2];
 
-                            // Fast clamping using direct comparison (faster than Mathf.Clamp)
                             r = (byte)(r_float < 0f ? 0 : r_float > 255f ? 255 : r_float);
                             g = (byte)(g_float < 0f ? 0 : g_float > 255f ? 255 : g_float);
                             b = (byte)(b_float < 0f ? 0 : b_float > 255f ? 255 : b_float);
                         }
 
-                        // OPTIMIZED: Direct pointer write to result
                         byte* resultPixelPtr = resultPtrLocal + pixelIndex * 3;
                         resultPixelPtr[0] = r; // R
                         resultPixelPtr[1] = g; // G
@@ -568,7 +550,7 @@ namespace MuseTalk.Utils
         /// <param name="height">Image height</param>
         /// <param name="kernelSize">Kernel size (odd number)</param>
         /// <param name="operation">Morphological operation type</param>
-        public static unsafe void ApplyMorphologyUnsafe(
+        private static unsafe void ApplyMorphologyUnsafe(
             byte* inputPtr, byte* outputPtr, int width, int height, int kernelSize, MorphologyOperation operation)
         {
             int radius = kernelSize / 2;
@@ -577,7 +559,6 @@ namespace MuseTalk.Utils
             byte initialValue = operation == MorphologyOperation.Dilation ? (byte)0 : (byte)255;
             bool isDilation = operation == MorphologyOperation.Dilation;
             
-            // Parallel processing for maximum performance
             System.Threading.Tasks.Parallel.For(0, height, y =>
             {
                 for (int x = 0; x < width; x++)
@@ -621,20 +602,32 @@ namespace MuseTalk.Utils
         /// Unsafe optimized dilation operation using direct byte pointer access
         /// OPTIMIZED: Wrapper around consolidated ApplyMorphologyUnsafe for backward compatibility
         /// </summary>
-        public static unsafe void ApplyDilationUnsafe(
-            byte* inputPtr, byte* outputPtr, int width, int height, int kernelSize)
+        public static unsafe Frame ApplyDilation(
+            Frame frame, int kernelSize)
         {
-            ApplyMorphologyUnsafe(inputPtr, outputPtr, width, height, kernelSize, MorphologyOperation.Dilation);
+            var dilatedFrame = new Frame(new byte[frame.data.Length], frame.width, frame.height);
+            fixed (byte* inputPtr = frame.data)
+            fixed (byte* outputPtr = dilatedFrame.data)
+            {
+                ApplyMorphologyUnsafe(inputPtr, outputPtr, frame.width, frame.height, kernelSize, MorphologyOperation.Dilation);
+            }
+            return dilatedFrame;
         }
         
         /// <summary>
         /// Unsafe optimized erosion operation using direct byte pointer access
         /// OPTIMIZED: Wrapper around consolidated ApplyMorphologyUnsafe for backward compatibility
         /// </summary>
-        public static unsafe void ApplyErosionUnsafe(
-            byte* inputPtr, byte* outputPtr, int width, int height, int kernelSize)
+        public static unsafe Frame ApplyErosion(
+            Frame frame, int kernelSize)
         {
-            ApplyMorphologyUnsafe(inputPtr, outputPtr, width, height, kernelSize, MorphologyOperation.Erosion);
+            var erodedFrame = new Frame(new byte[frame.data.Length], frame.width, frame.height);
+            fixed (byte* inputPtr = frame.data)
+            fixed (byte* outputPtr = erodedFrame.data)
+            {
+                ApplyMorphologyUnsafe(inputPtr, outputPtr, frame.width, frame.height, kernelSize, MorphologyOperation.Erosion);
+            }
+            return erodedFrame;
         }
 
         /// <summary>
@@ -720,18 +713,18 @@ namespace MuseTalk.Utils
         /// UNSAFE OPTIMIZED: Direct pointer-to-pointer processing for maximum performance
         /// REFACTORED: Uses consolidated ApplyBlurPass to eliminate code duplication
         /// </summary>
-        public static unsafe void ApplySimpleGaussianBlur(byte* inputPtr, byte* outputPtr, int width, int height, int kernelSize)
+        public static unsafe Frame ApplySimpleGaussianBlur(Frame frame, int kernelSize)
         {
-            if (inputPtr == null || outputPtr == null)
+            if (frame.data == null)
             {
-                Debug.LogError("[TextureUtils] Null pointers passed to Gaussian blur");
-                return;
+                Debug.LogError("[FrameUtils] Null frame passed to Gaussian blur");
+                return frame;
             }
             
-            if (width <= 0 || height <= 0)
+            if (frame.width <= 0 || frame.height <= 0)
             {
-                Debug.LogError($"[TextureUtils] Invalid dimensions: {width}x{height}");
-                return;
+                Debug.LogError($"[FrameUtils] Invalid dimensions: {frame.width}x{frame.height}");
+                return frame;
             }
             
             float sigma = kernelSize / 3.0f;
@@ -755,22 +748,27 @@ namespace MuseTalk.Utils
             }
             
             // Allocate temporary buffer for horizontal pass
-            int totalPixels = width * height;
+            int totalPixels = frame.width * frame.height;
             byte* tempPtr = (byte*)UnsafeUtility.Malloc(totalPixels * 3, 4, Unity.Collections.Allocator.Temp);
-            
+            var outputFrame = new Frame(new byte[totalPixels * 3], frame.width, frame.height);
             try
             {
-                // Step 1: Horizontal blur pass (input -> temp)
-                ApplyBlurPass(inputPtr, tempPtr, width, height, kernel, BlurDirection.Horizontal);
+                fixed (byte* inputPtr = frame.data)
+                fixed (byte* outputPtr = outputFrame.data)
+                {
+                    // Step 1: Horizontal blur pass (input -> temp)
+                    ApplyBlurPass(inputPtr, tempPtr, frame.width, frame.height, kernel, BlurDirection.Horizontal);
                 
-                // Step 2: Vertical blur pass (temp -> output)
-                ApplyBlurPass(tempPtr, outputPtr, width, height, kernel, BlurDirection.Vertical);
-            }
+                    // Step 2: Vertical blur pass (temp -> output)
+                    ApplyBlurPass(tempPtr, outputPtr, frame.width, frame.height, kernel, BlurDirection.Vertical);
+                }
+            }   
             finally
             {
                 // Clean up temporary buffer
                 UnsafeUtility.Free(tempPtr, Unity.Collections.Allocator.Temp);
             }
+            return outputFrame;
         }
 
 #endregion

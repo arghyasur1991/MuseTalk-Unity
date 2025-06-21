@@ -118,47 +118,29 @@ namespace MuseTalk.Models
         public Vector2[] Landmarks { get; set; }
         
         // Face texture data as byte arrays (RGB24 format)
-        public byte[] CroppedFaceTextureData { get; set; }
-        public int CroppedFaceWidth { get; set; }
-        public int CroppedFaceHeight { get; set; }
+        public Frame CroppedFaceTexture { get; set; }
         
-        public byte[] OriginalTextureData { get; set; }
-        public int OriginalWidth { get; set; }
-        public int OriginalHeight { get; set; }
+        public Frame OriginalTexture { get; set; }
         
         // Face parsing mask (if enabled)
-        public byte[] FaceMaskData { get; set; }
-        public int FaceMaskWidth { get; set; }
-        public int FaceMaskHeight { get; set; }
+        public Frame FaceMask { get; set; }
         
         // Cached segmentation data (computed once during avatar processing)
-        public byte[] FaceLargeData { get; set; }           // Cropped face region with expansion
-        public int FaceLargeWidth { get; set; }
-        public int FaceLargeHeight { get; set; }
+        public Frame FaceLarge { get; set; }           // Cropped face region with expansion
         
-        public byte[] SegmentationMaskData { get; set; }    // BiSeNet segmentation mask
-        public int SegmentationMaskWidth { get; set; }
-        public int SegmentationMaskHeight { get; set; }
+        public Frame SegmentationMask { get; set; }    // BiSeNet segmentation mask
         
         public Vector4 AdjustedFaceBbox { get; set; }      // Face bbox with version-specific adjustments
         public Vector4 CropBox { get; set; }               // Expanded crop box coordinates
         
         // Precomputed blending masks (computed once during avatar processing for performance)
-        public byte[] MaskSmallData { get; set; }           // Small mask cropped to face region
-        public int MaskSmallWidth { get; set; }
-        public int MaskSmallHeight { get; set; }
+        public Frame MaskSmall { get; set; }           // Small mask cropped to face region
         
-        public byte[] FullMaskData { get; set; }            // Full mask with small mask pasted back
-        public int FullMaskWidth { get; set; }
-        public int FullMaskHeight { get; set; }
+        public Frame FullMask { get; set; }            // Full mask with small mask pasted back
         
-        public byte[] BoundaryMaskData { get; set; }        // Mask with upper boundary ratio applied
-        public int BoundaryMaskWidth { get; set; }
-        public int BoundaryMaskHeight { get; set; }
+        public Frame BoundaryMask { get; set; }        // Mask with upper boundary ratio applied
         
-        public byte[] BlurredMaskData { get; set; }         // Final blurred mask for smooth blending
-        public int BlurredMaskWidth { get; set; }
-        public int BlurredMaskHeight { get; set; }
+        public Frame BlurredMask { get; set; }         // Final blurred mask for smooth blending
     }
     
     /// <summary>

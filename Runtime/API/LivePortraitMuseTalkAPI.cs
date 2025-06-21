@@ -272,8 +272,8 @@ namespace MuseTalk.API
         private System.Collections.IEnumerator GenerateAnimatedTexturesPipelined(Texture2D sourceImage, string[] frameFiles, LivePortaitStream outputStream)
         {
             // Step 1: Start source image processing immediately (async)
-            var (srcImg, srcWidth, srcHeight) = TextureUtils.Texture2DToBytes(sourceImage);
-            var processSrcTask = _livePortrait.ProcessSourceImageAsync(srcImg, srcWidth, srcHeight);
+            var srcImg = TextureUtils.Texture2DToFrame(sourceImage);
+            var processSrcTask = _livePortrait.ProcessSourceImageAsync(srcImg);
             
             Logger.Log("[LivePortraitMuseTalkAPI] Source image processing started asynchronously");
 
@@ -306,17 +306,17 @@ namespace MuseTalk.API
                     var drivingFrame = awaiter.Texture;
                     
                     // Process this driving frame
-                    var (imgRgbData, w, h) = TextureUtils.Texture2DToBytes(drivingFrame);
+                    var imgRgbData = TextureUtils.Texture2DToFrame(drivingFrame);
                     
-                    var predictTask = _livePortrait.ProcessNextFrameAsync(processResult, predInfo, imgRgbData, w, h);
+                    var predictTask = _livePortrait.ProcessNextFrameAsync(processResult, predInfo, imgRgbData);
                     yield return new WaitUntil(() => predictTask.IsCompleted);
                     var (generatedImg, updatedPredInfo) = predictTask.Result;
                     predInfo = updatedPredInfo;
 
                     // Output the generated frame
-                    if (generatedImg != null)
+                    if (generatedImg.data != null)
                     {
-                        var generatedImgTexture = TextureUtils.BytesToTexture2D(generatedImg, processResult.SrcImgWidth, processResult.SrcImgHeight);
+                        var generatedImgTexture = TextureUtils.FrameToTexture2D(generatedImg);
                         outputStream.queue.Enqueue(generatedImgTexture);
                         Logger.Log($"[LivePortraitMuseTalkAPI] Processed frame {processedFrames + 1}/{frameFiles.Length}");
                     }

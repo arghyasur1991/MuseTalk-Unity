@@ -152,22 +152,22 @@ namespace MuseTalk.Core
         /// <summary>
         /// EXACT MATCH to LivePortraitInference.FaceAnalysis method
         /// </summary>
-        public List<FaceDetectionResult> AnalyzeFaces(byte[] img, int width, int height, int maxFaces = -1)
+        public List<FaceDetectionResult> AnalyzeFaces(Frame frame, int maxFaces = -1)
         {
             if (!IsInitialized)
                 throw new InvalidOperationException("FaceAnalysis not initialized");
                 
-            if (img == null || width <= 0 || height <= 0)
+            if (frame.data == null || frame.width <= 0 || frame.height <= 0)
                 throw new ArgumentException("Invalid image parameters");
             
             // Process detection results exactly as in LivePortraitInference
-            var faces = DetectFaces(img, width, height);
+            var faces = DetectFaces(frame);
             
             // Get landmarks for each face - EXACT MATCH to original
             var finalFaces = new List<FaceDetectionResult>();
             foreach (var face in faces)
             {
-                var landmarks = GetLandmarks(img, width, height, face);
+                var landmarks = GetLandmarks(frame, face);
                 face.Landmarks106 = landmarks;
                 finalFaces.Add(face);
             }
@@ -186,11 +186,11 @@ namespace MuseTalk.Core
         /// <summary>
         /// Detect faces in image using SCRFD model - EXACT MATCH to LivePortraitInference
         /// </summary>
-        private List<FaceDetectionResult> DetectFaces(byte[] img, int width, int height)
+        private List<FaceDetectionResult> DetectFaces(Frame frame)
         {
             // Python: face_analysis(img) - EXACT MATCH to LivePortraitInference implementation
-            int pythonHeight = height;  // This matches Python's img.shape[0]
-            int pythonWidth = width;    // This matches Python's img.shape[1]
+            int pythonHeight = frame.height;  // This matches Python's img.shape[0]
+            int pythonWidth = frame.width;    // This matches Python's img.shape[1]
             
             // Python: im_ratio = float(img.shape[0]) / img.shape[1]
             float imRatio = (float)pythonHeight / pythonWidth;
@@ -213,22 +213,21 @@ namespace MuseTalk.Core
             float detScale = (float)newHeight / pythonHeight;
             
             // Python: resized_img = cv2.resize(img, (new_width, new_height))
-            var resizedImg = FrameUtils.ResizeTextureToExactSize(img, width, height, newWidth, newHeight, SamplingMode.Bilinear);
+            var resizedImg = FrameUtils.ResizeFrame(frame, newWidth, newHeight, SamplingMode.Bilinear);
             
             // Python: det_img = np.zeros((input_size, input_size, 3), dtype=np.uint8)
             // Python: det_img[:new_height, :new_width, :] = resized_img
-            var detImg = new byte[InputSize * InputSize * 3];
-            var resizedPixels = resizedImg;
+            var detImg = new Frame(new byte[InputSize * InputSize * 3], InputSize, InputSize);
             
             // OPTIMIZED: Fill with zeros using Array.Clear (faster than manual loop)
-            Array.Clear(detImg, 0, detImg.Length);
+            Array.Clear(detImg.data, 0, detImg.data.Length);
             
             // OPTIMIZED: Copy resized image to top-left with unsafe pointers and parallelization
             // EXACT MATCH to LivePortraitInference implementation
             unsafe
             {
-                fixed (byte* srcPtrFixed = resizedPixels)
-                fixed (byte* dstPtrFixed = detImg)
+                fixed (byte* srcPtrFixed = resizedImg.data)
+                fixed (byte* dstPtrFixed = detImg.data)
                 {
                     // Capture pointers in local variables to avoid lambda closure issues
                     byte* srcPtrLocal = srcPtrFixed;
@@ -267,7 +266,7 @@ namespace MuseTalk.Core
         /// <summary>
         /// Python: get_landmark(img, face) - EXACT MATCH to LivePortraitInference
         /// </summary>
-        private Vector2[] GetLandmarks(byte[] img, int width, int height, FaceDetectionResult face)
+        private Vector2[] GetLandmarks(Frame frame, FaceDetectionResult face)
         {
             // Python: input_size = 192
             const int inputSize = 192;
@@ -290,12 +289,12 @@ namespace MuseTalk.Core
             float scale = inputSize / (Mathf.Max(w, h) * 1.5f);
             
             // Python: aimg, M = face_align(img, center, input_size, _scale, rotate)
-            var (alignedImg, transformMatrix) = FaceAlign(img, width, height, center, inputSize, scale, rotate);
+            var (alignedFrame, transformMatrix) = FaceAlign(frame, center, inputSize, scale, rotate);
             
             // Python: aimg = aimg.transpose(2, 0, 1)  # HWC -> CHW
             // Python: aimg = np.expand_dims(aimg, axis=0)
             // Python: aimg = aimg.astype(np.float32)
-            var inputTensor = PreprocessLandmarkImage(alignedImg, inputSize);
+            var inputTensor = PreprocessLandmarkImage(alignedFrame, inputSize);
             
             // Python: output = landmark.run(None, {"data": aimg})
             var inputs = new List<Tensor<float>> { inputTensor };
@@ -327,12 +326,12 @@ namespace MuseTalk.Core
         
         // Helper methods for image processing and transformations
         
-        private unsafe DenseTensor<float> PreprocessDetectionImage(byte[] img, int inputSize)
+        private unsafe DenseTensor<float> PreprocessDetectionImage(Frame frame, int inputSize)
         {
             var tensorData = new float[1 * 3 * inputSize * inputSize];
             int imageSize = inputSize * inputSize;
             
-            fixed (byte* imgPtrFixed = img)
+            fixed (byte* imgPtrFixed = frame.data)
             fixed (float* tensorPtrFixed = tensorData)
             {
                 // Capture pointers in local variables to avoid lambda closure issues
@@ -353,12 +352,12 @@ namespace MuseTalk.Core
             return new DenseTensor<float>(tensorData, new[] { 1, 3, inputSize, inputSize });
         }
         
-        private unsafe DenseTensor<float> PreprocessLandmarkImage(byte[] img, int inputSize)
+        private unsafe DenseTensor<float> PreprocessLandmarkImage(Frame frame, int inputSize)
         {
             var tensorData = new float[1 * 3 * inputSize * inputSize];
             int imageSize = inputSize * inputSize;
             
-            fixed (byte* imgPtrFixed = img)
+            fixed (byte* imgPtrFixed = frame.data)
             fixed (float* tensorPtrFixed = tensorData)
             {
                 // Capture pointers in local variables to avoid lambda closure issues
@@ -379,12 +378,12 @@ namespace MuseTalk.Core
             return new DenseTensor<float>(tensorData, new[] { 1, 3, inputSize, inputSize });
         }
         
-        private unsafe DenseTensor<float> PreprocessLandmarkRunnerImage(byte[] img, int width, int height)
+        private unsafe DenseTensor<float> PreprocessLandmarkRunnerImage(Frame frame, int width, int height)
         {
             var tensorData = new float[1 * 3 * height * width];
             int imageSize = height * width;
             
-            fixed (byte* imgPtrFixed = img)
+            fixed (byte* imgPtrFixed = frame.data)
             fixed (float* tensorPtrFixed = tensorData)
             {
                 // Capture pointers in local variables to avoid lambda closure issues
@@ -589,7 +588,7 @@ namespace MuseTalk.Core
             }
         }
         
-        private (byte[], Matrix4x4) FaceAlign(byte[] img, int width, int height, Vector2 center, int outputSize, float scale, float rotate)
+        private (Frame, Matrix4x4) FaceAlign(Frame frame, Vector2 center, int outputSize, float scale, float rotate)
         {
             float scaleRatio = scale;
             float rot = rotate * Mathf.Deg2Rad;
@@ -611,7 +610,7 @@ namespace MuseTalk.Core
                 { m10, m11, m12 }
             };
             
-            var cropped = FrameUtils.TransformImgExact(img, width, height, M, outputSize, outputSize);
+            var cropped = FrameUtils.AffineTransformFrame(frame, M, outputSize, outputSize);
 
             var transform = new Matrix4x4
             {
@@ -626,11 +625,11 @@ namespace MuseTalk.Core
         
 
         
-        private CropInfo CropImage(byte[] img, int width, int height, Vector2[] lmk, int dsize, float scale, float vyRatio)
+        private CropInfo CropImage(Frame frame, Vector2[] lmk, int dsize, float scale, float vyRatio)
         {
             var (MInv, _) = EstimateSimilarTransformFromPts(lmk, dsize, scale, 0f, vyRatio, true);
             
-            var imgCrop = FrameUtils.TransformImgExact(img, width, height, MInv, dsize, dsize);
+            var imgCrop = FrameUtils.AffineTransformFrame(frame, MInv, dsize, dsize);
             var ptCrop = MathUtils.TransformPts(lmk, MInv);
             
             var Mo2c = MathUtils.GetCropTransform(MInv);
@@ -815,38 +814,38 @@ namespace MuseTalk.Core
         /// Get landmark and bbox using hybrid SCRFD+106landmark approach (matches InsightFaceHelper logic exactly)
         /// Compatible with MuseTalkInference API
         /// </summary>
-        public (List<Vector4>, List<byte[]>) GetLandmarkAndBbox(List<byte[]> textures, int width, int height, int bboxShift = 0)
+        public (List<Vector4>, List<Frame>) GetLandmarkAndBbox(List<Frame> frames, int bboxShift = 0)
         {
             var coordsList = new List<Vector4>();
-            var framesList = new List<byte[]>();
+            var framesList = new List<Frame>();
             var CoordPlaceholder = Vector4.zero; // Matching InsightFaceHelper.CoordPlaceholder
             
             if (!IsInitialized)
             {
                 Logger.LogError("[FaceAnalysis] Models not initialized");
                 // Return placeholder coordinates for all frames
-                for (int i = 0; i < textures.Count; i++)
+                for (int i = 0; i < frames.Count; i++)
                 {
                     coordsList.Add(CoordPlaceholder);
                 }
                 return (coordsList, framesList);
             }
             
-            Logger.Log($"[FaceAnalysis] Processing {textures.Count} images with hybrid SCRFD+106landmark approach");
+            Logger.Log($"[FaceAnalysis] Processing {frames.Count} images with hybrid SCRFD+106landmark approach");
             
             var averageRangeMinus = new List<float>();
             var averageRangePlus = new List<float>();
             
-            for (int idx = 0; idx < textures.Count; idx++)
+            for (int idx = 0; idx < frames.Count; idx++)
             {
-                var textureBytes = textures[idx];
+                var frame = frames[idx];
                 
                 // Step 1: Detect faces using SCRFD (matching InsightFaceHelper exactly)
-                var faces = DetectFaces(textureBytes, width, height);   
+                var faces = DetectFaces(frame);   
 
                 if (faces.Count == 0)
                 {
-                    Logger.LogWarning($"[FaceAnalysis] No face detected in image {idx} ({width}x{height})");
+                    Logger.LogWarning($"[FaceAnalysis] No face detected in image {idx} ({frame.width}x{frame.height})");
                     coordsList.Add(CoordPlaceholder);
                     continue;
                 }
@@ -863,7 +862,7 @@ namespace MuseTalk.Core
                 if (scrfdKps != null && scrfdKps.Length >= 5)
                 {
                     // Use existing GetLandmarks method which already gives us 106 landmarks
-                    landmarks106 = GetLandmarks(textureBytes, width, height, face);
+                    landmarks106 = GetLandmarks(frame, face);
                     if (landmarks106 != null && landmarks106.Length >= 106)
                     {
                         // Calculate final bbox using hybrid approach (adapted for 106 landmarks)
@@ -899,7 +898,7 @@ namespace MuseTalk.Core
                 }
                 
                 // Store the processed data
-                framesList.Add(textureBytes);
+                framesList.Add(frame);
             }
             
             return (coordsList, framesList);
@@ -1009,10 +1008,10 @@ namespace MuseTalk.Core
         /// Crop face region with version-specific margins (matches InsightFaceHelper.CropFaceRegion exactly)
         /// Compatible with MuseTalkInference API
         /// </summary>
-        public byte[] CropFaceRegion(byte[] originalTexture, int width, int height, Vector4 bbox, string version)
+        public Frame CropFaceRegion(Frame frame, Vector4 bbox, string version)
         {
-            if (originalTexture == null)
-                return null;
+            if (frame.data == null)
+                return new Frame(null, 0, 0);
                 
             int x1 = Mathf.RoundToInt(bbox.x);
             int y1 = Mathf.RoundToInt(bbox.y);
@@ -1023,77 +1022,76 @@ namespace MuseTalk.Core
             if (version == "v15")
             {
                 y2 += 10; // extra margin for v15
-                y2 = Mathf.Min(y2, height);
+                y2 = Mathf.Min(y2, frame.height);
             }
             
             int cropWidth = x2 - x1;
             int cropHeight = y2 - y1;
             
-            if (width <= 0 || height <= 0)
+            if (frame.width <= 0 || frame.height <= 0)
             {
                 Logger.LogError($"[FaceAnalysis] Invalid crop dimensions: {cropWidth}x{cropHeight}");
                 throw new Exception($"[FaceAnalysis] Invalid crop dimensions: {cropWidth}x{cropHeight}");
             }
 
             // Extract face region (matching InsightFaceHelper coordinate system)
-            var croppedTexture = FrameUtils.CropTexture(originalTexture, width, height, new Rect(x1, y1, cropWidth, cropHeight));
+            var croppedFrame = FrameUtils.CropFrame(frame, new Rect(x1, y1, cropWidth, cropHeight));
             
             // Resize to standard size (256x256 for MuseTalk, matching InsightFaceHelper)
-            var resizedTexture = FrameUtils.ResizeTextureToExactSize(croppedTexture, cropWidth, cropHeight, 256, 256);            
-            return resizedTexture;
+            var resizedFrame = FrameUtils.ResizeFrame(croppedFrame, 256, 256, SamplingMode.Bilinear);            
+            return resizedFrame;
         }
         
         /// <summary>
         /// Generate face segmentation mask using ONNX BiSeNet model from byte array
         /// OPTIMIZED: Works with byte arrays throughout the entire pipeline
         /// </summary>
-        public (byte[], int, int) GenerateFaceSegmentationMask(byte[] inputImageData, int width, int height, string mode = "jaw")
+        public Frame GenerateFaceSegmentationMask(Frame frame, string mode = "jaw")
         {
             if (!IsInitialized)
             {
                 Logger.LogError("[FaceAnalysis] Face analysis not initialized");
-                return (null, 0, 0);
+                return new Frame(null, 0, 0);
             }
             
             try
             {
                 // Step 1: Preprocess image for BiSeNet (512x512, normalized) directly from byte array
-                var preprocessedTensor = PreprocessImageForBiSeNet(inputImageData, width, height);
+                var preprocessedTensor = PreprocessImageForBiSeNet(frame);
                 
                 // Step 2: Run ONNX inference
                 var parsingResult = RunBiSeNetInference(preprocessedTensor);
                 
                 // Step 3: Post-process to create mask based on mode, returning byte array
-                var (maskData, maskWidth, maskHeight) = PostProcessParsingResult(parsingResult, mode, width, height);
+                var maskFrame = PostProcessParsingResult(parsingResult, mode, frame.width, frame.height);
                 
-                return (maskData, maskWidth, maskHeight);
+                return maskFrame;
             }
             catch (Exception e)
             {
                 Logger.LogError($"[FaceAnalysis] Face parsing failed: {e.Message}");
-                return (null, 0, 0);
+                return new Frame(null, 0, 0);
             }
         }
         
         /// <summary>
         /// Create face mask with morphological operations returning byte array (matching Python implementation)
         /// </summary>
-        public (byte[], int, int) CreateFaceMaskWithMorphology(byte[] inputImage, int width, int height, string mode = "jaw")
+        public Frame CreateFaceMaskWithMorphology(Frame frame, string mode = "jaw")
         {
-            var (baseMaskData, baseMaskWidth, baseMaskHeight) = GenerateFaceSegmentationMask(inputImage, width, height, mode);
-            if (baseMaskData == null) return (null, 0, 0);
+            var baseMaskFrame = GenerateFaceSegmentationMask(frame, mode);
+            if (baseMaskFrame.data == null) return new Frame(null, 0, 0);
             
-            var (smoothedMaskData, smoothedMaskWidth, smoothedMaskHeight) = ApplyMorphologicalOperations(baseMaskData, baseMaskWidth, baseMaskHeight, mode);
-            
-            return (smoothedMaskData, smoothedMaskWidth, smoothedMaskHeight);
+            var smoothedMaskFrame = ApplyMorphologicalOperations(baseMaskFrame, mode);
+            return smoothedMaskFrame;
         }
         
 
         
-        private DenseTensor<float> PreprocessImageForBiSeNet(byte[] inputImageData, int width, int height)
+        private DenseTensor<float> PreprocessImageForBiSeNet(Frame inputImage)
         {
             // Resize to BiSeNet input size (512x512) - now uses optimized ResizeTextureToExactSize with byte arrays
-            var resizedImageData = FrameUtils.ResizeTextureToExactSize(inputImageData, width, height, 512, 512, SamplingMode.Bilinear);
+            var resizedImageData = FrameUtils.ResizeFrame(inputImage, 512, 512, SamplingMode.Bilinear);
             
             // ImageNet normalization: (pixel/255 - mean) / std for each channel
             // R: (pixel/255 - 0.485) / 0.229, G: (pixel/255 - 0.456) / 0.224, B: (pixel/255 - 0.406) / 0.225
@@ -1111,7 +1109,7 @@ namespace MuseTalk.Core
                 -0.406f / 0.225f   // B: -mean_b/std_b
             };
             
-            return FrameUtils.PreprocessImageOptimized(resizedImageData, 512, 512, multipliers, offsets);
+            return FrameUtils.FrameToTensor(resizedImageData, multipliers, offsets);
         }
         
         private unsafe int[,] RunBiSeNetInference(DenseTensor<float> inputTensor)
@@ -1181,13 +1179,13 @@ namespace MuseTalk.Core
             return parsingMap;
         }
         
-        private unsafe (byte[], int, int) PostProcessParsingResult(int[,] parsingMap, string mode, int targetWidth, int targetHeight)
+        private unsafe Frame PostProcessParsingResult(int[,] parsingMap, string mode, int targetWidth, int targetHeight)
         {
             // Create mask data directly as byte array (RGB24: 3 bytes per pixel)
             const int maskWidth = 512;
             const int maskHeight = 512;
             int totalBytes = maskWidth * maskHeight * 3;
-            var maskData = new byte[totalBytes];
+            var maskFrame = new Frame(new byte[totalBytes], maskWidth, maskHeight);
             
             // Pre-calculate class IDs for each mode to avoid string comparison in hot path
             bool* classLookup = stackalloc bool[19]; // 19 face parsing classes
@@ -1223,7 +1221,7 @@ namespace MuseTalk.Core
             // Apply mode-specific processing with stride-based coordinate calculation
             const int imageSize = 512 * 512;
             
-            fixed (byte* maskPtrFixed = maskData)
+            fixed (byte* maskPtrFixed = maskFrame.data)
             {
                 // Capture pointer in local variable to avoid lambda closure issues
                 byte* maskPtrLocal = maskPtrFixed;
@@ -1254,46 +1252,28 @@ namespace MuseTalk.Core
             // Resize to target dimensions if needed using optimized resize
             if (targetWidth != 512 || targetHeight != 512)
             {
-                var resizedMaskData = FrameUtils.ResizeTextureToExactSize(maskData, maskWidth, maskHeight, targetWidth, targetHeight, SamplingMode.Bilinear);
-                return (resizedMaskData, targetWidth, targetHeight);
+                var resizedMaskFrame = FrameUtils.ResizeFrame(maskFrame, targetWidth, targetHeight, SamplingMode.Bilinear);
+                return resizedMaskFrame;
             }
             
-            return (maskData, maskWidth, maskHeight);
+            return maskFrame;
         }
         
-        private unsafe (byte[], int, int) ApplyMorphologicalOperations(byte[] maskData, int width, int height, string mode)
+        private unsafe Frame ApplyMorphologicalOperations(Frame frame, string mode)
         {
-            int totalPixels = width * height;
-            int totalBytes = totalPixels * 3; // RGB24: 3 bytes per pixel
-            
-            // Allocate working buffers
-            var dilatedData = new byte[totalBytes];
-            var erodedData = new byte[totalBytes];
-            var blurredData = new byte[totalBytes];
-            
-            // OPTIMIZED: Use unsafe pointers for maximum performance
-            fixed (byte* inputPtr = maskData)
-            fixed (byte* dilatedPtr = dilatedData)
-            fixed (byte* erodedPtr = erodedData)
-            fixed (byte* blurredPtr = blurredData)
+            if (mode.ToLower() == "jaw")
             {
-                if (mode.ToLower() == "jaw")
-                {
-                    // Apply morphological operations using unsafe pointers
-                    FrameUtils.ApplyDilationUnsafe(inputPtr, dilatedPtr, width, height, 3);
-                    FrameUtils.ApplyErosionUnsafe(dilatedPtr, erodedPtr, width, height, 2);
-                    
-                    // Apply optimized Gaussian blur
-                    FrameUtils.ApplySimpleGaussianBlur(erodedPtr, blurredPtr, width, height, 5);
-                    
-                    return (blurredData, width, height);
-                }
-                else
-                {
-                    // For other modes, just apply light smoothing
-                    FrameUtils.ApplySimpleGaussianBlur(inputPtr, blurredPtr, width, height, 3);
-                    return (blurredData, width, height);
-                }
+                // Apply morphological operations using unsafe pointers
+                var dilatedFrame = FrameUtils.ApplyDilation(frame, 3);
+                var erodedFrame = FrameUtils.ApplyErosion(dilatedFrame, 2);
+                
+                // Apply optimized Gaussian blur
+                return FrameUtils.ApplySimpleGaussianBlur(erodedFrame, 5);
+            }
+            else
+            {
+                // For other modes, just apply light smoothing
+                return FrameUtils.ApplySimpleGaussianBlur(frame, 3);
             }
         }
 

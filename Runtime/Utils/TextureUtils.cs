@@ -124,7 +124,7 @@ namespace MuseTalk.Utils
         /// <summary>
         /// Convert Texture2D to byte array (RGB24 format)
         /// </summary>
-        public static unsafe (byte[], int, int) Texture2DToBytes(Texture2D img)
+        public static unsafe Frame Texture2DToFrame(Texture2D img)
         {
             int h = img.height;
             int w = img.width;
@@ -149,35 +149,35 @@ namespace MuseTalk.Utils
                 });
             }
 
-            return (imageData, w, h);
+            return new Frame(imageData, w, h);
         }
         
         /// <summary>
         /// Convert RGB24 byte array back to Texture2D using unsafe pointers and parallelization
         /// </summary>
-        public static unsafe Texture2D BytesToTexture2D(byte[] imageData, int width, int height)
+        public static unsafe Texture2D FrameToTexture2D(Frame frame)
         {
-            var texture = new Texture2D(width, height, TextureFormat.RGB24, false);
+            var texture = new Texture2D(frame.width, frame.height, TextureFormat.RGB24, false);
             
             var pixelData = texture.GetPixelData<byte>(0);
             byte* texturePtr = (byte*)pixelData.GetUnsafePtr();
             
             // OPTIMIZED: Process with unsafe pointers and parallelization
-            fixed (byte* imagePtrFixed = imageData)
+            fixed (byte* imagePtrFixed = frame.data)
             {
                 // Capture pointer in local variable to avoid lambda closure issues
                 byte* imagePtrLocal = imagePtrFixed;
                 
-                System.Threading.Tasks.Parallel.For(0, height, y =>
+                System.Threading.Tasks.Parallel.For(0, frame.height, y =>
                 {
                     // Calculate Unity texture coordinate (bottom-left origin) from image coordinate (top-left origin)
-                    int unityY = height - 1 - y; // Flip Y coordinate for Unity coordinate system
+                    int unityY = frame.height - 1 - y; // Flip Y coordinate for Unity coordinate system
                     
                     // Calculate row pointers using direct pointer arithmetic
-                    byte* srcRowPtr = imagePtrLocal + y * width * 3;        // Source row (top-left origin)
-                    byte* dstRowPtr = texturePtr + unityY * width * 3;      // Destination row (bottom-left origin)
+                    byte* srcRowPtr = imagePtrLocal + y * frame.width * 3;        // Source row (top-left origin)
+                    byte* dstRowPtr = texturePtr + unityY * frame.width * 3;      // Destination row (bottom-left origin)
                     
-                    int rowBytes = width * 3; // RGB24 = 3 bytes per pixel
+                    int rowBytes = frame.width * 3; // RGB24 = 3 bytes per pixel
                     Buffer.MemoryCopy(srcRowPtr, dstRowPtr, rowBytes, rowBytes);
                 });
             }

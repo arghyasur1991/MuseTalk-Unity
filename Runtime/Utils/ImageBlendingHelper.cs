@@ -14,30 +14,30 @@ namespace MuseTalk.Utils
         /// REFACTORED: Now works with byte arrays for better memory efficiency
         /// OPTIMIZED: Uses pre-computed segmentation data to avoid regenerating mask for every frame
         /// </summary>
-        public static byte[] BlendFaceWithOriginal(
-            byte[] originalImage, int originalWidth, int originalHeight, 
-            byte[] faceTexture, int faceWidth, int faceHeight,  
+        public static Frame BlendFaceWithOriginal(
+            Frame originalImage, 
+            Frame faceTexture,  
             Vector4 faceBbox, Vector4 cropBox,
-            byte[] precomputedBlurredMask, int precomputedBlurredMaskWidth, int precomputedBlurredMaskHeight,
-            byte[] precomputedFaceLarge, int precomputedFaceLargeWidth, int precomputedFaceLargeHeight, 
+            Frame precomputedBlurredMask, 
+            Frame precomputedFaceLarge, 
             string mode = "raw")
         {
-            if (precomputedBlurredMask != null)
+            if (precomputedBlurredMask.data != null)
             {
                 // OPTIMAL PATH: Use precomputed blurred mask for maximum performance
                 Vector4 adjustedFaceBbox = faceBbox;
                 if (mode == "jaw") // v15 mode
                 {
-                    adjustedFaceBbox.w = Mathf.Min(adjustedFaceBbox.w + 10f, originalHeight);
+                    adjustedFaceBbox.w = Mathf.Min(adjustedFaceBbox.w + 10f, originalImage.height);
                 }
                 
                 // Apply the precomputed blurred mask to blend the face
                 var result = ApplySegmentationMaskWithPrecomputedMasks(
-                    originalImage, originalWidth, originalHeight, 
-                    faceTexture, faceWidth, faceHeight, 
+                    originalImage, 
+                    faceTexture, 
                     adjustedFaceBbox, cropBox,
-                    precomputedBlurredMask, precomputedBlurredMaskWidth, precomputedBlurredMaskHeight,
-                    precomputedFaceLarge, precomputedFaceLargeWidth, precomputedFaceLargeHeight, 
+                    precomputedBlurredMask, 
+                    precomputedFaceLarge, 
                     mode);
                 return result;
             }
@@ -51,16 +51,15 @@ namespace MuseTalk.Utils
         /// Crop image to specified rectangle
         /// REFACTORED: Now works with byte arrays for better memory efficiency
         /// </summary>
-        private static (byte[], int, int) CropImage(byte[] sourceData, int sourceWidth, int sourceHeight, Rect cropRect)
+        private static Frame CropImage(Frame sourceData, Rect cropRect)
         {
             // Ensure crop bounds are within image
             cropRect.x = Mathf.Max(0, cropRect.x);
             cropRect.y = Mathf.Max(0, cropRect.y);
-            cropRect.width = Mathf.Min(cropRect.width, sourceWidth - cropRect.x);
-            cropRect.height = Mathf.Min(cropRect.height, sourceHeight - cropRect.y);
+            cropRect.width = Mathf.Min(cropRect.width, sourceData.width - cropRect.x);
+            cropRect.height = Mathf.Min(cropRect.height, sourceData.height - cropRect.y);
             
-            return (FrameUtils.CropTexture(sourceData, sourceWidth, sourceHeight, cropRect), 
-                    (int)cropRect.width, (int)cropRect.height);
+            return FrameUtils.CropFrame(sourceData, cropRect);
         }
 
         /// <summary>
@@ -68,8 +67,8 @@ namespace MuseTalk.Utils
         /// REFACTORED: Now works with byte arrays for better memory efficiency
         /// Matches Python: mask_small = mask_image.crop((x - x_s, y - y_s, x1 - x_s, y1 - y_s))
         /// </summary>
-        public static (byte[], int, int) CreateSmallMask(
-            byte[] maskData, int maskWidth, int maskHeight,
+        public static Frame CreateSmallMask(
+            Frame maskData,
             Vector4 faceBbox, Rect cropBox)
         {
             float x = faceBbox.x;
@@ -87,7 +86,7 @@ namespace MuseTalk.Utils
                 y1 - y   // height = y1 - y
             );
             
-            return CropImage(maskData, maskWidth, maskHeight, cropRect);
+            return CropImage(maskData, cropRect);
         }
 
         /// <summary>
@@ -95,20 +94,20 @@ namespace MuseTalk.Utils
         /// REFACTORED: Now works with byte arrays for better memory efficiency
         /// OPTIMIZED: Uses unsafe pointers, parallelization, and memcpy for maximum performance
         /// </summary>
-        public static unsafe (byte[], int, int) CreateFullMask(
-            byte[] originalMaskData, int originalWidth, int originalHeight, 
-            byte[] smallMaskData, int smallWidth, int smallHeight, 
+        public static unsafe Frame CreateFullMask(
+            Frame originalMaskData, 
+            Frame smallMaskData, 
             Vector4 faceBbox, Rect cropBox)
         {
             // Python: mask_image = Image.new('L', ori_shape, 0)
             // Python: mask_image.paste(mask_small, (x-x_s, y-y_s, x1-x_s, y1-y_s))
             
-            int width = originalWidth;
-            int height = originalHeight;
+            int width = originalMaskData.width;
+            int height = originalMaskData.height;
             int rowSizeBytes = width * 3; // RGB24: 3 bytes per pixel
             
             // Create blank mask data with RGB24 format for efficiency
-            var fullMaskData = new byte[width * height * 3];
+            var fullMaskData = new Frame(new byte[width * height * 3], width, height);
             
             // Calculate paste position (matching Python coordinates)
             float x = faceBbox.x;
@@ -121,13 +120,13 @@ namespace MuseTalk.Utils
             
             // Calculate valid paste region to avoid bounds checking in inner loop
             int startX = Mathf.Max(0, pasteX);
-            int endX = Mathf.Min(width, pasteX + smallWidth);
+            int endX = Mathf.Min(width, pasteX + smallMaskData.width);
             int startY = Mathf.Max(0, pasteY);
-            int endY = Mathf.Min(height, pasteY + smallHeight);
+            int endY = Mathf.Min(height, pasteY + smallMaskData.height);
             
             // Use unsafe pointers for maximum performance with memcpy operations
-            fixed (byte* fullMaskPtr = fullMaskData)
-            fixed (byte* smallMaskPtr = smallMaskData)
+            fixed (byte* fullMaskPtr = fullMaskData.data)
+            fixed (byte* smallMaskPtr = smallMaskData.data)
             {
                 byte* fullMaskPtrLocal = fullMaskPtr;
                 byte* smallMaskPtrLocal = smallMaskPtr;
@@ -143,16 +142,16 @@ namespace MuseTalk.Utils
                 System.Threading.Tasks.Parallel.For(startY, endY, targetY =>
                 {
                     int sourceY = targetY - pasteY;
-                    if (sourceY >= 0 && sourceY < smallHeight)
+                    if (sourceY >= 0 && sourceY < smallMaskData.height)
                     {
                         byte* targetRowPtr = fullMaskPtrLocal + targetY * rowSizeBytes;
-                        byte* sourceRowPtr = smallMaskPtrLocal + sourceY * smallWidth * 3;
+                        byte* sourceRowPtr = smallMaskPtrLocal + sourceY * smallMaskData.width * 3;
                         
                         // Check if we can do a full row copy (when small mask width matches and aligns perfectly)
-                        if (pasteX == 0 && startX == 0 && endX == width && smallWidth == width)
+                        if (pasteX == 0 && startX == 0 && endX == width && smallMaskData.width == width)
                         {
                             // Bulk copy entire row using native memcpy (fastest path)
-                            UnsafeUtility.MemCpy(targetRowPtr, sourceRowPtr, smallWidth * 3);
+                            UnsafeUtility.MemCpy(targetRowPtr, sourceRowPtr, smallMaskData.width * 3);
                         }
                         else
                         {
@@ -160,7 +159,7 @@ namespace MuseTalk.Utils
                             for (int targetX = startX; targetX < endX; targetX++)
                             {
                                 int sourceX = targetX - pasteX;
-                                if (sourceX >= 0 && sourceX < smallWidth)
+                                if (sourceX >= 0 && sourceX < smallMaskData.width)
                                 {
                                     byte* targetPixelPtr = targetRowPtr + targetX * 3;
                                     byte* sourcePixelPtr = sourceRowPtr + sourceX * 3;
@@ -177,7 +176,7 @@ namespace MuseTalk.Utils
                 });
             }
             
-            return (fullMaskData, width, height);
+            return fullMaskData;
         }
 
         /// <summary>
@@ -185,27 +184,27 @@ namespace MuseTalk.Utils
         /// REFACTORED: Now works with byte arrays for better memory efficiency
         /// OPTIMIZED: Uses unsafe pointers, parallelization, and memcpy for maximum performance
         /// </summary>
-        public static unsafe (byte[], int, int) ApplyUpperBoundaryRatio(byte[] maskData, int width, int height, float upperBoundaryRatio)
+        public static unsafe Frame ApplyUpperBoundaryRatio(Frame maskData, float upperBoundaryRatio)
         {
             // Create result data with RGB24 format for efficiency
-            var resultData = new byte[width * height * 3];
+            var resultData = new Frame(new byte[maskData.width * maskData.height * 3], maskData.width, maskData.height);
             
             // Calculate boundary line (matching Python upper_boundary_ratio logic)
             // In standard image coordinates: Y=0 is top, Y=height-1 is bottom
             // upperBoundaryRatio=0.5 means preserve top 50% of face (upper half)
             // Python: top_boundary = int(height * upper_boundary_ratio)
-            int boundaryY = Mathf.RoundToInt(height * upperBoundaryRatio);
-            int rowSizeBytes = width * 3; // RGB24: 3 bytes per pixel
+            int boundaryY = Mathf.RoundToInt(maskData.height * upperBoundaryRatio);
+            int rowSizeBytes = maskData.width * 3; // RGB24: 3 bytes per pixel
             
             // Use unsafe pointers for maximum performance with memcpy operations
-            fixed (byte* maskPtr = maskData)
-            fixed (byte* resultPtr = resultData)
+            fixed (byte* maskPtr = maskData.data)
+            fixed (byte* resultPtr = resultData.data)
             {
                 byte* maskPtrLocal = maskPtr;
                 byte* resultPtrLocal = resultPtr;
                 
                 // Parallel processing of rows for maximum performance
-                System.Threading.Tasks.Parallel.For(0, height, y =>
+                System.Threading.Tasks.Parallel.For(0, maskData.height, y =>
                 {
                     byte* sourceRowPtr = maskPtrLocal + y * rowSizeBytes;
                     byte* targetRowPtr = resultPtrLocal + y * rowSizeBytes;
@@ -224,16 +223,16 @@ namespace MuseTalk.Utils
                 });
             }
             
-            return (resultData, width, height);
+            return resultData;
         }
 
         /// <summary>
         /// Paste generated face into the large face region
         /// OPTIMIZED: Uses unsafe pointers, parallelization, and memcpy for maximum performance
         /// </summary>
-        private static unsafe byte[] PasteFaceIntoLarge(
-            byte[] faceLarge, int faceLargeWidth, int faceLargeHeight,
-            byte[] generatedFace, int generatedFaceWidth, int generatedFaceHeight,
+        private static unsafe Frame PasteFaceIntoLarge(
+            Frame faceLarge, 
+            Frame generatedFace, 
             Vector4 faceBbox,
             Rect cropBox)
         {
@@ -242,20 +241,20 @@ namespace MuseTalk.Utils
             int relativeY = (int)(faceBbox.y - cropBox.y);
             
             // Create result texture with RGB24 format for efficiency
-            var result = new byte[faceLargeWidth * faceLargeHeight * 3];
-            var faceLargePixelData = faceLarge;
-            var generatedFacePixelData = generatedFace;
-            var resultPixelData = result;
+            var result = new Frame(new byte[faceLarge.width * faceLarge.height * 3], faceLarge.width, faceLarge.height);
+            var faceLargePixelData = faceLarge.data;
+            var generatedFacePixelData = generatedFace.data;
+            var resultPixelData = result.data;
             
             // Get unsafe pointers for direct memory operations
-            fixed (byte* faceLargePtr = faceLargePixelData)
-            fixed (byte* generatedFacePtr = generatedFacePixelData)
-            fixed (byte* resultPtr = resultPixelData)
+            fixed (byte* faceLargePtr = faceLarge.data)
+            fixed (byte* generatedFacePtr = generatedFace.data)
+            fixed (byte* resultPtr = result.data)
             {
-                int resultWidth = faceLargeWidth;
-                int resultHeight = faceLargeHeight;
-                int faceWidth = generatedFaceWidth;
-                int faceHeight = generatedFaceHeight;
+                int resultWidth = faceLarge.width;
+                int resultHeight = faceLarge.height;
+                int faceWidth = generatedFace.width;
+                int faceHeight = generatedFace.height;
 
                 byte* faceLargePtrLocal = faceLargePtr;
                 byte* generatedFacePtrLocal = generatedFacePtr;
@@ -317,12 +316,12 @@ namespace MuseTalk.Utils
         /// Apply segmentation mask to blend face with original image using precomputed masks
         /// OPTIMIZED: Uses precomputed masks for maximum performance
         /// </summary>
-        private static byte[] ApplySegmentationMaskWithPrecomputedMasks(
-            byte[] originalImage, int originalWidth, int originalHeight, 
-            byte[] faceTexture, int faceTextureWidth, int faceTextureHeight,  
+        private static Frame ApplySegmentationMaskWithPrecomputedMasks(
+            Frame originalImage, 
+            Frame faceTexture,  
             Vector4 faceBbox, Vector4 cropBox,
-            byte[] precomputedBlurredMask, int precomputedBlurredMaskWidth, int precomputedBlurredMaskHeight,
-            byte[] precomputedFaceLarge, int precomputedFaceLargeWidth, int precomputedFaceLargeHeight, 
+            Frame precomputedBlurredMask, 
+            Frame precomputedFaceLarge, 
             string mode = "raw")
         {
             // Step 1: Use precomputed face_large and paste the resized face into it (matching Python exactly)
@@ -332,22 +331,22 @@ namespace MuseTalk.Utils
             // Resize face texture to match face bbox dimensions (use exact integer calculation like Python)
             int faceWidth = (int)(faceBbox.z - faceBbox.x);
             int faceHeight = (int)(faceBbox.w - faceBbox.y);
-            var resizedFace = FrameUtils.ResizeTextureToExactSize(faceTexture, faceTextureWidth, faceTextureHeight, faceWidth, faceHeight);
+            var resizedFace = FrameUtils.ResizeFrame(faceTexture, faceWidth, faceHeight);
 
             // Paste the resized face into precomputed face_large at relative position (matching Python)
             // Python: face_large.paste(face, (x-x_s, y-y_s))
             var cropRect = new Rect(cropBox.x, cropBox.y, cropBox.z - cropBox.x, cropBox.w - cropBox.y);
             var faceLargeWithFace = PasteFaceIntoLarge(
-                precomputedFaceLarge, precomputedFaceLargeWidth, precomputedFaceLargeHeight, 
-                resizedFace, faceWidth, faceHeight, 
+                precomputedFaceLarge, 
+                resizedFace, 
                 faceBbox, cropRect);
             // Step 2: Composite images using the precomputed blurred mask (matching Python alpha blending)
             // Python: body.paste(face_large, crop_box[:2], mask_image)
             var result = CompositeWithMask(
-                originalImage, originalWidth, originalHeight,
-                faceLargeWithFace, precomputedFaceLargeWidth, precomputedFaceLargeHeight,
+                originalImage, 
+                faceLargeWithFace, 
                 faceBbox, 
-                precomputedBlurredMask, precomputedBlurredMaskWidth, precomputedBlurredMaskHeight,
+                precomputedBlurredMask, 
                 cropBox);
 
             return result;
@@ -357,21 +356,15 @@ namespace MuseTalk.Utils
         /// Apply Gaussian blur to mask for smooth blending (matching Python)
         /// REFACTORED: Now works with byte arrays for better memory efficiency
         /// </summary>
-        public static unsafe (byte[], int, int) ApplyGaussianBlurToMask(byte[] maskData, int width, int height)
+        public static Frame ApplyGaussianBlurToMask(Frame mask)
         {
             // Calculate blur kernel size based on mask dimensions (matching Python)
             float blurFactor = 0.08f; // jaw mode blur factor from Python
-            int kernelSize = Mathf.RoundToInt(blurFactor * width / 2) * 2 + 1;
+            int kernelSize = Mathf.RoundToInt(blurFactor * mask.width / 2) * 2 + 1;
             kernelSize = Mathf.Max(kernelSize, 15); // Minimum kernel size
 
-            byte[] blurredMaskData = new byte[maskData.Length];
-            fixed (byte* maskPtr = maskData)
-            fixed (byte* blurredMaskPtr = blurredMaskData)
-            {
-                FrameUtils.ApplySimpleGaussianBlur(maskPtr, blurredMaskPtr, width, height, kernelSize);
-            }
-            
-            return (blurredMaskData, width, height);
+            var blurredMaskData = FrameUtils.ApplySimpleGaussianBlur(mask, kernelSize);
+            return blurredMaskData;
         }
         
         /// <summary>
@@ -379,24 +372,24 @@ namespace MuseTalk.Utils
         /// OPTIMIZED: Uses unsafe pointers, parallelization, and optimized alpha blending
         /// Python: body.paste(face_large, crop_box[:2], mask_image)
         /// </summary>
-        private static unsafe byte[] CompositeWithMask(
-            byte[] originalImage, int originalWidth, int originalHeight,
-            byte[] faceLarge, int faceLargeWidth, int faceLargeHeight,
+        private static unsafe Frame CompositeWithMask(
+            Frame originalImage, 
+            Frame faceLarge, 
             Vector4 faceBbox,
-            byte[] blurredMask, int blurredMaskWidth, int blurredMaskHeight,
+            Frame blurredMask, 
             Vector4 cropBox)
         {
-            int resultWidth = originalWidth;
-            int resultHeight = originalHeight;
-            int blendWidth = faceLargeWidth;
-            int blendHeight = faceLargeHeight;
+            int resultWidth = originalImage.width;
+            int resultHeight = originalImage.height;
+            int blendWidth = faceLarge.width;
+            int blendHeight = faceLarge.height;
             
             // Create result texture with RGB24 format for efficiency
-            var result = new byte[resultWidth * resultHeight * 3];
-            var originalPixelData = originalImage;
-            var faceLargePixelData = faceLarge;
-            var maskPixelData = blurredMask;
-            var resultPixelData = result;
+            var result = new Frame(new byte[resultWidth * resultHeight * 3], resultWidth, resultHeight);
+            var originalPixelData = originalImage.data;
+            var faceLargePixelData = faceLarge.data;
+            var maskPixelData = blurredMask.data;
+            var resultPixelData = result.data;
             
             // Get unsafe pointers for direct memory operations
             fixed (byte* originalPtr = originalPixelData)
